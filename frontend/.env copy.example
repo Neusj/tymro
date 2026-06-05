@@ -1,0 +1,3 @@
+VITE_API_URL=/api
+# Alternativa para QA publico:
+# VITE_API_URL=https://tymroapp.com/api

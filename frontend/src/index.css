@@ -1,0 +1,163 @@
+@import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,600;12..96,700;12..96,800&family=Hanken+Grotesk:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  --bg-main: #09090b;
+  --bg-soft: #18181b;
+  --line: #27272a;
+  --text-main: #fafafa;
+  --text-muted: #a1a1aa;
+  --red: #dc2626;
+  --orange: #f97316;
+  --blue: #2563eb;
+  /* dynamic per-organization branding (set by AppLayout) */
+  --dynamic-primary: #dc2626;
+  --dynamic-secondary: #2563eb;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(1200px circle at 12% -10%, rgba(249, 115, 22, 0.10), transparent 45%),
+    radial-gradient(1000px circle at 100% 0%, rgba(37, 99, 235, 0.10), transparent 40%),
+    var(--bg-main);
+  background-attachment: fixed;
+  color: var(--text-main);
+  font-family: 'Hanken Grotesk', system-ui, 'Segoe UI', sans-serif;
+  font-feature-settings: 'cv11', 'ss01';
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1, h2, h3, h4, .font-display {
+  font-family: 'Bricolage Grotesque', 'Hanken Grotesk', system-ui, sans-serif;
+  letter-spacing: -0.02em;
+}
+
+/* Inputs render at >=16px so iOS Safari never zooms on focus; keeps a comfy touch height. */
+input:not([type='checkbox']):not([type='radio']):not([type='file']),
+select,
+textarea {
+  font-size: 16px;
+}
+@media (min-width: 768px) {
+  input:not([type='checkbox']):not([type='radio']):not([type='file']),
+  select,
+  textarea {
+    font-size: 0.875rem;
+  }
+}
+
+/* Visible, consistent keyboard focus everywhere */
+:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.45);
+  border-radius: 0.5rem;
+}
+
+/* Refined dark scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #3f3f46 transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #2e2e33;
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #3f3f46;
+  background-clip: content-box;
+}
+
+@layer components {
+  /* Centered, width-capped page container — fluid from phone to TV */
+  .app-container {
+    @apply mx-auto w-full max-w-app;
+  }
+
+  .card-surface {
+    @apply rounded-2xl border border-brand-line bg-brand-soft/80 shadow-soft backdrop-blur-sm;
+  }
+
+  /* Subtle interactive surface used inside cards (KPIs, list rows) */
+  .surface-inset {
+    @apply rounded-xl border border-brand-line bg-black/25;
+  }
+
+  .badge-accent {
+    @apply inline-flex items-center rounded-full border border-brand-line px-3 py-1 text-xs font-semibold text-brand-muted;
+  }
+
+  .panel-title {
+    @apply font-display text-lg font-semibold text-brand-white sm:text-xl;
+  }
+
+  /* Button system — 44px min touch target, accessible focus */
+  .btn {
+    @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold transition duration-200 ease-snap disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply btn border border-transparent bg-brand-blue text-white hover:brightness-110 active:brightness-95;
+  }
+  .btn-accent {
+    @apply btn border border-transparent bg-brand-orange text-brand-black hover:brightness-110 active:brightness-95;
+  }
+  .btn-ghost {
+    @apply btn border border-brand-line bg-transparent text-brand-white hover:border-brand-orange hover:bg-brand-soft;
+  }
+  .btn-danger {
+    @apply btn border border-brand-red/50 bg-transparent text-red-200 hover:bg-brand-red/15;
+  }
+
+  /* Form control baseline */
+  .field {
+    @apply min-h-11 w-full rounded-xl border border-brand-line bg-black/30 px-3 py-2 text-sm text-brand-white placeholder:text-brand-dim transition focus:border-brand-blue focus:outline-none;
+  }
+}
+
+@layer utilities {
+  /* Fluid type — scales smoothly across phone → TV without media queries */
+  .text-fluid-3xl {
+    font-size: clamp(1.6rem, 1.1rem + 2vw, 2.6rem);
+    line-height: 1.1;
+  }
+  .text-fluid-2xl {
+    font-size: clamp(1.35rem, 1rem + 1.4vw, 2rem);
+    line-height: 1.15;
+  }
+  .text-fluid-xl {
+    font-size: clamp(1.15rem, 0.95rem + 0.8vw, 1.5rem);
+    line-height: 1.2;
+  }
+
+  /* Respect reduced motion preference */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+    }
+  }
+}

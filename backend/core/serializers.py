@@ -1,0 +1,1290 @@
+﻿from datetime import timedelta
+
+from django.conf import settings
+from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db.models import Q
+from django.utils import timezone
+from rest_framework import serializers
+
+from .models import (
+    Attendance,
+    Branch,
+    ClassTemplate,
+    ClassType,
+    Discipline,
+    Enrollment,
+    GymClass,
+    Holiday,
+    Plan,
+    MembershipPlan,
+    Organization,
+    Person,
+    RecurringEnrollment,
+    StudentPlan,
+    TeacherPaymentRecord,
+    TeacherPaymentRule,
+)
+from .services.recurrence import create_enrollments_for_recurring_subscription
+
+User = get_user_model()
+
+
+TERMINAL_CLASS_STATUSES = {
+    GymClass.Status.COMPLETED,
+    GymClass.Status.CANCELLED,
+    GymClass.Status.COMPLETED_EARLY,
+}
+
+
+def _overlap_filter(start_datetime, end_datetime):
+    return Q(start_datetime__lt=end_datetime, end_datetime__gt=start_datetime)
+
+def _safe_int_setting(name, default=0):
+    raw = getattr(settings, name, default)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = default
+    return max(0, value)
+
+def _student_deadline_message(hours):
+    if hours <= 0:
+        return 'Puedes modificar mientras la clase aun no haya comenzado.'
+    return f'Puedes modificar hasta {hours} hora(s) antes del inicio de la clase.'
+
+def _student_can_modify_before_class(start_datetime, hours):
+    if not start_datetime:
+        return False, 'No se pudo determinar la fecha de la clase.'
+    now = timezone.now()
+    if start_datetime <= now:
+        return False, 'La clase ya comenzo o termino y no admite cambios.'
+    if hours <= 0:
+        return True, ''
+    cutoff = start_datetime - timedelta(hours=hours)
+    if now > cutoff:
+        return False, f'Ya no puedes modificar esta accion con menos de {hours} hora(s) de anticipacion.'
+    return True, ''
+
+
+class OrganizationSerializer(serializers.ModelSerializer):
+    branches_count = serializers.IntegerField(source='branches.count', read_only=True)
+
+    class Meta:
+        model = Organization
+        fields = [
+            'id',
+            'name',
+            'slug',
+            'country',
+            'city',
+            'logo',
+            'primary_color',
+            'secondary_color',
+            'is_active',
+            'attendance_screen_code',
+            'attendance_screen_session_code',
+            'attendance_screen_session_expires_at',
+            'branches_count',
+        ]
+        read_only_fields = [
+            'attendance_screen_code',
+            'attendance_screen_session_code',
+            'attendance_screen_session_expires_at',
+        ]
+
+
+class BranchSerializer(serializers.ModelSerializer):
+    organization_name = serializers.CharField(source='organization.name', read_only=True)
+
+    class Meta:
+        model = Branch
+        fields = [
+            'id',
+            'organization',
+            'organization_name',
+            'name',
+            'code',
+            'address',
+            'logo',
+            'primary_color',
+            'secondary_color',
+            'is_active',
+        ]
+        extra_kwargs = {
+            'organization': {'required': False},
+        }
+
+    def validate(self, attrs):
+        request = self.context.get('request')
+        instance = getattr(self, 'instance', None)
+        organization = attrs.get('organization', getattr(instance, 'organization', None))
+        name = attrs.get('name', getattr(instance, 'name', ''))
+
+        if request and request.user.is_authenticated and request.user.role == User.Role.GYM_ADMIN:
+            attrs['organization'] = request.user.organization
+            organization = attrs['organization']
+
+        if not organization:
+            raise serializers.ValidationError({'organization': 'La organización es obligatoria.'})
+
+        normalized_name = str(name).strip()
+        if not normalized_name:
+            raise serializers.ValidationError({'name': 'El nombre es obligatorio.'})
+
+        duplicated = Branch.objects.filter(organization=organization, name__iexact=normalized_name)
+        if instance:
+            duplicated = duplicated.exclude(id=instance.id)
+        if duplicated.exists():
+            raise serializers.ValidationError({'name': 'Ya existe una sucursal con ese nombre en esta organización.'})
+
+        attrs['name'] = normalized_name
+
+        return attrs
+
+
+class CustomUserSerializer(serializers.ModelSerializer):
+    organization_detail = OrganizationSerializer(source='organization', read_only=True)
+    branch_detail = BranchSerializer(source='branch', read_only=True)
+    password = serializers.CharField(write_only=True, required=False, min_length=6)
+
+    class Meta:
+        model = User
+        fields = [
+            'id',
+            'username',
+            'first_name',
+            'last_name',
+            'email',
+            'is_active',
+            'role',
+            'phone',
+            'profile_image',
+            'is_active_member',
+            'organization',
+            'branch',
+            'organization_detail',
+            'branch_detail',
+            'password',
+        ]
+
+    def validate(self, attrs):
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        role = attrs.get('role', getattr(self.instance, 'role', None))
+        organization = attrs.get('organization', getattr(self.instance, 'organization', None))
+        branch = attrs.get('branch', getattr(self.instance, 'branch', None))
+
+        if branch and organization and branch.organization_id != organization.id:
+            raise serializers.ValidationError({'branch': 'La sucursal no pertenece a la organización seleccionada.'})
+
+        if role == User.Role.SUPERADMIN:
+            attrs['organization'] = None
+            attrs['branch'] = None
+
+        if role in (User.Role.GYM_ADMIN, User.Role.TEACHER, User.Role.STUDENT) and not organization:
+            raise serializers.ValidationError({'organization': 'Este rol requiere una organización.'})
+
+        if user and user.is_authenticated and user.role == User.Role.GYM_ADMIN:
+            attrs['organization'] = user.organization
+            if attrs.get('role') == User.Role.SUPERADMIN:
+                raise serializers.ValidationError({'role': 'Gym admin no puede crear ni editar superadmin.'})
+            if attrs.get('branch') and attrs['branch'].organization_id != user.organization_id:
+                raise serializers.ValidationError({'branch': 'La sucursal debe pertenecer a tu organización.'})
+
+        return attrs
+
+    def create(self, validated_data):
+        password = validated_data.pop('password', None)
+        user = User(**validated_data)
+        if password:
+            user.set_password(password)
+        else:
+            user.set_unusable_password()
+        user.save()
+        return user
+
+    def update(self, instance, validated_data):
+        password = validated_data.pop('password', None)
+        for key, value in validated_data.items():
+            setattr(instance, key, value)
+        if password:
+            instance.set_password(password)
+        instance.save()
+        return instance
+
+
+class PersonSerializer(serializers.ModelSerializer):
+    organization_name = serializers.CharField(source='organization.name', read_only=True)
+    branch_name = serializers.CharField(source='branch.name', read_only=True)
+
+    class Meta:
+        model = Person
+        fields = [
+            'id',
+            'organization',
+            'organization_name',
+            'branch',
+            'branch_name',
+            'first_name',
+            'last_name',
+            'email',
+            'phone',
+            'role',
+            'is_active',
+        ]
+
+
+class ClassTypeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ClassType
+        fields = ['id', 'organization', 'name']
+        extra_kwargs = {
+            'organization': {'required': False},
+        }
+        validators = []
+
+    def validate(self, attrs):
+        request = self.context.get('request')
+        instance = getattr(self, 'instance', None)
+        organization = attrs.get('organization', getattr(instance, 'organization', None))
+        name = attrs.get('name', getattr(instance, 'name', ''))
+
+        if request and request.user.is_authenticated and request.user.role == User.Role.GYM_ADMIN:
+            attrs['organization'] = request.user.organization
+            organization = attrs['organization']
+
+        if not organization:
+            raise serializers.ValidationError({'organization': 'La organización es obligatoria.'})
+
+        normalized_name = str(name).strip()
+        if not normalized_name:
+            raise serializers.ValidationError({'name': 'El nombre es obligatorio.'})
+
+        duplicated = ClassType.objects.filter(organization=organization, name__iexact=normalized_name)
+        if instance:
+            duplicated = duplicated.exclude(id=instance.id)
+        if duplicated.exists():
+            raise serializers.ValidationError({'name': 'Ya existe un tipo de clase con ese nombre en esta organización.'})
+
+        attrs['name'] = normalized_name
+
+        return attrs
+
+
+class DisciplineSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Discipline
+        fields = ['id', 'organization', 'name']
+        extra_kwargs = {
+            'organization': {'required': False},
+        }
+        validators = []
+
+    def validate(self, attrs):
+        request = self.context.get('request')
+        instance = getattr(self, 'instance', None)
+        organization = attrs.get('organization', getattr(instance, 'organization', None))
+        name = attrs.get('name', getattr(instance, 'name', ''))
+
+        if request and request.user.is_authenticated and request.user.role == User.Role.GYM_ADMIN:
+            attrs['organization'] = request.user.organization
+            organization = attrs['organization']
+
+        if not organization:
+            raise serializers.ValidationError({'organization': 'La organización es obligatoria.'})
+
+        normalized_name = str(name).strip()
+        if not normalized_name:
+            raise serializers.ValidationError({'name': 'El nombre es obligatorio.'})
+
+        duplicated = Discipline.objects.filter(organization=organization, name__iexact=normalized_name)
+        if instance:
+            duplicated = duplicated.exclude(id=instance.id)
+        if duplicated.exists():
+            raise serializers.ValidationError({'name': 'Ya existe una disciplina con ese nombre en esta organización.'})
+
+        attrs['name'] = normalized_name
+        return attrs
+
+
+class HolidaySerializer(serializers.ModelSerializer):
+    organization_name = serializers.CharField(source='organization.name', read_only=True)
+    branch_name = serializers.CharField(source='branch.name', read_only=True)
+
+    class Meta:
+        model = Holiday
+        fields = [
+            'id',
+            'organization',
+            'organization_name',
+            'branch',
+            'branch_name',
+            'date',
+            'name',
+            'scope',
+            'source_type',
+            'is_active',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = ['created_at', 'updated_at']
+        validators = []
+
+    def validate(self, attrs):
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        instance = getattr(self, 'instance', None)
+
+        scope = attrs.get('scope', getattr(instance, 'scope', Holiday.Scope.ORGANIZATION))
+        source_type = attrs.get('source_type', getattr(instance, 'source_type', Holiday.SourceType.MANUAL))
+        organization = attrs.get('organization', getattr(instance, 'organization', None))
+        branch = attrs.get('branch', getattr(instance, 'branch', None))
+
+        if user and user.is_authenticated and user.role == User.Role.GYM_ADMIN:
+            if scope == Holiday.Scope.GLOBAL:
+                raise serializers.ValidationError({'scope': 'Gym admin no puede crear festivos globales.'})
+            if source_type == Holiday.SourceType.SYSTEM:
+                raise serializers.ValidationError({'source_type': 'Gym admin no puede crear festivos de sistema.'})
+            organization = user.organization
+            attrs['organization'] = organization
+            if branch and branch.organization_id != user.organization_id:
+                raise serializers.ValidationError({'branch': 'La sucursal debe pertenecer a tu organizacion.'})
+
+        if instance and instance.source_type == Holiday.SourceType.SYSTEM:
+            if 'source_type' in attrs and attrs['source_type'] != Holiday.SourceType.SYSTEM:
+                raise serializers.ValidationError({'source_type': 'No se puede cambiar el origen de un festivo de sistema.'})
+
+        model_instance = Holiday(
+            organization=organization,
+            branch=branch,
+            date=attrs.get('date', getattr(instance, 'date', None)),
+            name=attrs.get('name', getattr(instance, 'name', None)),
+            scope=scope,
+            source_type=source_type,
+            is_active=attrs.get('is_active', getattr(instance, 'is_active', True)),
+        )
+        if instance:
+            model_instance.pk = instance.pk
+        try:
+            model_instance.clean()
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(exc.message_dict or {'detail': exc.messages})
+        return attrs
+
+
+class EnrollmentSerializer(serializers.ModelSerializer):
+    student_name = serializers.SerializerMethodField()
+    student_email = serializers.EmailField(source='student.email', read_only=True)
+    gym_class_name = serializers.CharField(source='gym_class.name', read_only=True)
+    class_branch_name = serializers.CharField(source='gym_class.branch.name', read_only=True)
+    class_teacher_name = serializers.SerializerMethodField()
+    class_discipline_name = serializers.CharField(source='gym_class.discipline.name', read_only=True)
+    class_type_name = serializers.CharField(source='gym_class.class_type.name', read_only=True)
+    class_template_id = serializers.IntegerField(source='gym_class.class_template_id', read_only=True)
+    class_status = serializers.CharField(source='gym_class.status', read_only=True)
+    class_start = serializers.DateTimeField(source='gym_class.start_datetime', read_only=True)
+    class_end = serializers.DateTimeField(source='gym_class.end_datetime', read_only=True)
+    reservation_kind = serializers.SerializerMethodField()
+    recurring_is_active = serializers.BooleanField(source='recurring_enrollment.is_active', read_only=True)
+    can_cancel = serializers.SerializerMethodField()
+    cancel_block_reason = serializers.SerializerMethodField()
+    cancel_policy_message = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Enrollment
+        fields = [
+            'id',
+            'student',
+            'student_name',
+            'student_email',
+            'gym_class',
+            'gym_class_name',
+            'class_branch_name',
+            'class_teacher_name',
+            'class_discipline_name',
+            'class_type_name',
+            'class_template_id',
+            'class_status',
+            'class_start',
+            'class_end',
+            'recurring_enrollment',
+            'reservation_kind',
+            'recurring_is_active',
+            'status',
+            'can_cancel',
+            'cancel_block_reason',
+            'cancel_policy_message',
+            'created_at',
+        ]
+        read_only_fields = ['created_at', 'recurring_enrollment']
+        extra_kwargs = {
+            'student': {'required': False},
+        }
+        validators = []
+
+    def get_student_name(self, obj):
+        full_name = f'{obj.student.first_name} {obj.student.last_name}'.strip()
+        return full_name or obj.student.username
+
+    def get_class_teacher_name(self, obj):
+        teacher = getattr(obj.gym_class, 'teacher', None)
+        if not teacher:
+            return ''
+        full_name = f'{teacher.first_name} {teacher.last_name}'.strip()
+        return full_name or teacher.username
+
+    def get_reservation_kind(self, obj):
+        return 'recurring' if obj.recurring_enrollment_id else 'single'
+
+    def _cancel_state(self, obj):
+        if obj.status != 'active':
+            return False, 'La reserva ya esta cancelada.'
+        if obj.gym_class.status in TERMINAL_CLASS_STATUSES:
+            return False, 'La clase esta cerrada y ya no se puede modificar la reserva.'
+        hours = _safe_int_setting('STUDENT_CANCEL_DEADLINE_HOURS', 0)
+        allowed, reason = _student_can_modify_before_class(obj.gym_class.start_datetime, hours)
+        if not allowed:
+            return False, reason
+        return True, ''
+
+    def get_can_cancel(self, obj):
+        return self._cancel_state(obj)[0]
+
+    def get_cancel_block_reason(self, obj):
+        return self._cancel_state(obj)[1]
+
+    def get_cancel_policy_message(self, obj):
+        return _student_deadline_message(_safe_int_setting('STUDENT_CANCEL_DEADLINE_HOURS', 0))
+
+    def validate(self, attrs):
+        instance = getattr(self, 'instance', None)
+        student = attrs.get('student', getattr(instance, 'student', None))
+        gym_class = attrs.get('gym_class', getattr(instance, 'gym_class', None))
+        status_value = attrs.get('status', getattr(instance, 'status', Enrollment.STATUS_CHOICES[0][0]))
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+
+        if user and user.is_authenticated and user.role == User.Role.STUDENT:
+            if student and student.id != user.id:
+                raise serializers.ValidationError({'student': 'Solo puedes reservar para tu propio usuario.'})
+            student = user
+            attrs['student'] = user
+
+        if not student:
+            raise serializers.ValidationError({'student': 'El alumno es obligatorio.'})
+        if not gym_class:
+            raise serializers.ValidationError({'gym_class': 'La clase es obligatoria.'})
+
+        if student.role != User.Role.STUDENT:
+            raise serializers.ValidationError({'student': 'Solo se pueden inscribir usuarios con rol student.'})
+
+        if student.organization_id != gym_class.organization_id:
+            raise serializers.ValidationError({'student': 'No puedes inscribir alumnos de otra organización.'})
+
+        if gym_class.status == GymClass.Status.CANCELLED:
+            raise serializers.ValidationError({'gym_class': 'No puedes reservar una clase cancelada.'})
+
+        now = timezone.now()
+        if gym_class.start_datetime <= now:
+            raise serializers.ValidationError({'gym_class': 'No puedes reservar clases pasadas o ya iniciadas.'})
+
+        if status_value == 'active' and gym_class.status in TERMINAL_CLASS_STATUSES:
+            raise serializers.ValidationError({'gym_class': 'No puedes reservar una clase cerrada.'})
+
+        if user and user.role == User.Role.GYM_ADMIN and gym_class.organization_id != user.organization_id:
+            raise serializers.ValidationError({'gym_class': 'Solo puedes gestionar clases de tu organización.'})
+
+        duplicate_exists = Enrollment.objects.filter(gym_class=gym_class, student=student)
+        if instance:
+            duplicate_exists = duplicate_exists.exclude(id=instance.id)
+        existing = duplicate_exists.first()
+        if existing and existing.status == 'active':
+            raise serializers.ValidationError({'student': 'El alumno ya tiene una reserva para esta clase.'})
+
+        if status_value == 'active':
+            active_count = gym_class.enrollments.filter(status='active')
+            if instance:
+                active_count = active_count.exclude(id=instance.id)
+            if active_count.count() >= gym_class.capacity:
+                raise serializers.ValidationError({'gym_class': 'La clase ya alcanzó su capacidad máxima.'})
+
+            overlapping_enrollments = Enrollment.objects.filter(
+                student=student,
+                status='active',
+                gym_class__status__in=[GymClass.Status.SCHEDULED, GymClass.Status.IN_PROGRESS],
+            ).filter(
+                Q(
+                    gym_class__start_datetime__lt=gym_class.end_datetime,
+                    gym_class__end_datetime__gt=gym_class.start_datetime,
+                )
+            )
+            if instance:
+                overlapping_enrollments = overlapping_enrollments.exclude(id=instance.id)
+            if overlapping_enrollments.exists():
+                raise serializers.ValidationError({'student': 'El alumno ya tiene otra clase reservada o confirmada en ese horario.'})
+
+        return attrs
+
+    def create(self, validated_data):
+        gym_class = validated_data['gym_class']
+        student = validated_data['student']
+        requested_status = validated_data.get('status', 'active')
+
+        existing = Enrollment.objects.filter(gym_class=gym_class, student=student).first()
+        if existing:
+            # Si existe una reserva cancelada, la reactivamos en lugar de crear una nueva.
+            existing.status = requested_status
+            existing.save(update_fields=['status', 'updated_at'])
+            return existing
+
+        return Enrollment.objects.create(**validated_data)
+
+
+class GymClassSerializer(serializers.ModelSerializer):
+    class_template_name = serializers.CharField(source='class_template.name', read_only=True)
+    branch_name = serializers.CharField(source='branch.name', read_only=True)
+    teacher_name = serializers.SerializerMethodField()
+    class_type_name = serializers.CharField(source='class_type.name', read_only=True)
+    discipline_name = serializers.CharField(source='discipline.name', read_only=True)
+    enrollments_count = serializers.SerializerMethodField()
+    attendances_count = serializers.SerializerMethodField()
+    present_attendances_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = GymClass
+        fields = [
+            'id',
+            'name',
+            'organization',
+            'class_template',
+            'class_template_name',
+            'branch',
+            'branch_name',
+            'teacher',
+            'teacher_name',
+            'class_type',
+            'class_type_name',
+            'discipline',
+            'discipline_name',
+            'start_datetime',
+            'end_datetime',
+            'capacity',
+            'status',
+            'created_by',
+            'closed_by',
+            'closed_at',
+            'closure_comment',
+            'is_active',
+            'enrollments_count',
+            'attendances_count',
+            'present_attendances_count',
+        ]
+        extra_kwargs = {
+            'organization': {'required': False},
+            'created_by': {'read_only': True},
+            'closed_by': {'read_only': True},
+            'closed_at': {'read_only': True},
+            'closure_comment': {'read_only': True},
+        }
+
+    def get_teacher_name(self, obj):
+        if not obj.teacher:
+            return ''
+        full_name = f'{obj.teacher.first_name} {obj.teacher.last_name}'.strip()
+        return full_name or obj.teacher.username
+
+    def get_enrollments_count(self, obj):
+        return obj.enrollments.filter(status='active').count()
+
+    def get_attendances_count(self, obj):
+        return obj.attendances.count()
+
+    def get_present_attendances_count(self, obj):
+        return obj.attendances.filter(status=Attendance.Status.PRESENT).count()
+
+    def validate(self, attrs):
+        instance = getattr(self, 'instance', None)
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+
+        organization = attrs.get('organization', getattr(instance, 'organization', None))
+        branch = attrs.get('branch', getattr(instance, 'branch', None))
+        teacher = attrs.get('teacher', getattr(instance, 'teacher', None))
+        class_type = attrs.get('class_type', getattr(instance, 'class_type', None))
+        discipline = attrs.get('discipline', getattr(instance, 'discipline', None))
+        class_template = attrs.get('class_template', getattr(instance, 'class_template', None))
+        start_datetime = attrs.get('start_datetime', getattr(instance, 'start_datetime', None))
+        end_datetime = attrs.get('end_datetime', getattr(instance, 'end_datetime', None))
+        capacity = attrs.get('capacity', getattr(instance, 'capacity', None))
+
+        if instance and instance.is_closed:
+            editable_fields = {'name', 'branch', 'teacher', 'class_type', 'discipline', 'start_datetime', 'end_datetime', 'capacity'}
+            if editable_fields.intersection(attrs.keys()):
+                raise serializers.ValidationError({'status': 'No puedes editar una clase que ya está cerrada.'})
+
+        if user and user.is_authenticated and user.role == User.Role.GYM_ADMIN:
+            organization = user.organization
+            attrs['organization'] = organization
+
+        if not organization:
+            raise serializers.ValidationError({'organization': 'La organización es obligatoria.'})
+        if not branch:
+            raise serializers.ValidationError({'branch': 'La sucursal es obligatoria.'})
+        if not teacher:
+            raise serializers.ValidationError({'teacher': 'El profesor es obligatorio.'})
+        if not class_type:
+            raise serializers.ValidationError({'class_type': 'El tipo de clase es obligatorio.'})
+        if not discipline:
+            raise serializers.ValidationError({'discipline': 'La disciplina es obligatoria.'})
+
+        if branch.organization_id != organization.id:
+            raise serializers.ValidationError({'branch': 'La sucursal no pertenece a la organización indicada.'})
+        if class_type.organization_id != organization.id:
+            raise serializers.ValidationError({'class_type': 'El tipo de clase no pertenece a la organización indicada.'})
+        if discipline.organization_id != organization.id:
+            raise serializers.ValidationError({'discipline': 'La disciplina no pertenece a la organización indicada.'})
+        if class_template and class_template.organization_id != organization.id:
+            raise serializers.ValidationError({'class_template': 'La plantilla no pertenece a la organización indicada.'})
+
+        if teacher.role != User.Role.TEACHER:
+            raise serializers.ValidationError({'teacher': 'El usuario seleccionado no es profesor.'})
+        if teacher.organization_id != organization.id:
+            raise serializers.ValidationError({'teacher': 'El profesor debe pertenecer a la misma organización.'})
+
+        if start_datetime and end_datetime and end_datetime <= start_datetime:
+            raise serializers.ValidationError({'end_datetime': 'La fecha de término debe ser posterior al inicio.'})
+
+        if capacity is not None and int(capacity) <= 0:
+            raise serializers.ValidationError({'capacity': 'La capacidad debe ser mayor que cero.'})
+
+        if start_datetime and end_datetime and teacher:
+            conflicting_classes = GymClass.objects.filter(
+                teacher=teacher,
+            ).exclude(status=GymClass.Status.CANCELLED).filter(
+                _overlap_filter(start_datetime, end_datetime)
+            )
+            if instance:
+                conflicting_classes = conflicting_classes.exclude(id=instance.id)
+            if conflicting_classes.exists():
+                raise serializers.ValidationError({'teacher': 'El profesor ya está asignado a otra clase en ese horario.'})
+
+        incoming_status = attrs.get('status')
+        if incoming_status in TERMINAL_CLASS_STATUSES:
+            raise serializers.ValidationError({'status': 'Usa las acciones de cierre/cancelación para cambiar a un estado terminal.'})
+
+        return attrs
+
+
+class AttendanceSerializer(serializers.ModelSerializer):
+    student_name = serializers.SerializerMethodField()
+    student_email = serializers.EmailField(source='student.email', read_only=True)
+    marked_by_username = serializers.CharField(source='marked_by.username', read_only=True)
+
+    class Meta:
+        model = Attendance
+        fields = [
+            'id',
+            'gym_class',
+            'student',
+            'student_name',
+            'student_email',
+            'status',
+            'source',
+            'marked_by',
+            'marked_by_username',
+            'marked_at',
+            'checked_at',
+        ]
+
+    def get_student_name(self, obj):
+        full_name = f'{obj.student.first_name} {obj.student.last_name}'.strip()
+        return full_name or obj.student.username
+
+
+class AttendanceItemWriteSerializer(serializers.Serializer):
+    student_id = serializers.IntegerField()
+    status = serializers.ChoiceField(choices=Attendance.Status.choices)
+
+
+class AttendanceBulkWriteSerializer(serializers.Serializer):
+    attendances = AttendanceItemWriteSerializer(many=True, allow_empty=False)
+
+    def validate_attendances(self, value):
+        seen_ids = set()
+        for item in value:
+            student_id = item['student_id']
+            if student_id in seen_ids:
+                raise serializers.ValidationError('No puedes repetir el mismo alumno en la lista de asistencia.')
+            seen_ids.add(student_id)
+        return value
+
+
+class GymClassDetailSerializer(GymClassSerializer):
+    enrollments = EnrollmentSerializer(many=True, read_only=True)
+    attendances = AttendanceSerializer(many=True, read_only=True)
+
+    class Meta(GymClassSerializer.Meta):
+        fields = GymClassSerializer.Meta.fields + ['enrollments', 'attendances']
+
+
+class ClassTemplateSerializer(serializers.ModelSerializer):
+    organization_name = serializers.CharField(source='organization.name', read_only=True)
+    branch_name = serializers.CharField(source='branch.name', read_only=True)
+    teacher_name = serializers.SerializerMethodField()
+    class_type_name = serializers.CharField(source='class_type.name', read_only=True)
+    discipline_name = serializers.CharField(source='discipline.name', read_only=True)
+    generated_instances_count = serializers.SerializerMethodField()
+    has_active_enrollments = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ClassTemplate
+        fields = [
+            'id',
+            'organization',
+            'organization_name',
+            'branch',
+            'branch_name',
+            'teacher',
+            'teacher_name',
+            'class_type',
+            'class_type_name',
+            'discipline',
+            'discipline_name',
+            'name',
+            'description',
+            'weekday',
+            'start_time',
+            'end_time',
+            'capacity',
+            'start_date',
+            'end_date',
+            'is_active',
+            'generated_instances_count',
+            'has_active_enrollments',
+            'created_by',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = ['created_by', 'created_at', 'updated_at']
+        extra_kwargs = {
+            'organization': {'required': False},
+        }
+
+    def get_teacher_name(self, obj):
+        if not obj.teacher:
+            return ''
+        full_name = f'{obj.teacher.first_name} {obj.teacher.last_name}'.strip()
+        return full_name or obj.teacher.username
+
+    def get_generated_instances_count(self, obj):
+        return obj.instances.count()
+
+    def get_has_active_enrollments(self, obj):
+        return obj.instances.filter(enrollments__status='active').exists()
+
+    def validate(self, attrs):
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        instance = getattr(self, 'instance', None)
+
+        organization = attrs.get('organization', getattr(instance, 'organization', None))
+        branch = attrs.get('branch', getattr(instance, 'branch', None))
+        teacher = attrs.get('teacher', getattr(instance, 'teacher', None))
+        class_type = attrs.get('class_type', getattr(instance, 'class_type', None))
+        discipline = attrs.get('discipline', getattr(instance, 'discipline', None))
+
+        if user and user.is_authenticated and user.role == User.Role.GYM_ADMIN:
+            organization = user.organization
+            attrs['organization'] = organization
+
+        if not organization:
+            raise serializers.ValidationError({'organization': 'La organización es obligatoria.'})
+        if not branch:
+            raise serializers.ValidationError({'branch': 'La sucursal es obligatoria.'})
+        if not teacher:
+            raise serializers.ValidationError({'teacher': 'El profesor es obligatorio.'})
+        if not class_type:
+            raise serializers.ValidationError({'class_type': 'El tipo de clase es obligatorio.'})
+        if not discipline:
+            raise serializers.ValidationError({'discipline': 'La disciplina es obligatoria.'})
+
+        data = {
+            'organization': organization,
+            'branch': branch,
+            'teacher': teacher,
+            'class_type': class_type,
+            'discipline': discipline,
+            'name': attrs.get('name', getattr(instance, 'name', '')),
+            'description': attrs.get('description', getattr(instance, 'description', '')),
+            'weekday': attrs.get('weekday', getattr(instance, 'weekday', None)),
+            'start_time': attrs.get('start_time', getattr(instance, 'start_time', None)),
+            'end_time': attrs.get('end_time', getattr(instance, 'end_time', None)),
+            'capacity': attrs.get('capacity', getattr(instance, 'capacity', None)),
+            'start_date': attrs.get('start_date', getattr(instance, 'start_date', None)),
+            'end_date': attrs.get('end_date', getattr(instance, 'end_date', None)),
+            'is_active': attrs.get('is_active', getattr(instance, 'is_active', True)),
+            'created_by': getattr(instance, 'created_by', None),
+        }
+        model_instance = ClassTemplate(**data)
+        if instance:
+            model_instance.pk = instance.pk
+        try:
+            model_instance.clean()
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(exc.message_dict or {'detail': exc.messages})
+        return attrs
+
+
+class RecurringEnrollmentSerializer(serializers.ModelSerializer):
+    student_name = serializers.SerializerMethodField()
+    template_name = serializers.CharField(source='class_template.name', read_only=True)
+    template_branch_name = serializers.CharField(source='class_template.branch.name', read_only=True)
+    template_teacher_name = serializers.SerializerMethodField()
+    template_discipline_name = serializers.CharField(source='class_template.discipline.name', read_only=True)
+    template_weekday = serializers.IntegerField(source='class_template.weekday', read_only=True)
+    template_start_time = serializers.TimeField(source='class_template.start_time', read_only=True)
+    template_end_time = serializers.TimeField(source='class_template.end_time', read_only=True)
+    last_sync = serializers.SerializerMethodField()
+    next_class_start = serializers.SerializerMethodField()
+    can_manage_now = serializers.SerializerMethodField()
+    manage_block_reason = serializers.SerializerMethodField()
+    manage_policy_message = serializers.SerializerMethodField()
+
+    class Meta:
+        model = RecurringEnrollment
+        fields = [
+            'id',
+            'student',
+            'student_name',
+            'class_template',
+            'template_name',
+            'template_branch_name',
+            'template_teacher_name',
+            'template_discipline_name',
+            'template_weekday',
+            'template_start_time',
+            'template_end_time',
+            'recurrence_type',
+            'start_date',
+            'end_date',
+            'is_active',
+            'created_by',
+            'created_at',
+            'updated_at',
+            'last_sync',
+            'next_class_start',
+            'can_manage_now',
+            'manage_block_reason',
+            'manage_policy_message',
+        ]
+        read_only_fields = ['created_by', 'created_at', 'updated_at', 'last_sync']
+        extra_kwargs = {
+            'student': {'required': False},
+        }
+
+    def get_student_name(self, obj):
+        full_name = f'{obj.student.first_name} {obj.student.last_name}'.strip()
+        return full_name or obj.student.username
+
+    def get_template_teacher_name(self, obj):
+        teacher = getattr(obj.class_template, 'teacher', None)
+        if not teacher:
+            return ''
+        full_name = f'{teacher.first_name} {teacher.last_name}'.strip()
+        return full_name or teacher.username
+
+    def get_last_sync(self, obj):
+        latest = obj.enrollments.order_by('-updated_at').first()
+        return latest.updated_at if latest else None
+
+    def _next_applicable_class(self, obj):
+        now = timezone.now()
+        queryset = obj.class_template.instances.filter(start_datetime__gt=now).exclude(status__in=TERMINAL_CLASS_STATUSES)
+        queryset = queryset.filter(start_datetime__date__gte=obj.start_date)
+        if obj.end_date:
+            queryset = queryset.filter(start_datetime__date__lte=obj.end_date)
+        return queryset.order_by('start_datetime').first()
+
+    def _manage_state(self, obj):
+        next_class = self._next_applicable_class(obj)
+        if not next_class:
+            return True, ''
+        hours = _safe_int_setting('STUDENT_RECURRING_CHANGE_DEADLINE_HOURS', 0)
+        allowed, reason = _student_can_modify_before_class(next_class.start_datetime, hours)
+        if not allowed:
+            return False, reason
+        return True, ''
+
+    def get_next_class_start(self, obj):
+        next_class = self._next_applicable_class(obj)
+        return next_class.start_datetime if next_class else None
+
+    def get_can_manage_now(self, obj):
+        return self._manage_state(obj)[0]
+
+    def get_manage_block_reason(self, obj):
+        return self._manage_state(obj)[1]
+
+    def get_manage_policy_message(self, obj):
+        return _student_deadline_message(_safe_int_setting('STUDENT_RECURRING_CHANGE_DEADLINE_HOURS', 0))
+
+    def validate(self, attrs):
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        instance = getattr(self, 'instance', None)
+
+        student = attrs.get('student', getattr(instance, 'student', None))
+        class_template = attrs.get('class_template', getattr(instance, 'class_template', None))
+
+        if user and user.is_authenticated and user.role == User.Role.STUDENT:
+            student = user
+            attrs['student'] = user
+
+        if not student:
+            raise serializers.ValidationError({'student': 'El alumno es obligatorio.'})
+        if not class_template:
+            raise serializers.ValidationError({'class_template': 'La plantilla es obligatoria.'})
+        if not class_template.is_active:
+            raise serializers.ValidationError({'class_template': 'Solo puedes suscribirte a plantillas activas.'})
+
+        if class_template.organization_id != student.organization_id:
+            raise serializers.ValidationError({'class_template': 'La plantilla no pertenece a tu organización.'})
+
+        data = {
+            'student': student,
+            'class_template': class_template,
+            'recurrence_type': attrs.get('recurrence_type', getattr(instance, 'recurrence_type', RecurringEnrollment.RecurrenceType.WEEKLY)),
+            'start_date': attrs.get('start_date', getattr(instance, 'start_date', None)),
+            'end_date': attrs.get('end_date', getattr(instance, 'end_date', None)),
+            'is_active': attrs.get('is_active', getattr(instance, 'is_active', True)),
+            'created_by': getattr(instance, 'created_by', None),
+        }
+        model_instance = RecurringEnrollment(**data)
+        if instance:
+            model_instance.pk = instance.pk
+        try:
+            model_instance.clean()
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(exc.message_dict or {'detail': exc.messages})
+
+        if model_instance.is_active:
+            duplicate = RecurringEnrollment.objects.filter(
+                student=student,
+                class_template=class_template,
+                is_active=True,
+            )
+            if instance:
+                duplicate = duplicate.exclude(pk=instance.pk)
+            if duplicate.exists():
+                raise serializers.ValidationError({'class_template': 'Ya existe una recurrencia activa para este alumno en esta serie.'})
+
+        return attrs
+
+    def create(self, validated_data):
+        recurring_enrollment = RecurringEnrollment.objects.create(**validated_data)
+        create_enrollments_for_recurring_subscription(recurring_enrollment=recurring_enrollment)
+        return recurring_enrollment
+
+
+class MembershipPlanSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = MembershipPlan
+        fields = [
+            'id',
+            'organization',
+            'name',
+            'plan_kind',
+            'price',
+            'class_limit',
+            'expires_in_days',
+            'allows_rollover',
+            'is_active',
+        ]
+
+
+class PlanSerializer(serializers.ModelSerializer):
+    organization_name = serializers.CharField(source='organization.name', read_only=True)
+
+    class Meta:
+        model = Plan
+        fields = [
+            'id',
+            'organization',
+            'organization_name',
+            'name',
+            'plan_type',
+            'total_classes',
+            'duration_days',
+            'price',
+            'discount_percentage',
+            'is_public',
+            'is_active',
+        ]
+        extra_kwargs = {
+            'organization': {'required': False},
+        }
+
+    def validate(self, attrs):
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        instance = getattr(self, 'instance', None)
+        organization = attrs.get('organization', getattr(instance, 'organization', None))
+
+        if user and user.is_authenticated and user.role == User.Role.GYM_ADMIN:
+            organization = user.organization
+            attrs['organization'] = organization
+
+        if not organization:
+            raise serializers.ValidationError({'organization': 'La organización es obligatoria.'})
+
+        if user and user.is_authenticated and user.role == User.Role.STUDENT:
+            raise serializers.ValidationError({'detail': 'Los alumnos no pueden gestionar planes.'})
+
+        return attrs
+
+
+class StudentPlanSerializer(serializers.ModelSerializer):
+    plan_name = serializers.CharField(source='plan.name', read_only=True)
+    plan_type = serializers.CharField(source='plan.plan_type', read_only=True)
+    user_name = serializers.SerializerMethodField()
+    user_email = serializers.CharField(source='user.email', read_only=True)
+    remaining_classes = serializers.SerializerMethodField()
+    validity_status = serializers.SerializerMethodField()
+    days_to_expiry = serializers.SerializerMethodField()
+    expiry_alert_level = serializers.SerializerMethodField()
+    expiry_alert_message = serializers.SerializerMethodField()
+
+    class Meta:
+        model = StudentPlan
+        fields = [
+            'id',
+            'user',
+            'user_name',
+            'user_email',
+            'plan',
+            'plan_name',
+            'plan_type',
+            'start_date',
+            'end_date',
+            'total_classes',
+            'classes_used',
+            'remaining_classes',
+            'validity_status',
+            'days_to_expiry',
+            'expiry_alert_level',
+            'expiry_alert_message',
+            'discount_percentage',
+            'final_price',
+            'is_active',
+        ]
+        read_only_fields = [
+            'classes_used',
+            'remaining_classes',
+            'final_price',
+        ]
+
+    def get_remaining_classes(self, obj):
+        return max((obj.total_classes or 0) - (obj.classes_used or 0), 0)
+
+    def get_user_name(self, obj):
+        if not obj.user:
+            return ''
+        full_name = f'{obj.user.first_name} {obj.user.last_name}'.strip()
+        return full_name or obj.user.username
+
+    def _days_to_expiry(self, obj):
+        if not obj or not obj.end_date:
+            return None
+        return (obj.end_date - timezone.localdate()).days
+
+    def get_validity_status(self, obj):
+        today = timezone.localdate()
+        if obj.end_date and obj.end_date < today:
+            return 'expired'
+        if obj.start_date and obj.start_date > today:
+            return 'upcoming'
+        if not obj.is_active:
+            return 'inactive'
+        return 'active'
+
+    def get_days_to_expiry(self, obj):
+        return self._days_to_expiry(obj)
+
+    def get_expiry_alert_level(self, obj):
+        status_value = self.get_validity_status(obj)
+        if status_value == 'upcoming':
+            return 'safe'
+        if status_value != 'active':
+            return 'expired' if status_value == 'expired' else 'neutral'
+
+        days = self._days_to_expiry(obj)
+        if days is None:
+            return 'neutral'
+        if days <= 5:
+            return 'danger'
+        if days <= 12:
+            return 'warning'
+        return 'safe'
+
+    def get_expiry_alert_message(self, obj):
+        status_value = self.get_validity_status(obj)
+        if status_value == 'expired':
+            return 'Vencido'
+        if status_value == 'upcoming':
+            return 'Por iniciar'
+        if status_value == 'inactive':
+            return 'No vigente'
+        days = self._days_to_expiry(obj)
+        if days is None:
+            return 'Sin fecha de vencimiento'
+        if days == 0:
+            return 'Vence hoy'
+        if days == 1:
+            return '1 dia vigente'
+        return f'{days} dias vigentes'
+
+
+class StudentPlanAssignSerializer(serializers.Serializer):
+    user = serializers.PrimaryKeyRelatedField(queryset=User.objects.filter(role=User.Role.STUDENT, is_active=True))
+    plan = serializers.PrimaryKeyRelatedField(queryset=Plan.objects.filter(is_active=True))
+    start_date = serializers.DateField()
+    total_classes = serializers.IntegerField(required=False, min_value=0)
+    discount_percentage = serializers.FloatField(required=False, min_value=0, max_value=100)
+
+    def validate(self, attrs):
+        plan = attrs['plan']
+        student = attrs['user']
+        if plan.organization_id != student.organization_id:
+            raise serializers.ValidationError({'plan': 'El plan no pertenece a la organización del alumno.'})
+        attrs['total_classes'] = attrs.get('total_classes', plan.total_classes)
+        attrs['discount_percentage'] = attrs.get('discount_percentage', plan.discount_percentage or 0)
+        attrs['end_date'] = attrs['start_date'] + timedelta(days=max(plan.duration_days - 1, 0))
+        return attrs
+
+class TeacherPaymentRuleSerializer(serializers.ModelSerializer):
+    branch_name = serializers.CharField(source='branch.name', read_only=True)
+    discipline_name = serializers.CharField(source='discipline.name', read_only=True)
+    class_type_name = serializers.CharField(source='class_type.name', read_only=True)
+    usage_count = serializers.IntegerField(read_only=True)
+    is_used = serializers.SerializerMethodField()
+    assigned_teachers_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = TeacherPaymentRule
+        fields = [
+            'id',
+            'organization',
+            'branch',
+            'branch_name',
+            'discipline',
+            'discipline_name',
+            'class_type',
+            'class_type_name',
+            'payment_type',
+            'amount',
+            'calculation_base',
+            'is_active',
+            'usage_count',
+            'is_used',
+            'assigned_teachers_count',
+            'created_at',
+            'updated_at',
+        ]
+        extra_kwargs = {
+            'organization': {'required': False},
+        }
+
+    def get_is_used(self, obj):
+        usage = getattr(obj, 'usage_count', None)
+        if usage is None:
+            usage = obj.teachers.count()
+        return int(usage or 0) > 0
+
+    def get_assigned_teachers_count(self, obj):
+        return obj.teachers.count()
+
+    def validate(self, attrs):
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        instance = getattr(self, 'instance', None)
+
+        organization = attrs.get('organization', getattr(instance, 'organization', None))
+        branch = attrs.get('branch', getattr(instance, 'branch', None))
+        discipline = attrs.get('discipline', getattr(instance, 'discipline', None))
+        class_type = attrs.get('class_type', getattr(instance, 'class_type', None))
+        payment_type = attrs.get('payment_type', getattr(instance, 'payment_type', None))
+        amount = attrs.get('amount', getattr(instance, 'amount', None))
+        calculation_base = attrs.get('calculation_base', getattr(instance, 'calculation_base', None))
+
+        if user and user.is_authenticated and user.role == User.Role.GYM_ADMIN:
+            organization = user.organization
+            attrs['organization'] = organization
+
+        if not organization:
+            raise serializers.ValidationError({'organization': 'La organizacion es obligatoria.'})
+        if branch and branch.organization_id != organization.id:
+            raise serializers.ValidationError({'branch': 'La sucursal no pertenece a la organizacion seleccionada.'})
+        if discipline and discipline.organization_id != organization.id:
+            raise serializers.ValidationError({'discipline': 'La disciplina no pertenece a la organizacion seleccionada.'})
+        if class_type and class_type.organization_id != organization.id:
+            raise serializers.ValidationError({'class_type': 'El tipo de clase no pertenece a la organizacion seleccionada.'})
+
+        if payment_type == TeacherPaymentRule.PaymentType.FIXED_PER_CLASS:
+            attrs['calculation_base'] = None
+            if amount is None or float(amount) < 0:
+                raise serializers.ValidationError({'amount': 'El monto debe ser mayor o igual a 0.'})
+        elif payment_type == TeacherPaymentRule.PaymentType.PER_STUDENT:
+            attrs['calculation_base'] = TeacherPaymentRule.CalculationBase.ATTENDANCE
+            if amount is None or float(amount) < 0:
+                raise serializers.ValidationError({'amount': 'El monto por alumno debe ser mayor o igual a 0.'})
+        elif payment_type == TeacherPaymentRule.PaymentType.REVENUE_SHARE:
+            if calculation_base not in {
+                TeacherPaymentRule.CalculationBase.ATTENDANCE,
+                TeacherPaymentRule.CalculationBase.ENROLLMENT,
+            }:
+                raise serializers.ValidationError({'calculation_base': 'Selecciona attendance o enrollment.'})
+            if amount is None or float(amount) < 0 or float(amount) > 100:
+                raise serializers.ValidationError({'amount': 'El porcentaje debe estar entre 0 y 100.'})
+        else:
+            raise serializers.ValidationError({'payment_type': 'Tipo de pago invalido.'})
+
+        return attrs
+
+
+class TeacherPaymentRuleAssignmentsUpdateSerializer(serializers.Serializer):
+    teacher_ids = serializers.ListField(child=serializers.IntegerField(), allow_empty=True)
+
+
+class TeacherPaymentRecordSerializer(serializers.ModelSerializer):
+    teacher_name = serializers.SerializerMethodField()
+    class_name = serializers.CharField(source='class_instance.name', read_only=True)
+    class_start = serializers.DateTimeField(source='class_instance.start_datetime', read_only=True)
+    payment_type = serializers.CharField(source='rule.payment_type', read_only=True)
+
+    class Meta:
+        model = TeacherPaymentRecord
+        fields = [
+            'id',
+            'teacher',
+            'teacher_name',
+            'class_instance',
+            'class_name',
+            'class_start',
+            'rule',
+            'payment_type',
+            'total_students',
+            'total_amount',
+            'calculated_at',
+        ]
+
+    def get_teacher_name(self, obj):
+        if not obj.teacher_id:
+            return '-'
+        full_name = f'{obj.teacher.first_name} {obj.teacher.last_name}'.strip()
+        return full_name or obj.teacher.username
+
+
+
+
+
