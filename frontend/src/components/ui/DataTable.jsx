@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import TablePagination from './TablePagination'
 import TableSearch from './TableSearch'
 import RowActionsDropdown from './RowActionsDropdown'
+import useBodyScrollLock from '../../hooks/useBodyScrollLock'
 
 const PAGE_SIZE_OPTIONS = [5, 10, 15, 25]
 const CARD_PAGE_SIZE_OPTIONS = [6, 12, 24]
@@ -118,6 +120,7 @@ export default function DataTable({
   const [pageSize, setPageSize] = useState(10)
   const [isCardView, setIsCardView] = useState(false)
   const [selectedDetailRow, setSelectedDetailRow] = useState(null)
+  useBodyScrollLock(Boolean(selectedDetailRow))
   const [sortState, setSortState] = useState(() => {
     if (!defaultSort?.key) {
       return { key: null, direction: 'asc' }
@@ -464,10 +467,10 @@ export default function DataTable({
             onNext={() => setPage((prev) => Math.min(totalPages, prev + 1))}
           />
 
-          {selectedDetailRow ? (
-            <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 p-3 backdrop-blur-sm sm:items-center" onClick={() => setSelectedDetailRow(null)}>
+          {selectedDetailRow ? createPortal(
+            <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm" onClick={() => setSelectedDetailRow(null)}>
               <div
-                className="max-h-[88vh] w-full overflow-y-auto rounded-2xl border border-brand-line bg-brand-soft p-4 shadow-float animate-scale-in sm:max-w-lg"
+                className="max-h-[85vh] w-full overflow-y-auto rounded-2xl border border-brand-line bg-brand-soft p-4 shadow-float animate-scale-in sm:max-w-lg"
                 onClick={(event) => event.stopPropagation()}
               >
                 <div className="sticky top-0 -mx-4 -mt-4 mb-2 flex items-center justify-between gap-3 border-b border-brand-line bg-brand-soft/95 px-4 py-3 backdrop-blur">
@@ -498,7 +501,8 @@ export default function DataTable({
                   </div>
                 ) : null}
               </div>
-            </div>
+            </div>,
+            document.body,
           ) : null}
         </>
       )}

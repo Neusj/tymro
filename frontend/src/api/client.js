@@ -6,6 +6,31 @@ const api = axios.create({
   baseURL: API_BASE_URL,
 })
 
+// Claves de sesión (mismas que usa AuthContext).
+const TOKEN_KEY = 'tymro_token'
+const USER_KEY = 'tymro_user'
+
+// Ante un 401 (token expirado/inválido) limpiamos la sesión y mandamos al login.
+// No redirige cuando el 401 viene del propio login ni cuando ya estamos en /login,
+// para no romper el mensaje de "credenciales inválidas" ni provocar loops.
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const status = error?.response?.status
+    const requestUrl = error?.config?.url || ''
+    const isAuthEndpoint = requestUrl.includes('/login/') || requestUrl.includes('/password-reset')
+
+    if (status === 401 && !isAuthEndpoint && window.location.pathname !== '/login') {
+      localStorage.removeItem(TOKEN_KEY)
+      localStorage.removeItem(USER_KEY)
+      setAuthToken(null)
+      window.location.assign('/login')
+    }
+
+    return Promise.reject(error)
+  },
+)
+
 const toFormData = (payload = {}) => {
   const formData = new FormData()
   Object.entries(payload).forEach(([key, value]) => {
@@ -48,6 +73,18 @@ export const authApi = {
   },
   me: async () => {
     const { data } = await api.get('/me/')
+    return data
+  },
+  requestPasswordReset: async (email) => {
+    const { data } = await api.post('/password-reset/', { email })
+    return data
+  },
+  confirmPasswordReset: async ({ uid, token, newPassword }) => {
+    const { data } = await api.post('/password-reset/confirm/', {
+      uid,
+      token,
+      new_password: newPassword,
+    })
     return data
   },
 }

@@ -1,5 +1,5 @@
 ﻿import { useState } from 'react'
-import { Navigate, useLocation, useNavigate } from 'react-router-dom'
+import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { defaultRouteByRole } from '../utils/roles'
 
@@ -98,6 +98,12 @@ export default function LoginPage() {
               >
                 {loading ? 'Ingresando...' : 'Entrar'}
               </button>
+
+              <p className="text-center text-sm">
+                <Link to="/forgot-password" className="text-brand-muted underline-offset-4 hover:text-brand-orange hover:underline">
+                  ¿Olvidaste tu contraseña?
+                </Link>
+              </p>
             </form>
           </div>
         </div>

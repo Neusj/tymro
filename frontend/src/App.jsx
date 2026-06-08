@@ -17,6 +17,8 @@ import GymAdminDashboard from './pages/GymAdminDashboard'
 import GymAdminUsersPage from './pages/GymAdminUsersPage'
 import GymAdminPlanMembershipsPage from './pages/GymAdminPlanMembershipsPage'
 import LoginPage from './pages/LoginPage'
+import ForgotPasswordPage from './pages/ForgotPasswordPage'
+import ResetPasswordPage from './pages/ResetPasswordPage'
 import PlanListPage from './pages/PlanListPage'
 import StudentClassesPage from './pages/StudentClassesPage'
 import StudentDashboard from './pages/StudentDashboard'
@@ -56,6 +58,8 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+      <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route path="/attendance/screen" element={<AttendanceScreenPage />} />
       <Route
         path="/attendance/check-in"

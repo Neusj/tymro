@@ -2,6 +2,8 @@ from pathlib import Path
 import os
 from urllib.parse import parse_qsl, unquote, urlparse
 
+from django.core.exceptions import ImproperlyConfigured
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 def _env_bool(name, default=False):
@@ -61,8 +63,18 @@ def _database_config():
     }
 
 
-SECRET_KEY = os.getenv('SECRET_KEY', 'tymro-dev-secret-key')
-DEBUG = _env_bool('DJANGO_DEBUG', _env_bool('DEBUG', True))
+DEBUG = _env_bool('DJANGO_DEBUG', _env_bool('DEBUG', False))
+
+# SECRET_KEY: solo de entorno. En prod (DEBUG=False) la app FALLA al arrancar si no está.
+SECRET_KEY = os.getenv('SECRET_KEY')
+if not SECRET_KEY:
+    if DEBUG:
+        SECRET_KEY = 'tymro-dev-secret-key'  # default solo para desarrollo local
+    else:
+        raise ImproperlyConfigured(
+            'SECRET_KEY no está definida. Configúrala como variable de entorno antes de '
+            'arrancar en producción (DEBUG=False).'
+        )
 ALLOWED_HOSTS = _env_list(
     'ALLOWED_HOSTS',
     ['localhost', '127.0.0.1', 'backend', 'frontend', 'tymroapp.com', '.trycloudflare.com'],
@@ -116,7 +128,21 @@ DATABASES = {
     'default': _database_config()
 }
 
-AUTH_PASSWORD_VALIDATORS = []
+AUTH_PASSWORD_VALIDATORS = [
+    {
+        'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
+    },
+    {
+        'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
+        'OPTIONS': {'min_length': 8},
+    },
+    {
+        'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator',
+    },
+    {
+        'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
+    },
+]
 
 LANGUAGE_CODE = 'es-cl'
 TIME_ZONE = 'America/Santiago'
@@ -152,15 +178,61 @@ CSRF_TRUSTED_ORIGINS = _env_list(
 USE_X_FORWARDED_HOST = True
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
+# Caducidad del token DRF (horas). El token se rota al re-loguear (ver core.views.LoginView).
+TOKEN_TTL_HOURS = int(os.getenv('TOKEN_TTL_HOURS', '12'))
+
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        'rest_framework.authentication.TokenAuthentication',
+        'core.authentication.ExpiringTokenAuthentication',
         'rest_framework.authentication.SessionAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
     ],
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '60/min',
+        'user': '1000/day',
+        'login': '5/min',
+        # Pedir reset envía un email -> acotado para anti-spam.
+        'password_reset': '3/hour',
+        # Confirmar permite reintentos (el usuario puede equivocarse al tipear la clave).
+        'password_reset_confirm': '10/hour',
+    },
 }
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
+
+# Email — consola en dev, SMTP por env en prod.
+EMAIL_BACKEND = os.getenv(
+    'EMAIL_BACKEND',
+    'django.core.mail.backends.console.EmailBackend'
+    if DEBUG
+    else 'django.core.mail.backends.smtp.EmailBackend',
+)
+EMAIL_HOST = os.getenv('EMAIL_HOST', '')
+EMAIL_PORT = int(os.getenv('EMAIL_PORT', '587'))
+EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '')
+EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
+EMAIL_USE_TLS = _env_bool('EMAIL_USE_TLS', True)
+DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'no-reply@tymroapp.com')
+
+# URL base del frontend para armar el link de reset de contraseña.
+FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173')
+
+# Validez del token de reset de contraseña (segundos). Default 3 días.
+PASSWORD_RESET_TIMEOUT = int(os.getenv('PASSWORD_RESET_TIMEOUT', str(60 * 60 * 24 * 3)))
+
+# Hardening adicional cuando NO estamos en desarrollo.
+if not DEBUG:
+    SECURE_SSL_REDIRECT = _env_bool('SECURE_SSL_REDIRECT', True)
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_HSTS_SECONDS = int(os.getenv('SECURE_HSTS_SECONDS', str(60 * 60 * 24 * 30)))
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True

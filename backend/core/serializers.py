@@ -1285,6 +1285,16 @@ class TeacherPaymentRecordSerializer(serializers.ModelSerializer):
         return full_name or obj.teacher.username
 
 
+class PasswordResetRequestSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+
+
+class PasswordResetConfirmSerializer(serializers.Serializer):
+    uid = serializers.CharField()
+    token = serializers.CharField()
+    new_password = serializers.CharField(write_only=True)
+
+
 
 
 
