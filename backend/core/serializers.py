@@ -69,6 +69,7 @@ def _student_can_modify_before_class(start_datetime, hours):
 
 class OrganizationSerializer(serializers.ModelSerializer):
     branches_count = serializers.IntegerField(source='branches.count', read_only=True)
+    public_registration_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Organization
@@ -85,6 +86,8 @@ class OrganizationSerializer(serializers.ModelSerializer):
             'attendance_screen_code',
             'attendance_screen_session_code',
             'attendance_screen_session_expires_at',
+            'public_registration_enabled',
+            'public_registration_url',
             'branches_count',
         ]
         read_only_fields = [
@@ -92,6 +95,10 @@ class OrganizationSerializer(serializers.ModelSerializer):
             'attendance_screen_session_code',
             'attendance_screen_session_expires_at',
         ]
+
+    def get_public_registration_url(self, obj):
+        base = settings.FRONTEND_URL.rstrip('/')
+        return f'{base}/{obj.slug}/clase-gratis'
 
 
 class BranchSerializer(serializers.ModelSerializer):
@@ -570,6 +577,7 @@ class GymClassSerializer(serializers.ModelSerializer):
             'start_datetime',
             'end_datetime',
             'capacity',
+            'is_trial_eligible',
             'status',
             'created_by',
             'closed_by',
@@ -757,6 +765,7 @@ class ClassTemplateSerializer(serializers.ModelSerializer):
             'start_time',
             'end_time',
             'capacity',
+            'is_trial_eligible',
             'start_date',
             'end_date',
             'is_active',
@@ -1293,6 +1302,72 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
     uid = serializers.CharField()
     token = serializers.CharField()
     new_password = serializers.CharField(write_only=True)
+
+
+class PublicOrganizationBrandingSerializer(serializers.ModelSerializer):
+    """Marca pública del gimnasio para la landing de registro. Solo lectura,
+    sin exponer el token ni datos internos."""
+
+    class Meta:
+        model = Organization
+        fields = ['name', 'slug', 'logo', 'primary_color', 'secondary_color']
+
+
+class PublicRegistrationSerializer(serializers.Serializer):
+    """Registro público de un prospecto. NO incluye role ni organization:
+    el servidor los fija desde el token de invitación. Inyección imposible."""
+
+    first_name = serializers.CharField(max_length=150)
+    last_name = serializers.CharField(max_length=150, required=False, allow_blank=True)
+    email = serializers.EmailField()
+    password = serializers.CharField(write_only=True)
+    phone = serializers.CharField(max_length=40, required=False, allow_blank=True)
+
+    def validate_email(self, value):
+        normalized = value.strip().lower()
+        if User.objects.filter(email__iexact=normalized).exists() or User.objects.filter(username__iexact=normalized).exists():
+            raise serializers.ValidationError('Ya existe una cuenta con ese email.')
+        return normalized
+
+    def validate_password(self, value):
+        from django.contrib.auth.password_validation import validate_password
+
+        try:
+            validate_password(value)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(list(exc.messages))
+        return value
+
+
+class PublicTrialClassSerializer(serializers.ModelSerializer):
+    branch_name = serializers.CharField(source='branch.name', read_only=True)
+    teacher_name = serializers.SerializerMethodField()
+    class_type_name = serializers.CharField(source='class_type.name', read_only=True)
+    seats_left = serializers.SerializerMethodField()
+
+    class Meta:
+        model = GymClass
+        fields = [
+            'id',
+            'name',
+            'branch_name',
+            'teacher_name',
+            'class_type_name',
+            'start_datetime',
+            'end_datetime',
+            'capacity',
+            'seats_left',
+        ]
+
+    def get_teacher_name(self, obj):
+        if not obj.teacher_id:
+            return ''
+        full_name = f'{obj.teacher.first_name} {obj.teacher.last_name}'.strip()
+        return full_name or obj.teacher.username
+
+    def get_seats_left(self, obj):
+        active = obj.enrollments.filter(status='active').count()
+        return max(0, obj.capacity - active)
 
 
 

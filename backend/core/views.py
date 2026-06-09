@@ -58,6 +58,9 @@ from .serializers import (
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
     PlanSerializer,
+    PublicOrganizationBrandingSerializer,
+    PublicRegistrationSerializer,
+    PublicTrialClassSerializer,
     PersonSerializer,
     RecurringEnrollmentSerializer,
     StudentPlanAssignSerializer,
@@ -466,8 +469,8 @@ class PasswordResetRequestView(APIView):
                 subject='Restablecer tu contraseña — TYMRO',
                 message=(
                     'Recibimos una solicitud para restablecer tu contraseña.\n\n'
-                    f'Abrí este enlace para elegir una nueva contraseña:\n{reset_link}\n\n'
-                    'Si no fuiste vos, podés ignorar este correo.'
+                    f'Abre este enlace para elegir una nueva contraseña:\n{reset_link}\n\n'
+                    'Si no fuiste tú, puedes ignorar este correo.'
                 ),
                 from_email=settings.DEFAULT_FROM_EMAIL,
                 recipient_list=[email],
@@ -502,7 +505,7 @@ class PasswordResetConfirmView(APIView):
 
         if user is None or not default_token_generator.check_token(user, token):
             return Response(
-                {'detail': 'El enlace no es válido o expiró. Pedí uno nuevo.'},
+                {'detail': 'El enlace no es válido o expiró. Pide uno nuevo.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -516,7 +519,219 @@ class PasswordResetConfirmView(APIView):
         # Invalidar sesiones por token previas tras el cambio de contraseña.
         Token.objects.filter(user=user).delete()
 
-        return Response({'detail': 'Contraseña actualizada. Ya podés iniciar sesión.'})
+        return Response({'detail': 'Contraseña actualizada. Ya puedes iniciar sesión.'})
+
+
+def _resolve_invite_org(slug):
+    """Resuelve la organización por su slug, solo si está activa y con el registro
+    público habilitado. El link es público (va en flyers/QR); el control de corte
+    es ``public_registration_enabled`` (interruptor on/off). Devuelve None ante
+    cualquier desajuste (404 → link inválido o desactivado)."""
+    if not slug:
+        return None
+    try:
+        return Organization.objects.get(
+            slug=slug,
+            is_active=True,
+            public_registration_enabled=True,
+        )
+    except Organization.DoesNotExist:
+        return None
+
+
+class PublicInviteValidateView(APIView):
+    """Valida el link público y devuelve la marca del gimnasio para la landing.
+    Slug desconocido o registro desactivado → 404."""
+
+    permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'public_invite'
+
+    def get(self, request):
+        organization = _resolve_invite_org(request.query_params.get('slug'))
+        if organization is None:
+            return Response({'detail': 'Link inválido o desactivado.'}, status=status.HTTP_404_NOT_FOUND)
+        return Response(PublicOrganizationBrandingSerializer(organization, context={'request': request}).data)
+
+
+class PublicRegisterView(APIView):
+    """Registro público de un prospecto. La organización se fija server-side
+    desde el slug; el rol es siempre STUDENT. El payload no puede elegir org/rol."""
+
+    permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'public_register'
+
+    def post(self, request):
+        organization = _resolve_invite_org(request.data.get('slug'))
+        if organization is None:
+            return Response({'detail': 'Link inválido o desactivado.'}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = PublicRegistrationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        user = User(
+            username=data['email'],
+            email=data['email'],
+            first_name=data['first_name'],
+            last_name=data.get('last_name', ''),
+            phone=data.get('phone', ''),
+            role=User.Role.STUDENT,
+            organization=organization,
+            branch=None,
+            is_active=True,
+            email_verified=False,
+            has_used_trial=False,
+        )
+        user.set_password(data['password'])
+        user.save()
+
+        uid = urlsafe_base64_encode(force_bytes(user.pk))
+        token = default_token_generator.make_token(user)
+        verify_link = f"{settings.FRONTEND_URL.rstrip('/')}/verify-email?uid={uid}&token={token}"
+        send_mail(
+            subject=f'Confirma tu email — {organization.name}',
+            message=(
+                f'¡Bienvenido/a a {organization.name}!\n\n'
+                'Confirma tu email para activar tu cuenta y agendar tu clase de prueba gratis:\n'
+                f'{verify_link}\n\n'
+                'Si no fuiste tú, puedes ignorar este correo.'
+            ),
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[user.email],
+            fail_silently=False,
+        )
+
+        return Response(
+            {'detail': 'Cuenta creada. Te enviamos un email para confirmar tu cuenta.'},
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class PublicVerifyEmailView(APIView):
+    """Confirma el email con uid + token del correo y auto-loguea (devuelve token
+    de auth) para que el prospecto pueda agendar su clase de prueba."""
+
+    permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'public_verify'
+
+    def post(self, request):
+        uid = request.data.get('uid')
+        token = request.data.get('token')
+        try:
+            user_pk = force_str(urlsafe_base64_decode(uid))
+            user = User.objects.get(pk=user_pk, is_active=True)
+        except (TypeError, ValueError, OverflowError, User.DoesNotExist):
+            user = None
+
+        if user is None or not default_token_generator.check_token(user, token):
+            return Response(
+                {'detail': 'El enlace no es válido o expiró.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not user.email_verified:
+            user.email_verified = True
+            user.save(update_fields=['email_verified'])
+
+        Token.objects.filter(user=user).delete()
+        auth_token = Token.objects.create(user=user)
+        return Response(
+            {
+                'token': auth_token.key,
+                'user': CustomUserSerializer(user, context={'request': request}).data,
+                'role': user.role,
+                'organization': user.organization_id,
+                'branch': user.branch_id,
+            }
+        )
+
+
+class PublicTrialClassesView(APIView):
+    """Lista las próximas clases elegibles para prueba con cupo, de la organización
+    del alumno autenticado."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        if not _is_student(user) or not user.organization_id:
+            return Response([], status=status.HTTP_200_OK)
+
+        queryset = (
+            GymClass.objects.filter(
+                organization_id=user.organization_id,
+                is_trial_eligible=True,
+                status=GymClass.Status.SCHEDULED,
+                start_datetime__gt=timezone.now(),
+            )
+            .select_related('branch', 'teacher', 'class_type')
+            .order_by('start_datetime')
+        )
+        serializer = PublicTrialClassSerializer(queryset, many=True, context={'request': request})
+        # Solo las que aún tienen cupo.
+        data = [item for item in serializer.data if item['seats_left'] > 0]
+        return Response(data)
+
+
+class PublicTrialBookView(APIView):
+    """Inscribe al alumno en UNA clase de prueba gratis. Requiere email verificado
+    y que no haya usado su prueba antes. No consume plan (require_plan=False)."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        if not _is_student(user):
+            raise PermissionDenied('Solo alumnos pueden agendar una clase de prueba.')
+
+        gym_class_id = request.data.get('gym_class')
+        if not gym_class_id:
+            return Response({'detail': 'Falta la clase (gym_class).'}, status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            locked_user = User.objects.select_for_update().get(pk=user.pk)
+            if not locked_user.email_verified:
+                return Response(
+                    {'detail': 'Confirma tu email antes de agendar tu clase de prueba.'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            if locked_user.has_used_trial:
+                return Response(
+                    {'detail': 'Ya usaste tu clase de prueba gratis.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            try:
+                gym_class = GymClass.objects.get(
+                    pk=gym_class_id,
+                    organization_id=locked_user.organization_id,
+                    is_trial_eligible=True,
+                )
+            except GymClass.DoesNotExist:
+                return Response(
+                    {'detail': 'Esa clase no está disponible para prueba.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            try:
+                reserve_student_in_class(
+                    student=locked_user,
+                    gym_class=gym_class,
+                    require_plan=False,
+                )
+            except ReservationRuleError as exc:
+                return Response({'detail': exc.message}, status=status.HTTP_400_BAD_REQUEST)
+
+            locked_user.has_used_trial = True
+            locked_user.save(update_fields=['has_used_trial'])
+
+        return Response(
+            {'detail': '¡Listo! Reservaste tu clase de prueba gratis.'},
+            status=status.HTTP_201_CREATED,
+        )
 
 
 def _build_qr_token(organization_id):
@@ -548,11 +763,25 @@ def _get_public_attendance_organization(raw_code):
     return organization
 
 
+def _get_organization_by_screen_code(raw_code):
+    """Resuelve la organización por su código de pantalla PERMANENTE
+    (``attendance_screen_code``). Se usa para el enlace automático por gym, que
+    muestra el QR rotando sin iniciar sesión temporal ni tipear código."""
+    code = _normalize_attendance_screen_code(raw_code)
+    if not code:
+        raise ValidationError({'code': 'Codigo de pantalla requerido.'})
+    organization = Organization.objects.filter(attendance_screen_code=code, is_active=True).first()
+    if not organization:
+        raise ValidationError({'code': 'Codigo de pantalla invalido.'})
+    return organization
+
+
 def _attendance_screen_session_payload(request, organization):
     expires_at = organization.attendance_screen_session_expires_at
     seconds_left = 0
     if expires_at:
         seconds_left = max(0, int((expires_at - timezone.now()).total_seconds()))
+    auto_path = f'/attendance/screen/{organization.attendance_screen_code}'
     return {
         'organization_name': organization.name,
         'attendance_screen_code': organization.attendance_screen_code,
@@ -562,6 +791,9 @@ def _attendance_screen_session_payload(request, organization):
         'attendance_screen_session_ttl_hours': ATTENDANCE_SCREEN_SESSION_TTL_HOURS,
         'attendance_screen_path': '/attendance/screen',
         'attendance_screen_url': request.build_absolute_uri('/attendance/screen'),
+        # Enlace automático por gym (recomendado): abre y muestra el QR solo.
+        'attendance_screen_auto_path': auto_path,
+        'attendance_screen_auto_url': request.build_absolute_uri(auto_path),
     }
 
 
@@ -730,6 +962,18 @@ class AttendanceQrScreenView(APIView):
         return Response(_attendance_qr_payload(request, organization))
 
 
+class AttendanceQrScreenAutoView(APIView):
+    """Pantalla automática por gimnasio: dado el código PERMANENTE en la URL,
+    devuelve el QR rotante sin requerir sesión temporal. Pensada para el enlace
+    fijo de recepción (TV/tablet) que se abre y muestra el QR solo."""
+
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        organization = _get_organization_by_screen_code(request.query_params.get('code'))
+        return Response(_attendance_qr_payload(request, organization))
+
+
 class AttendanceQrScreenCodeView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -835,6 +1079,15 @@ class OrganizationViewSet(ModelViewSet):
         if not _is_superadmin(self.request.user):
             raise PermissionDenied('Solo superadmin puede eliminar organizaciones.')
         instance.delete()
+
+    @action(detail=True, methods=['post'], url_path='set-public-registration')
+    def set_public_registration(self, request, pk=None):
+        organization = self.get_object()
+        if not _can_manage_org_resource(request.user, organization.id):
+            raise PermissionDenied('No puedes cambiar el registro público de esta organización.')
+        organization.public_registration_enabled = _parse_bool(request.data.get('enabled'), default=True)
+        organization.save(update_fields=['public_registration_enabled', 'updated_at'])
+        return Response(self.get_serializer(organization).data)
 
 
 class BranchViewSet(ModelViewSet):

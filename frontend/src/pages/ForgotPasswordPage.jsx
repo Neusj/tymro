@@ -35,7 +35,7 @@ export default function ForgotPasswordPage() {
           <div className="mt-6 space-y-5">
             <p className="rounded-xl border border-brand-line bg-white/[0.03] p-4 text-sm text-brand-muted">
               Si el email existe en el sistema, te enviamos un enlace para restablecer tu contraseña.
-              Revisá tu bandeja de entrada (y spam).
+              Revisa tu bandeja de entrada (y spam).
             </p>
             <Link to="/login" className="block text-center text-sm text-brand-orange underline-offset-4 hover:underline">
               Volver a iniciar sesión
@@ -44,7 +44,7 @@ export default function ForgotPasswordPage() {
         ) : (
           <>
             <p className="mt-2 text-sm text-brand-muted">
-              Ingresá tu email y te enviaremos instrucciones para crear una nueva contraseña.
+              Ingresa tu email y te enviaremos instrucciones para crear una nueva contraseña.
             </p>
 
             <form onSubmit={onSubmit} className="mt-7 space-y-4">

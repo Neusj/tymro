@@ -35,7 +35,7 @@ export default function ResetPasswordPage() {
       const message =
         data?.detail ||
         (Array.isArray(data?.new_password) ? data.new_password.join(' ') : null) ||
-        'No se pudo restablecer la contraseña. Pedí un nuevo enlace.'
+        'No se pudo restablecer la contraseña. Pide un nuevo enlace.'
       setError(message)
     } finally {
       setLoading(false)
@@ -62,7 +62,7 @@ export default function ResetPasswordPage() {
         ) : missingParams ? (
           <div className="mt-6 space-y-5">
             <p className="rounded-xl border border-brand-red/50 bg-brand-red/10 p-4 text-sm text-red-100">
-              El enlace no es válido o está incompleto. Pedí uno nuevo desde "¿Olvidaste tu contraseña?".
+              El enlace no es válido o está incompleto. Pide uno nuevo desde "¿Olvidaste tu contraseña?".
             </p>
             <Link to="/forgot-password" className="block text-center text-sm text-brand-orange underline-offset-4 hover:underline">
               Pedir nuevo enlace
@@ -70,7 +70,7 @@ export default function ResetPasswordPage() {
           </div>
         ) : (
           <>
-            <p className="mt-2 text-sm text-brand-muted">Elegí una contraseña nueva y segura.</p>
+            <p className="mt-2 text-sm text-brand-muted">Elige una contraseña nueva y segura.</p>
 
             <form onSubmit={onSubmit} className="mt-7 space-y-4">
               <label className="block space-y-2">

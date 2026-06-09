@@ -61,6 +61,17 @@ export function AuthProvider({ children }) {
     return currentUser
   }
 
+  // Inicia sesión con un token ya emitido por el servidor (ej. tras verificar el
+  // email en el registro público). No toca el contrato de `login`.
+  const loginWithToken = (sessionToken, currentUser) => {
+    setToken(sessionToken)
+    setUser(currentUser)
+    localStorage.setItem(TOKEN_KEY, sessionToken)
+    localStorage.setItem(USER_KEY, JSON.stringify(currentUser))
+    setAuthToken(sessionToken)
+    return currentUser
+  }
+
   const logout = async () => {
     try {
       await authApi.logout()
@@ -84,6 +95,7 @@ export function AuthProvider({ children }) {
       loading,
       isAuthenticated: Boolean(token && user),
       login,
+      loginWithToken,
       logout,
       refreshMe,
     }),

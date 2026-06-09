@@ -89,6 +89,38 @@ export const authApi = {
   },
 }
 
+// Registro público de prospectos + clase de prueba gratis (links por gimnasio).
+export const registrationApi = {
+  // Valida el slug del gym y devuelve su branding para la landing.
+  validateInvite: async ({ slug }) => {
+    const { data } = await api.get('/public/invite/', { params: { slug } })
+    return data
+  },
+  register: async ({ slug, firstName, lastName, email, password, phone }) => {
+    const { data } = await api.post('/public/register/', {
+      slug,
+      first_name: firstName,
+      last_name: lastName,
+      email,
+      password,
+      phone,
+    })
+    return data
+  },
+  verifyEmail: async ({ uid, token }) => {
+    const { data } = await api.post('/public/verify-email/', { uid, token })
+    return data
+  },
+  listTrialClasses: async () => {
+    const { data } = await api.get('/public/trial-classes/')
+    return data
+  },
+  bookTrial: async (gymClassId) => {
+    const { data } = await api.post('/public/trial/book/', { gym_class: gymClassId })
+    return data
+  },
+}
+
 export const dashboardApi = {
   summary: async () => {
     const { data } = await api.get('/dashboard/')
@@ -117,6 +149,10 @@ export const organizationsApi = {
   },
   remove: async (id) => {
     await api.delete(`/organizations/${id}/`)
+  },
+  setPublicRegistration: async (id, enabled) => {
+    const { data } = await api.post(`/organizations/${id}/set-public-registration/`, { enabled })
+    return data
   },
 }
 
@@ -394,6 +430,11 @@ export const attendanceQrApi = {
   },
   screen: async (code) => {
     const { data } = await api.post('/attendance-qr/screen/', { code })
+    return data
+  },
+  // Pantalla automática por gym: usa el código permanente embebido en la URL.
+  screenAuto: async (code) => {
+    const { data } = await api.get('/attendance-qr/screen-auto/', { params: { code } })
     return data
   },
   screenCode: async () => {

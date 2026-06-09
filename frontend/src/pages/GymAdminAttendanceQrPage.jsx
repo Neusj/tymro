@@ -32,6 +32,12 @@ export default function GymAdminAttendanceQrPage() {
 
   const displayUrl = useMemo(() => qrData?.check_in_url || '', [qrData])
   const attendanceScreenUrl = useMemo(() => qrData?.attendance_screen_url || `${window.location.origin}/attendance/screen`, [qrData])
+  const attendanceAutoUrl = useMemo(
+    () =>
+      qrData?.attendance_screen_auto_url ||
+      (qrData?.attendance_screen_code ? `${window.location.origin}/attendance/screen/${qrData.attendance_screen_code}` : ''),
+    [qrData],
+  )
   const hasActiveSession = Boolean(qrData?.attendance_screen_session_code && sessionSecondsLeft > 0)
 
   const mergeQrData = (data) => {
@@ -157,8 +163,27 @@ export default function GymAdminAttendanceQrPage() {
       <section className="card-surface mx-auto max-w-xl p-5">
         <h2 className="panel-title">Pantalla publica de recepcion</h2>
         <p className="mt-2 text-sm text-brand-muted">
-          Abre el enlace en una TV, tablet o computador compartido. La recepcion debe ingresar el codigo temporal.
+          Abre el enlace en una TV, tablet o computador compartido. Con el enlace automatico el QR aparece solo, sin tipear codigos.
         </p>
+
+        <div className="mt-4 rounded-xl border border-brand-orange/40 bg-brand-orange/5 p-4">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs font-semibold uppercase tracking-wide text-amber-200">Enlace automatico (recomendado)</p>
+            <span className="badge-accent border-brand-orange/40 text-amber-200">Sin codigo</span>
+          </div>
+          <p className="mt-2 break-all text-sm text-brand-white">{attendanceAutoUrl || '-'}</p>
+          <p className="mt-1 text-xs text-brand-muted">
+            Pegalo en la TV/tablet de recepcion. Al abrirlo muestra el QR rotando solo, sin iniciar pantalla.
+          </p>
+          <button
+            type="button"
+            onClick={() => copyText(attendanceAutoUrl, 'Enlace automatico copiado.')}
+            disabled={!attendanceAutoUrl}
+            className="mt-3 rounded-xl bg-brand-orange px-3 py-2 text-sm font-semibold text-brand-black transition hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Copiar enlace automatico
+          </button>
+        </div>
 
         <div className="mt-4 rounded-xl border border-brand-line bg-black/20 p-4">
           <p className="text-xs font-semibold uppercase tracking-wide text-brand-muted">Codigo permanente del gimnasio</p>

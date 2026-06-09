@@ -21,6 +21,6 @@ class ExpiringTokenAuthentication(TokenAuthentication):
         if ttl_hours:
             if token.created < timezone.now() - timedelta(hours=ttl_hours):
                 token.delete()
-                raise AuthenticationFailed('Token expirado. Iniciá sesión nuevamente.')
+                raise AuthenticationFailed('Token expirado. Inicia sesión nuevamente.')
 
         return user, token

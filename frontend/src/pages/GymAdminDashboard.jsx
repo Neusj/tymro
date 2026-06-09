@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { branchesApi, dashboardApi, usersApi } from '../api/client'
 import DashboardHeader from '../components/DashboardHeader'
 import StatCard from '../components/StatCard'
+import PublicRegistrationCard from '../components/PublicRegistrationCard'
 
 const emptySummary = {
   branches: 0,
@@ -54,6 +55,8 @@ export default function GymAdminDashboard() {
         <StatCard title="Alumnos" value={summary.students} accent="red" />
         <StatCard title="Usuarios" value={summary.users} accent="orange" />
       </section>
+
+      <PublicRegistrationCard />
 
       <section className="grid gap-4 lg:grid-cols-2">
         <article className="card-surface p-5">

@@ -15,6 +15,10 @@ def generate_attendance_screen_session_code():
     return ''.join(secrets.choice(alphabet) for _ in range(6))
 
 
+def generate_invite_token():
+    return secrets.token_urlsafe(24)
+
+
 class TimestampedModel(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -44,6 +48,12 @@ class Organization(TimestampedModel):
         blank=True,
     )
     attendance_screen_session_expires_at = models.DateTimeField(null=True, blank=True)
+    public_invite_token = models.CharField(
+        max_length=64,
+        unique=True,
+        default=generate_invite_token,
+    )
+    public_registration_enabled = models.BooleanField(default=True)
 
     class Meta:
         ordering = ['name']
@@ -145,6 +155,7 @@ class GymClass(TimestampedModel):
     start_datetime = models.DateTimeField()
     end_datetime = models.DateTimeField()
     capacity = models.PositiveIntegerField(default=20)
+    is_trial_eligible = models.BooleanField(default=False)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.SCHEDULED)
     created_by = models.ForeignKey(
         'accounts.CustomUser',
@@ -478,6 +489,7 @@ class ClassTemplate(TimestampedModel):
     start_time = models.TimeField()
     end_time = models.TimeField()
     capacity = models.PositiveIntegerField(default=20)
+    is_trial_eligible = models.BooleanField(default=False)
     start_date = models.DateField()
     end_date = models.DateField(null=True, blank=True)
     is_active = models.BooleanField(default=True)

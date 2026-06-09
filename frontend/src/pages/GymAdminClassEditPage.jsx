@@ -12,6 +12,7 @@ const initialForm = {
   start_datetime: '',
   end_datetime: '',
   capacity: 10,
+  is_trial_eligible: false,
 }
 
 function toDateTimeLocalValue(value) {
@@ -82,6 +83,7 @@ export default function GymAdminClassEditPage() {
         start_datetime: toDateTimeLocalValue(classData.start_datetime),
         end_datetime: toDateTimeLocalValue(classData.end_datetime),
         capacity: classData.capacity || 10,
+        is_trial_eligible: Boolean(classData.is_trial_eligible),
       })
     } catch (apiError) {
       setError(parseApiError(apiError?.response?.data))
@@ -258,6 +260,21 @@ export default function GymAdminClassEditPage() {
                 onChange={(event) => setForm((prev) => ({ ...prev, capacity: event.target.value }))}
                 className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
               />
+            </label>
+
+            <label className="md:col-span-2 flex items-start gap-3 rounded-lg border border-brand-line bg-black/20 px-3 py-3 text-sm">
+              <input
+                type="checkbox"
+                checked={form.is_trial_eligible}
+                onChange={(event) => setForm((prev) => ({ ...prev, is_trial_eligible: event.target.checked }))}
+                className="mt-0.5 h-4 w-4 shrink-0 accent-brand-orange"
+              />
+              <span>
+                <span className="font-semibold text-brand-white">Elegible para clase de prueba gratis</span>
+                <span className="mt-0.5 block text-xs text-brand-muted">
+                  Los prospectos que se registran por el link público podrán reservar esta clase como su prueba gratis.
+                </span>
+              </span>
             </label>
 
             {error ? <p className="md:col-span-2 rounded-lg border border-brand-red/50 bg-brand-red/10 px-3 py-2 text-sm text-red-200">{error}</p> : null}

@@ -19,6 +19,7 @@ const initialForm = {
   start_date: '',
   end_date: '',
   is_active: true,
+  is_trial_eligible: false,
 }
 
 const weekdayLabels = ['Lunes', 'Martes', 'Miercoles', 'Jueves', 'Viernes', 'Sabado', 'Domingo']
@@ -108,6 +109,7 @@ export default function GymAdminClassTemplatesPage() {
       start_date: row.start_date || '',
       end_date: row.end_date || '',
       is_active: row.is_active,
+      is_trial_eligible: Boolean(row.is_trial_eligible),
     })
   }
 
@@ -396,6 +398,20 @@ export default function GymAdminClassTemplatesPage() {
           <label className="space-y-1 text-sm md:col-span-2">
             <span>Descripcion (opcional)</span>
             <textarea value={form.description} onChange={(event) => setForm((prev) => ({ ...prev, description: event.target.value }))} className="min-h-[80px] w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2" />
+          </label>
+          <label className="md:col-span-2 flex items-start gap-3 rounded-lg border border-brand-line bg-black/20 px-3 py-3 text-sm">
+            <input
+              type="checkbox"
+              checked={form.is_trial_eligible}
+              onChange={(event) => setForm((prev) => ({ ...prev, is_trial_eligible: event.target.checked }))}
+              className="mt-0.5 h-4 w-4 shrink-0 accent-brand-orange"
+            />
+            <span>
+              <span className="font-semibold text-brand-white">Elegible para clase de prueba gratis</span>
+              <span className="mt-0.5 block text-xs text-brand-muted">
+                Las clases generadas desde esta plantilla podrán reservarse como prueba gratis desde el link público.
+              </span>
+            </span>
           </label>
           <div className="md:col-span-2 flex justify-end gap-2">
             {editingId ? (

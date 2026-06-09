@@ -13,12 +13,16 @@ import GymAdminBranchesPage from './pages/GymAdminBranchesPage'
 import GymAdminAttendanceQrPage from './pages/GymAdminAttendanceQrPage'
 import AssignPlanPage from './pages/AssignPlanPage'
 import AttendanceScreenPage from './pages/AttendanceScreenPage'
+import AttendanceScreenAutoPage from './pages/AttendanceScreenAutoPage'
 import GymAdminDashboard from './pages/GymAdminDashboard'
 import GymAdminUsersPage from './pages/GymAdminUsersPage'
 import GymAdminPlanMembershipsPage from './pages/GymAdminPlanMembershipsPage'
 import LoginPage from './pages/LoginPage'
 import ForgotPasswordPage from './pages/ForgotPasswordPage'
 import ResetPasswordPage from './pages/ResetPasswordPage'
+import GymPublicRegisterPage from './pages/GymPublicRegisterPage'
+import VerifyEmailPage from './pages/VerifyEmailPage'
+import TrialBookingPage from './pages/TrialBookingPage'
 import PlanListPage from './pages/PlanListPage'
 import StudentClassesPage from './pages/StudentClassesPage'
 import StudentDashboard from './pages/StudentDashboard'
@@ -60,7 +64,18 @@ export default function App() {
       <Route path="/login" element={<LoginPage />} />
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
       <Route path="/reset-password" element={<ResetPasswordPage />} />
+      <Route path="/:slug/clase-gratis" element={<GymPublicRegisterPage />} />
+      <Route path="/verify-email" element={<VerifyEmailPage />} />
+      <Route
+        path="/trial"
+        element={
+          <ProtectedRoute allowedRoles={['student']}>
+            <TrialBookingPage />
+          </ProtectedRoute>
+        }
+      />
       <Route path="/attendance/screen" element={<AttendanceScreenPage />} />
+      <Route path="/attendance/screen/:code" element={<AttendanceScreenAutoPage />} />
       <Route
         path="/attendance/check-in"
         element={

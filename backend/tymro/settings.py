@@ -201,6 +201,12 @@ REST_FRAMEWORK = {
         'password_reset': '3/hour',
         # Confirmar permite reintentos (el usuario puede equivocarse al tipear la clave).
         'password_reset_confirm': '10/hour',
+        # Registro público: crea cuenta + envía email -> acotado contra bots/spam.
+        'public_register': '5/hour',
+        # Validar el link de invitación es barato (sólo lectura de branding).
+        'public_invite': '30/hour',
+        # Confirmar email permite algún reintento.
+        'public_verify': '10/hour',
     },
 }
 

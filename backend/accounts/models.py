@@ -27,6 +27,8 @@ class CustomUser(AbstractUser):
     phone = models.CharField(max_length=40, blank=True)
     profile_image = models.ImageField(upload_to='users/profile_images/', blank=True, null=True)
     is_active_member = models.BooleanField(default=True)
+    email_verified = models.BooleanField(default=False)
+    has_used_trial = models.BooleanField(default=False)
 
     def __str__(self):
         return self.username
