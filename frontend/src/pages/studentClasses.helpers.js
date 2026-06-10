@@ -1,6 +1,6 @@
 export const CLASS_STATUS_OPTIONS = [
   { value: '', label: 'Todos' },
-  { value: 'scheduled', label: 'Reservada' },
+  { value: 'scheduled', label: 'Programada' },
   { value: 'in_progress', label: 'En curso' },
   { value: 'cancelled', label: 'Cancelada' },
   { value: 'completed', label: 'Finalizada' },

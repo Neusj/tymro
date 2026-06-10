@@ -20,7 +20,7 @@ function formatDateTime(value) {
 
 const STATUS_OPTIONS = [
   { value: '', label: 'Todos' },
-  { value: 'scheduled', label: 'Reservada' },
+  { value: 'scheduled', label: 'Programada' },
   { value: 'in_progress', label: 'En curso' },
   { value: 'completed', label: 'Finalizada' },
   { value: 'completed_early', label: 'Finalizada anticipadamente' },

@@ -92,11 +92,6 @@ export default function AttendanceScreenAutoPage() {
             <div className="mx-auto flex aspect-square w-full max-w-lg items-center justify-center rounded-2xl border border-brand-line bg-white p-4">
               {qrImage ? <img src={qrImage} alt="QR de asistencia" className="h-full w-full object-contain" /> : null}
             </div>
-            <div className="mt-4 flex items-center justify-center">
-              <span className="rounded-full border border-brand-orange/40 px-3 py-1 text-sm font-semibold text-amber-200">
-                Cambia en {secondsLeft}s
-              </span>
-            </div>
             <p className="mt-4 text-sm text-brand-muted">Escanea el código con tu cuenta para registrar tu asistencia.</p>
           </section>
         )}

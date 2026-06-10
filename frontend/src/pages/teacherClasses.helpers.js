@@ -1,6 +1,6 @@
 ﻿export const UPCOMING_STATUS_OPTIONS = [
   { value: '', label: 'Todos' },
-  { value: 'scheduled', label: 'Reservada' },
+  { value: 'scheduled', label: 'Programada' },
   { value: 'in_progress', label: 'En curso' },
 ]
 
@@ -22,7 +22,7 @@ export function formatDateTime(value) {
 
 export function formatClassStatus(status) {
   const statusMap = {
-    scheduled: 'Reservada',
+    scheduled: 'Programada',
     in_progress: 'En curso',
     completed: 'Finalizada',
     cancelled: 'Cancelada',

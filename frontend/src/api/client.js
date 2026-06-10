@@ -453,8 +453,9 @@ export const attendanceQrApi = {
     const { data } = await api.get('/attendance-qr/preview/', { params: { token } })
     return data
   },
-  checkIn: async (token) => {
-    const { data } = await api.post('/attendance-qr/check-in/', { token })
+  // Confirma con el grant de un solo uso emitido por el preview (no el token del QR).
+  checkIn: async (grant) => {
+    const { data } = await api.post('/attendance-qr/check-in/', { grant })
     return data
   },
 }

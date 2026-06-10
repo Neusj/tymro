@@ -96,7 +96,18 @@ from .services.teacher_payments import calculate_teacher_payment
 
 User = get_user_model()
 QR_ATTENDANCE_SALT = 'tymro.attendance.qr'
-QR_TOKEN_TTL_SECONDS = 10
+# Rotación de la pantalla DESACOPLADA de la aceptación del backend:
+#  - REFRESH: cada cuántos segundos la pantalla muestra un QR nuevo (anti-reutilización).
+#  - ACCEPTANCE: cuántos segundos atrás el backend sigue aceptando un token al validarlo.
+# La pantalla refresca rápido, pero un código escaneado justo antes de rotar sigue
+# siendo válido lo suficiente para absorber la latencia escaneo→preview.
+QR_TOKEN_REFRESH_SECONDS = 10
+QR_TOKEN_ACCEPTANCE_SECONDS = 60
+# Permiso de un solo uso emitido por el preview para confirmar la asistencia. Vale
+# por (student, clase, org) durante una ventana cómoda; la unicidad de Attendance lo
+# vuelve de un solo uso. NO revalida el token del QR al confirmar.
+QR_CHECKIN_GRANT_SALT = 'tymro.attendance.checkin-grant'
+QR_CHECKIN_GRANT_TTL_SECONDS = 120
 ATTENDANCE_SCREEN_SESSION_TTL_HOURS = 8
 QR_WINDOW_BEFORE_MINUTES = 10
 QR_WINDOW_AFTER_MINUTES = 15
@@ -736,7 +747,7 @@ class PublicTrialBookView(APIView):
 
 def _build_qr_token(organization_id):
     now = timezone.now()
-    expires_at = now + timedelta(seconds=QR_TOKEN_TTL_SECONDS)
+    expires_at = now + timedelta(seconds=QR_TOKEN_ACCEPTANCE_SECONDS)
     payload = {
         'organization_id': organization_id,
         'issued_at': now.isoformat(),
@@ -820,7 +831,7 @@ def _attendance_qr_payload(request, organization):
         'organization_name': organization.name,
         'token': token,
         'expires_at': expires_at,
-        'expires_in_seconds': QR_TOKEN_TTL_SECONDS,
+        'expires_in_seconds': QR_TOKEN_REFRESH_SECONDS,
         'check_in_path': check_in_path,
         'check_in_url': request.build_absolute_uri(check_in_path),
     }
@@ -849,6 +860,30 @@ def _load_qr_token(raw_token):
         raise ValidationError({'token': 'Token QR inválido.'})
     payload['organization_id'] = int(organization_id)
     payload['expires_at'] = expires_at
+    return payload
+
+
+def _build_checkin_grant(student_id, gym_class_id, organization_id):
+    """Emite el permiso de un solo uso para confirmar asistencia tras un preview
+    válido. Firmado con `signing.dumps` (lleva timestamp para el TTL del grant)."""
+    payload = {
+        'student_id': student_id,
+        'gym_class_id': gym_class_id,
+        'organization_id': organization_id,
+        'issued_at': timezone.now().isoformat(),
+    }
+    return signing.dumps(payload, salt=QR_CHECKIN_GRANT_SALT)
+
+
+def _load_checkin_grant(raw_grant):
+    if not raw_grant:
+        raise ValidationError({'grant': 'Permiso de asistencia requerido.'})
+    try:
+        payload = signing.loads(raw_grant, salt=QR_CHECKIN_GRANT_SALT, max_age=QR_CHECKIN_GRANT_TTL_SECONDS)
+    except signing.SignatureExpired:
+        raise ValidationError({'grant': 'El permiso de asistencia caducó. Vuelve a escanear el código.'})
+    except signing.BadSignature:
+        raise ValidationError({'grant': 'Permiso de asistencia inválido.'})
     return payload
 
 
@@ -1014,8 +1049,17 @@ class AttendanceQrPreviewView(APIView):
     def get(self, request):
         if not _is_student(request.user):
             raise PermissionDenied('Solo alumnos pueden marcar asistencia por QR.')
+        # Frescura del QR se valida UNA sola vez, aquí (firma + ventana + enrollment).
         payload = _load_qr_token(request.query_params.get('token'))
-        return Response(_qr_preview_payload(request.user, payload['organization_id']))
+        preview = _qr_preview_payload(request.user, payload['organization_id'])
+        # Si el alumno puede marcar, emitimos el permiso de un solo uso para confirmar.
+        if preview.get('status') == 'ready' and preview.get('class'):
+            preview['checkin_grant'] = _build_checkin_grant(
+                student_id=request.user.id,
+                gym_class_id=preview['class']['id'],
+                organization_id=payload['organization_id'],
+            )
+        return Response(preview)
 
 
 class AttendanceQrCheckInView(APIView):
@@ -1024,14 +1068,43 @@ class AttendanceQrCheckInView(APIView):
     def post(self, request):
         if not _is_student(request.user):
             raise PermissionDenied('Solo alumnos pueden marcar asistencia por QR.')
-        payload = _load_qr_token(request.data.get('token'))
-        preview = _qr_preview_payload(request.user, payload['organization_id'])
-        if preview['status'] == 'already_registered':
-            return Response(preview)
-        if preview['status'] != 'ready' or not preview.get('class'):
-            return Response(preview, status=status.HTTP_400_BAD_REQUEST)
 
-        gym_class = GymClass.objects.get(id=preview['class']['id'])
+        # Confirma con el GRANT, no con el token del QR: ya no puede vencerse a mitad.
+        grant = _load_checkin_grant(request.data.get('grant'))
+
+        if grant.get('student_id') != request.user.id:
+            raise PermissionDenied('Este permiso de asistencia no es tuyo.')
+        if grant.get('organization_id') != request.user.organization_id:
+            return Response(
+                {'detail': 'Este permiso pertenece a otro gimnasio.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            gym_class = GymClass.objects.get(
+                id=grant.get('gym_class_id'),
+                organization_id=request.user.organization_id,
+            )
+        except GymClass.DoesNotExist:
+            return Response(
+                {'detail': 'La clase del permiso ya no está disponible.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        existing = Attendance.objects.filter(gym_class=gym_class, student=request.user).first()
+        if existing and existing.status == Attendance.Status.PRESENT:
+            # Unicidad por (student, clase): el grant es de un solo uso efectivo.
+            return Response(
+                {
+                    'status': 'already_registered',
+                    'detail': 'Tu asistencia ya fue registrada para esta clase.',
+                    'class': _serialize_qr_class(gym_class),
+                    'attendance_status': existing.status,
+                    'attendance_source': existing.source,
+                    'next_check_in_at': None,
+                }
+            )
+
         now = timezone.now()
         attendance, created = Attendance.objects.update_or_create(
             gym_class=gym_class,
@@ -1044,12 +1117,18 @@ class AttendanceQrCheckInView(APIView):
                 'checked_at': now,
             },
         )
-        response_payload = _qr_preview_payload(request.user, payload['organization_id'])
-        response_payload['status'] = 'registered'
-        response_payload['detail'] = 'Tu asistencia fue registrada correctamente.'
-        response_payload['attendance_id'] = attendance.id
-        response_payload['created'] = created
-        return Response(response_payload)
+        return Response(
+            {
+                'status': 'registered',
+                'detail': 'Tu asistencia fue registrada correctamente.',
+                'class': _serialize_qr_class(gym_class),
+                'attendance_status': attendance.status,
+                'attendance_source': attendance.source,
+                'attendance_id': attendance.id,
+                'created': created,
+                'next_check_in_at': None,
+            }
+        )
 
 
 class OrganizationViewSet(ModelViewSet):
@@ -1585,6 +1664,15 @@ class GymClassViewSet(ModelViewSet):
     @action(detail=True, methods=['get'], url_path='enrolled-students')
     def enrolled_students(self, request, pk=None):
         gym_class = self.get_object()
+        user = request.user
+
+        if not (
+            _is_superadmin(user)
+            or (_is_gym_admin(user) and gym_class.organization_id == user.organization_id)
+            or (_is_teacher(user) and gym_class.teacher_id == user.id)
+        ):
+            raise PermissionDenied('No tienes permisos para ver los alumnos inscritos en esta clase.')
+
         enrollments = gym_class.enrollments.filter(status='active').select_related('student')
         student_ids = list(enrollments.values_list('student_id', flat=True))
         active_plan_by_student = _get_active_student_plan_map(student_ids)

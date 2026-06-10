@@ -133,7 +133,7 @@ class Discipline(TimestampedModel):
 
 class GymClass(TimestampedModel):
     class Status(models.TextChoices):
-        SCHEDULED = 'scheduled', 'Reservada'
+        SCHEDULED = 'scheduled', 'Programada'
         IN_PROGRESS = 'in_progress', 'En progreso'
         COMPLETED = 'completed', 'Completada'
         CANCELLED = 'cancelled', 'Cancelada'

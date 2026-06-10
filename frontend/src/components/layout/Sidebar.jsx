@@ -80,6 +80,17 @@ function PaymentsIcon() {
   )
 }
 
+function QrIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5">
+      <rect x="3" y="3" width="7" height="7" rx="1" />
+      <rect x="14" y="3" width="7" height="7" rx="1" />
+      <rect x="3" y="14" width="7" height="7" rx="1" />
+      <path d="M14 14h3v3M20 14v.01M14 20h.01M17 20h.01M20 17v3" />
+    </svg>
+  )
+}
+
 const navByRole = {
   superadmin: [
     { type: 'item', to: '/superadmin/organizations', label: 'Organizaciones', icon: <OrgIcon /> },
@@ -146,6 +157,7 @@ const navByRole = {
   ],
   student: [
     { type: 'item', to: '/student/dashboard', label: 'Dashboard', icon: <DashboardIcon /> },
+    { type: 'item', to: '/student/attendance', label: 'Marcar asistencia', icon: <QrIcon /> },
     {
       type: 'group',
       label: 'Mis planes',

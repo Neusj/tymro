@@ -397,6 +397,7 @@ class EnrollmentSerializer(serializers.ModelSerializer):
     can_cancel = serializers.SerializerMethodField()
     cancel_block_reason = serializers.SerializerMethodField()
     cancel_policy_message = serializers.SerializerMethodField()
+    attendance_status = serializers.SerializerMethodField()
 
     class Meta:
         model = Enrollment
@@ -422,6 +423,7 @@ class EnrollmentSerializer(serializers.ModelSerializer):
             'can_cancel',
             'cancel_block_reason',
             'cancel_policy_message',
+            'attendance_status',
             'created_at',
         ]
         read_only_fields = ['created_at', 'recurring_enrollment']
@@ -454,6 +456,16 @@ class EnrollmentSerializer(serializers.ModelSerializer):
         if not allowed:
             return False, reason
         return True, ''
+
+    def get_attendance_status(self, obj):
+        # Estado de asistencia del alumno de ESTA reserva en ESA clase (present/absent/
+        # no_show/late) o None si aún no se marcó. Scoped al student de la inscripción.
+        attendance = (
+            Attendance.objects.filter(gym_class_id=obj.gym_class_id, student_id=obj.student_id)
+            .only('status')
+            .first()
+        )
+        return attendance.status if attendance else None
 
     def get_can_cancel(self, obj):
         return self._cancel_state(obj)[0]

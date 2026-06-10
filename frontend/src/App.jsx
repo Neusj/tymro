@@ -29,6 +29,7 @@ import StudentDashboard from './pages/StudentDashboard'
 import StudentPlansPage from './pages/StudentPlansPage'
 import StudentRecurringEnrollmentsPage from './pages/StudentRecurringEnrollmentsPage'
 import StudentQrCheckInPage from './pages/StudentQrCheckInPage'
+import StudentAttendanceScanPage from './pages/StudentAttendanceScanPage'
 import SuperadminOrganizationDetailPage from './pages/SuperadminOrganizationDetailPage'
 import SuperadminOrganizationsPage from './pages/SuperadminOrganizationsPage'
 import SuperadminUsersPage from './pages/SuperadminUsersPage'
@@ -410,6 +411,16 @@ export default function App() {
         element={
           <ProtectedRoute allowedRoles={['student']}>
             <Navigate to="/student/classes/available" replace />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/student/attendance"
+        element={
+          <ProtectedRoute allowedRoles={['student']}>
+            <ShellRoute>
+              <StudentAttendanceScanPage />
+            </ShellRoute>
           </ProtectedRoute>
         }
       />

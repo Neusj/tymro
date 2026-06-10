@@ -7,7 +7,7 @@ function resolveConfig(kind, value) {
   }
 
   const statusMap = {
-    scheduled: { label: 'Reservada', cls: 'border-brand-blue/40 text-blue-200' },
+    scheduled: { label: 'Programada', cls: 'border-brand-blue/40 text-blue-200' },
     in_progress: { label: 'En curso', cls: 'border-brand-orange/40 text-amber-200' },
     completed: { label: 'Finalizada', cls: 'border-emerald-500/40 text-emerald-200' },
     completed_early: { label: 'Finalizada anticipadamente', cls: 'border-amber-500/40 text-amber-200' },

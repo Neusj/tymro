@@ -511,6 +511,13 @@ export default function StudentClassesPage({ mode = 'available' }) {
         mobile: 'meta',
         render: (row) => <ValueBadge kind="enrollment_status" value={row.status} />,
       },
+      {
+        key: 'attendance_status',
+        label: 'Asistencia',
+        mobile: 'meta',
+        render: (row) =>
+          row.attendance_status ? <ValueBadge kind="attendance_status" value={row.attendance_status} /> : <span className="text-brand-muted">-</span>,
+      },
       { key: 'class_status', label: 'Estado clase', mobile: 'hidden', render: (row) => <ValueBadge kind="class_status" value={row.class_status} /> },
       {
         key: 'actions',
