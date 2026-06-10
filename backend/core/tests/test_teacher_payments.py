@@ -27,6 +27,7 @@ pytestmark = pytest.mark.django_db
 PASSWORD = 'Passw0rd2026'
 SUMMARY_URL = '/api/teacher-payments/summary/'
 EXPORT_URL = '/api/teacher-payments/summary/export/'
+MARK_PAID_URL = '/api/teacher-payments/mark-paid/'
 
 
 def _login(api_client, username):
@@ -229,6 +230,244 @@ def test_export_xlsx(api_client, org_setup):
     assert resp.status_code == 200
     assert 'spreadsheetml' in resp['Content-Type']
     assert '.xlsx' in resp['Content-Disposition']
+
+
+def test_export_scoped_to_teacher(api_client, org_setup, make_user):
+    """Un profe que exporta sólo obtiene su propia data, no la de otros profes de la org."""
+    org, branch, teacher = org_setup['org'], org_setup['branch'], org_setup['teacher']
+    gym_class = _make_completed_class(org, branch, teacher)
+    _present(gym_class, org_setup['s1'])
+    _make_rule(org, teacher, TeacherPaymentRule.PaymentType.PER_STUDENT, 1500)
+    calculate_teacher_payment(gym_class)
+
+    # Otro profe de la MISMA org con sueldo, no debe aparecer en el export del primero.
+    other = make_user('zoltan', organization=org, role='teacher', first_name='Zoltan', last_name='Kovacs')
+    _make_rule(org, other, TeacherPaymentRule.PaymentType.MONTHLY_FIXED, 700000)
+
+    _login(api_client, 'teach')
+    resp = api_client.get(EXPORT_URL, {'fmt': 'csv'})
+    assert resp.status_code == 200
+    body = resp.content.decode('utf-8')
+    assert 'Ana' in body          # su propia fila
+    assert 'Zoltan' not in body   # no la del otro profe
+    assert 'Kovacs' not in body
+
+
+def test_mark_paid_creates_correct_scoped_payout(api_client, org_setup, make_organization, make_user):
+    """gym_admin marca pagado: crea un TeacherPayout con el snapshot del total, scoped por org + período."""
+    from core.models import TeacherPayout
+
+    org, branch, teacher, admin = (
+        org_setup['org'], org_setup['branch'], org_setup['teacher'], org_setup['admin'],
+    )
+    gym_class = _make_completed_class(org, branch, teacher)
+    _present(gym_class, org_setup['s1'])
+    _make_rule(org, teacher, TeacherPaymentRule.PaymentType.PER_STUDENT, 1000)
+    calculate_teacher_payment(gym_class)
+
+    today = timezone.localdate()
+    _login(api_client, 'admin')
+    resp = api_client.post(
+        MARK_PAID_URL,
+        {'teacher_id': teacher.id, 'year': today.year, 'month': today.month},
+        format='json',
+    )
+    assert resp.status_code == 200
+    assert resp.json()['amount'] == 1000
+
+    payout = TeacherPayout.objects.get(teacher_id=teacher.id)
+    assert payout.organization_id == org.id
+    assert payout.period_year == today.year
+    assert payout.period_month == today.month
+    assert payout.amount == 1000
+    assert payout.marked_by_id == admin.id
+
+
+def test_mark_paid_rejects_teacher_from_other_org(api_client, org_setup, make_organization, make_user):
+    """Un gym_admin no puede marcar a un profe de otra organización."""
+    org2 = make_organization()
+    t2 = make_user('t2', organization=org2, role='teacher')
+
+    today = timezone.localdate()
+    _login(api_client, 'admin')  # admin de la org del fixture
+    resp = api_client.post(
+        MARK_PAID_URL,
+        {'teacher_id': t2.id, 'year': today.year, 'month': today.month},
+        format='json',
+    )
+    assert resp.status_code == 400
+
+
+def test_teacher_sees_payout_status_in_summary(api_client, org_setup):
+    """El profe ve el estado del período (pendiente/pagado) en summary."""
+    org, branch, teacher = org_setup['org'], org_setup['branch'], org_setup['teacher']
+    gym_class = _make_completed_class(org, branch, teacher)
+    _present(gym_class, org_setup['s1'])
+    _make_rule(org, teacher, TeacherPaymentRule.PaymentType.PER_STUDENT, 1000)
+    calculate_teacher_payment(gym_class)
+
+    today = timezone.localdate()
+    # Antes de marcar: pendiente (payout None).
+    _login(api_client, 'teach')
+    row = api_client.get(SUMMARY_URL).json()['rows'][0]
+    assert row['payout'] is None
+
+    # El admin marca pagado.
+    _login(api_client, 'admin')
+    api_client.post(
+        MARK_PAID_URL,
+        {'teacher_id': teacher.id, 'year': today.year, 'month': today.month},
+        format='json',
+    )
+
+    # Ahora el profe ve el pago.
+    _login(api_client, 'teach')
+    row = api_client.get(SUMMARY_URL).json()['rows'][0]
+    assert row['payout'] is not None
+    assert row['payout']['amount'] == 1000
+    assert row['payout']['paid_at']
+
+
+def test_teacher_cannot_mark_paid(api_client, org_setup):
+    """Un profe NO puede marcar pagos (403)."""
+    teacher = org_setup['teacher']
+    today = timezone.localdate()
+    _login(api_client, 'teach')
+    resp = api_client.post(
+        MARK_PAID_URL,
+        {'teacher_id': teacher.id, 'year': today.year, 'month': today.month},
+        format='json',
+    )
+    assert resp.status_code == 403
+
+
+def test_pending_is_difference_when_total_grows_after_paying(api_client, org_setup):
+    """Si el total vivo crece tras marcar pagado, pending = total - pagado; 'actualizar pago' reconcilia."""
+    org, branch, teacher = org_setup['org'], org_setup['branch'], org_setup['teacher']
+    _make_rule(org, teacher, TeacherPaymentRule.PaymentType.PER_STUDENT, 1000)
+    c1 = _make_completed_class(org, branch, teacher)
+    _present(c1, org_setup['s1'])
+    calculate_teacher_payment(c1)  # total vivo = 1000
+
+    today = timezone.localdate()
+    _login(api_client, 'admin')
+    api_client.post(
+        MARK_PAID_URL,
+        {'teacher_id': teacher.id, 'year': today.year, 'month': today.month},
+        format='json',
+    )  # snapshot pagado = 1000
+
+    # Una clase se cierra DESPUÉS, en el mismo período → el total vivo sube a 2000.
+    c2 = _make_completed_class(org, branch, teacher, start=timezone.now() - timedelta(hours=1))
+    _present(c2, org_setup['s2'])
+    calculate_teacher_payment(c2)
+
+    row = api_client.get(SUMMARY_URL).json()['rows'][0]
+    assert row['total'] == 2000
+    assert row['payout']['amount'] == 1000
+    assert row['pending'] == 1000  # saldo nuevo explícito
+
+    # 'Actualizar pago' re-snapshotea al total vivo → reconcilia.
+    api_client.post(
+        MARK_PAID_URL,
+        {'teacher_id': teacher.id, 'year': today.year, 'month': today.month},
+        format='json',
+    )
+    row = api_client.get(SUMMARY_URL).json()['rows'][0]
+    assert row['payout']['amount'] == 2000
+    assert row['pending'] == 0
+
+
+def test_no_pending_when_paid_equals_total(api_client, org_setup):
+    """Cuando lo pagado == total, no hay pendiente."""
+    org, branch, teacher = org_setup['org'], org_setup['branch'], org_setup['teacher']
+    _make_rule(org, teacher, TeacherPaymentRule.PaymentType.PER_STUDENT, 1000)
+    gym_class = _make_completed_class(org, branch, teacher)
+    _present(gym_class, org_setup['s1'])
+    calculate_teacher_payment(gym_class)
+
+    today = timezone.localdate()
+    _login(api_client, 'admin')
+    api_client.post(
+        MARK_PAID_URL,
+        {'teacher_id': teacher.id, 'year': today.year, 'month': today.month},
+        format='json',
+    )
+    row = api_client.get(SUMMARY_URL).json()['rows'][0]
+    assert row['total'] == 1000
+    assert row['payout']['amount'] == 1000
+    assert row['pending'] == 0
+
+
+def test_pending_equals_total_when_unpaid(api_client, org_setup):
+    """Sin payout, pending = total."""
+    org, branch, teacher = org_setup['org'], org_setup['branch'], org_setup['teacher']
+    _make_rule(org, teacher, TeacherPaymentRule.PaymentType.PER_STUDENT, 1500)
+    gym_class = _make_completed_class(org, branch, teacher)
+    _present(gym_class, org_setup['s1'])
+    calculate_teacher_payment(gym_class)
+
+    _login(api_client, 'admin')
+    row = api_client.get(SUMMARY_URL).json()['rows'][0]
+    assert row['payout'] is None
+    assert row['pending'] == row['total'] == 1500
+
+
+def test_teacher_sees_pending_in_own_summary(api_client, org_setup):
+    """El profe ve el saldo pendiente correcto cuando el total creció tras el pago."""
+    org, branch, teacher = org_setup['org'], org_setup['branch'], org_setup['teacher']
+    _make_rule(org, teacher, TeacherPaymentRule.PaymentType.PER_STUDENT, 1000)
+    c1 = _make_completed_class(org, branch, teacher)
+    _present(c1, org_setup['s1'])
+    calculate_teacher_payment(c1)
+
+    today = timezone.localdate()
+    _login(api_client, 'admin')
+    api_client.post(
+        MARK_PAID_URL,
+        {'teacher_id': teacher.id, 'year': today.year, 'month': today.month},
+        format='json',
+    )
+    c2 = _make_completed_class(org, branch, teacher, start=timezone.now() - timedelta(hours=1))
+    _present(c2, org_setup['s2'])
+    calculate_teacher_payment(c2)
+
+    _login(api_client, 'teach')
+    row = api_client.get(SUMMARY_URL).json()['rows'][0]
+    assert row['payout']['amount'] == 1000
+    assert row['pending'] == 1000
+
+
+def test_export_reflects_payment_state(api_client, org_setup):
+    """El export incluye el estado de pago (pagado/pendiente) por fila."""
+    org, branch, teacher = org_setup['org'], org_setup['branch'], org_setup['teacher']
+    _make_rule(org, teacher, TeacherPaymentRule.PaymentType.PER_STUDENT, 1000)
+    c1 = _make_completed_class(org, branch, teacher)
+    _present(c1, org_setup['s1'])
+    calculate_teacher_payment(c1)
+
+    today = timezone.localdate()
+    _login(api_client, 'admin')
+    api_client.post(
+        MARK_PAID_URL,
+        {'teacher_id': teacher.id, 'year': today.year, 'month': today.month},
+        format='json',
+    )
+    # Total crece tras el pago.
+    c2 = _make_completed_class(org, branch, teacher, start=timezone.now() - timedelta(hours=1))
+    _present(c2, org_setup['s2'])
+    calculate_teacher_payment(c2)
+
+    body = api_client.get(EXPORT_URL, {'fmt': 'csv'}).content.decode('utf-8')
+    assert 'Pendiente' in body  # cabecera/estado
+    assert 'Pagado parcial' in body  # estado de la fila con saldo nuevo
+
+
+def test_create_record_via_api_is_blocked(api_client, org_setup):
+    """Habilitar POST para mark-paid no debe exponer la creación de records (405)."""
+    _login(api_client, 'admin')
+    resp = api_client.post('/api/teacher-payments/', {'teacher': org_setup['teacher'].id}, format='json')
+    assert resp.status_code == 405
 
 
 def _date(year, month, day):

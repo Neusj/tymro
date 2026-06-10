@@ -17,7 +17,7 @@ from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from rest_framework import status
 from rest_framework.authtoken.models import Token
 from rest_framework.decorators import action, api_view, permission_classes
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.exceptions import MethodNotAllowed, PermissionDenied, ValidationError
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
@@ -42,6 +42,7 @@ from .models import (
     StudentPlan,
     TeacherPaymentRecord,
     TeacherPaymentRule,
+    TeacherPayout,
 )
 from .permissions import IsSuperAdminOrGymAdmin
 from .serializers import (
@@ -2714,7 +2715,11 @@ class TeacherPaymentRuleViewSet(ModelViewSet):
 class TeacherPaymentRecordViewSet(ModelViewSet):
     queryset = TeacherPaymentRecord.objects.select_related('teacher', 'class_instance', 'rule').all()
     serializer_class = TeacherPaymentRecordSerializer
-    http_method_names = ['get', 'head', 'options']
+    http_method_names = ['get', 'post', 'head', 'options']
+
+    def create(self, request, *args, **kwargs):
+        # POST sólo se usa para acciones custom (mark-paid); no se permite crear records vía API.
+        raise MethodNotAllowed('POST')
 
     def get_queryset(self):
         user = self.request.user
@@ -2796,16 +2801,102 @@ class TeacherPaymentRecordViewSet(ModelViewSet):
         date_from, date_to = self._parse_summary_period(request)
         return organization_id, date_from, date_to, teacher_id
 
+    @staticmethod
+    def _attach_payouts(data, organization_id, date_from):
+        """Anexa a cada fila el estado de pago del periodo (mes de date_from).
+        Solo lectura; no toca el motor de calculo."""
+        payouts = {
+            p.teacher_id: p
+            for p in TeacherPayout.objects.filter(
+                organization_id=organization_id,
+                period_year=date_from.year,
+                period_month=date_from.month,
+            )
+        }
+        for row in data['rows']:
+            payout = payouts.get(row['teacher_id'])
+            paid_amount = round(float(payout.amount), 2) if payout else 0.0
+            row['payout'] = (
+                {'paid_at': payout.paid_at.isoformat(), 'amount': paid_amount}
+                if payout
+                else None
+            )
+            # Campo derivado: lo que aún se debe = max(0, total vivo - lo ya pagado).
+            # Si el total creció tras el pago (ej. clase cerrada tarde), aquí aparece el saldo nuevo.
+            row['pending'] = round(max(0.0, float(row['total']) - paid_amount), 2)
+        return data
+
     @action(detail=False, methods=['get'], url_path='summary')
     def summary(self, request):
         organization_id, date_from, date_to, teacher_id = self._resolve_summary_scope(request)
         data = build_teacher_payment_summary(organization_id, date_from, date_to, teacher_id=teacher_id)
+        self._attach_payouts(data, organization_id, date_from)
         return Response(data)
+
+    @action(detail=False, methods=['post'], url_path='mark-paid')
+    def mark_paid(self, request):
+        """Marca como pagado a un profesor en un periodo (mes). Solo gym_admin/superadmin.
+        Guarda un snapshot del total del periodo en TeacherPayout. Scoped por organizacion."""
+        user = request.user
+        if _is_superadmin(user):
+            organization_id = request.data.get('organization_id')
+            if not organization_id:
+                raise ValidationError({'organization_id': 'Debes indicar la organizacion.'})
+        elif _is_gym_admin(user) and user.organization_id:
+            organization_id = user.organization_id
+        else:
+            raise PermissionDenied('No tienes permisos para marcar pagos.')
+
+        teacher_id = request.data.get('teacher_id')
+        if not teacher_id:
+            raise ValidationError({'teacher_id': 'Debes indicar el profesor.'})
+        try:
+            year = int(request.data.get('year'))
+            month = int(request.data.get('month'))
+            if not 1 <= month <= 12:
+                raise ValueError
+        except (TypeError, ValueError):
+            raise ValidationError({'period': 'year/month invalidos.'})
+
+        # El profesor debe pertenecer a la organizacion (evita marcar profes de otra org).
+        teacher = User.objects.filter(id=teacher_id, organization_id=organization_id, role=User.Role.TEACHER).first()
+        if teacher is None:
+            raise ValidationError({'teacher_id': 'Profesor no encontrado en la organizacion.'})
+
+        date_from = datetime(year, month, 1).date()
+        if month == 12:
+            next_month = datetime(year + 1, 1, 1).date()
+        else:
+            next_month = datetime(year, month + 1, 1).date()
+        date_to = next_month - timedelta(days=1)
+
+        summary = build_teacher_payment_summary(organization_id, date_from, date_to, teacher_id=teacher_id)
+        row = next((r for r in summary['rows'] if r['teacher_id'] == teacher.id), None)
+        amount = round(float(row['total']), 2) if row else 0.0
+
+        payout, _created = TeacherPayout.objects.update_or_create(
+            teacher_id=teacher.id,
+            organization_id=organization_id,
+            period_year=year,
+            period_month=month,
+            defaults={'amount': amount, 'paid_at': timezone.now(), 'marked_by': user},
+        )
+        return Response(
+            {
+                'teacher_id': teacher.id,
+                'period_year': year,
+                'period_month': month,
+                'amount': round(float(payout.amount), 2),
+                'paid_at': payout.paid_at.isoformat(),
+            },
+            status=status.HTTP_200_OK,
+        )
 
     @action(detail=False, methods=['get'], url_path='summary/export')
     def summary_export(self, request):
         organization_id, date_from, date_to, teacher_id = self._resolve_summary_scope(request)
         data = build_teacher_payment_summary(organization_id, date_from, date_to, teacher_id=teacher_id)
+        self._attach_payouts(data, organization_id, date_from)
         # OJO: no usar el param 'format' (lo reserva DRF para negociacion de contenido).
         export_format = (request.query_params.get('fmt') or 'csv').lower()
         filename = f"pagos_profesores_{data['period']['date_from']}_{data['period']['date_to']}"
@@ -2815,10 +2906,23 @@ class TeacherPaymentRecordViewSet(ModelViewSet):
 
     @staticmethod
     def _summary_header():
-        return ['Profesor', 'Modalidades', 'Clases', 'Asistentes', 'Sueldo base', 'Por clase', 'Total']
+        return [
+            'Profesor', 'Modalidades', 'Clases', 'Asistentes', 'Sueldo base', 'Por clase', 'Total',
+            'Estado', 'Pagado', 'Fecha pago', 'Pendiente',
+        ]
 
     @staticmethod
     def _summary_data_row(row):
+        payout = row.get('payout')
+        pending = int(round(row.get('pending', row['total'])))
+        paid_amount = int(round(payout['amount'])) if payout else 0
+        paid_date = payout['paid_at'][:10] if payout else ''
+        if not payout:
+            estado = 'Pendiente'
+        elif pending > 0:
+            estado = 'Pagado parcial'
+        else:
+            estado = 'Pagado'
         return [
             row['teacher_name'],
             ', '.join(_payment_type_label(code) for code in row['modalities']),
@@ -2827,7 +2931,20 @@ class TeacherPaymentRecordViewSet(ModelViewSet):
             int(round(row['monthly_total'])),
             int(round(row['per_class_total'])),
             int(round(row['total'])),
+            estado,
+            paid_amount,
+            paid_date,
+            pending,
         ]
+
+    @staticmethod
+    def _summary_total_row(data):
+        grand_paid = sum(
+            int(round(row['payout']['amount'])) if row.get('payout') else 0
+            for row in data['rows']
+        )
+        grand_pending = sum(int(round(row.get('pending', row['total']))) for row in data['rows'])
+        return ['TOTAL', '', '', '', '', '', int(round(data['grand_total'])), '', grand_paid, '', grand_pending]
 
     @classmethod
     def _export_summary_csv(cls, data, filename):
@@ -2838,7 +2955,7 @@ class TeacherPaymentRecordViewSet(ModelViewSet):
         writer.writerow(cls._summary_header())
         for row in data['rows']:
             writer.writerow(cls._summary_data_row(row))
-        writer.writerow(['TOTAL', '', '', '', '', '', int(round(data['grand_total']))])
+        writer.writerow(cls._summary_total_row(data))
         return response
 
     @classmethod
@@ -2854,8 +2971,7 @@ class TeacherPaymentRecordViewSet(ModelViewSet):
             cell.font = Font(bold=True)
         for row in data['rows']:
             worksheet.append(cls._summary_data_row(row))
-        total_row = ['TOTAL', '', '', '', '', '', int(round(data['grand_total']))]
-        worksheet.append(total_row)
+        worksheet.append(cls._summary_total_row(data))
         for cell in worksheet[worksheet.max_row]:
             cell.font = Font(bold=True)
 

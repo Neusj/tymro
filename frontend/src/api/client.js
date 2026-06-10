@@ -432,6 +432,10 @@ export const teacherPaymentsApi = {
     })
     return response
   },
+  markPaid: async (payload = {}) => {
+    const { data } = await api.post('/teacher-payments/mark-paid/', payload)
+    return data
+  },
 }
 
 export const attendanceQrApi = {

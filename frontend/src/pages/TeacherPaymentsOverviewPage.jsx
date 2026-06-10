@@ -3,6 +3,7 @@ import { organizationsApi, teacherPaymentsApi } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import DashboardHeader from '../components/DashboardHeader'
 import ValueBadge from '../components/ui/ValueBadge'
+import PayoutStatus from '../components/ui/PayoutStatus'
 
 const MONTH_NAMES = [
   'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
@@ -60,6 +61,7 @@ function StatTile({ label, value, accent }) {
   )
 }
 
+
 export default function TeacherPaymentsOverviewPage() {
   const { user } = useAuth()
   const isSuperadmin = user?.role === 'superadmin'
@@ -70,6 +72,7 @@ export default function TeacherPaymentsOverviewPage() {
   const [error, setError] = useState('')
   const [expanded, setExpanded] = useState(null)
   const [exporting, setExporting] = useState('')
+  const [marking, setMarking] = useState(null)
 
   const [organizations, setOrganizations] = useState([])
   const [selectedOrganizationId, setSelectedOrganizationId] = useState(user?.organization ? String(user.organization) : '')
@@ -158,6 +161,24 @@ export default function TeacherPaymentsOverviewPage() {
       setError('No se pudo exportar el resumen.')
     } finally {
       setExporting('')
+    }
+  }
+
+  const handleMarkPaid = async (teacherId) => {
+    setMarking(teacherId)
+    setError('')
+    try {
+      const [year, mon] = month.split('-').map(Number)
+      const payload = { teacher_id: teacherId, year, month: mon }
+      if (isSuperadmin && selectedOrganizationId) {
+        payload.organization_id = selectedOrganizationId
+      }
+      await teacherPaymentsApi.markPaid(payload)
+      await loadSummary()
+    } catch (apiError) {
+      setError(firstApiError(apiError?.response?.data, 'No se pudo marcar el pago.'))
+    } finally {
+      setMarking(null)
     }
   }
 
@@ -274,12 +295,13 @@ export default function TeacherPaymentsOverviewPage() {
                   {/* Profesor + modalidades */}
                   <div className="min-w-0">
                     <p className="truncate font-medium text-brand-white">{row.teacher_name}</p>
-                    <div className="mt-1 flex flex-wrap gap-1">
+                    <div className="mt-1 flex flex-wrap items-center gap-1">
                       {row.modalities.length === 0 ? (
                         <span className="text-xs text-brand-dim">Sin modalidad</span>
                       ) : (
                         row.modalities.map((code) => <ValueBadge key={code} kind="payment_type" value={code} />)
                       )}
+                      <PayoutStatus payout={row.payout} pending={row.pending} />
                     </div>
                     {/* Métricas inline (solo móvil) */}
                     <p className="mt-1.5 text-xs text-brand-muted sm:hidden">
@@ -308,6 +330,23 @@ export default function TeacherPaymentsOverviewPage() {
                 {/* Drill-down */}
                 {isOpen ? (
                   <div className="border-t border-brand-hairline bg-brand-ink/40 p-4">
+                    {/* Estado de pago del período + acción */}
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                      <PayoutStatus payout={row.payout} pending={row.pending} />
+                      <button
+                        type="button"
+                        disabled={marking === row.teacher_id}
+                        onClick={() => handleMarkPaid(row.teacher_id)}
+                        className="inline-flex items-center gap-1.5 rounded-xl bg-success px-3 py-1.5 text-xs font-semibold text-black transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {marking === row.teacher_id
+                          ? 'Guardando…'
+                          : row.payout
+                            ? 'Actualizar pago'
+                            : 'Marcar como pagado'}
+                      </button>
+                    </div>
+
                     {/* Desglose sueldo base + por clase = total */}
                     <div className="mb-3 grid grid-cols-3 gap-2 text-sm">
                       <div className="rounded-lg border border-brand-hairline bg-brand-panel/50 p-2.5">

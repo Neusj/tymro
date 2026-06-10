@@ -465,6 +465,30 @@ class TeacherPaymentRecord(TimestampedModel):
         return f'{self.teacher} - clase #{self.class_instance_id}'
 
 
+class TeacherPayout(TimestampedModel):
+    """Marca de pago a NIVEL PERIODO (mes), cubre tambien a salariados sin record por clase.
+
+    Es un snapshot: guarda el monto del periodo al momento de marcar pagado, de modo que
+    cambios posteriores en clases/asistencia no alteren lo ya liquidado.
+    """
+    teacher = models.ForeignKey('accounts.CustomUser', on_delete=models.CASCADE, related_name='payouts')
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='teacher_payouts')
+    period_year = models.PositiveIntegerField()
+    period_month = models.PositiveSmallIntegerField()
+    amount = models.FloatField(default=0)
+    paid_at = models.DateTimeField(default=timezone.now)
+    marked_by = models.ForeignKey(
+        'accounts.CustomUser', on_delete=models.SET_NULL, null=True, blank=True, related_name='payouts_marked'
+    )
+
+    class Meta:
+        ordering = ['-period_year', '-period_month', '-id']
+        unique_together = ('teacher', 'organization', 'period_year', 'period_month')
+
+    def __str__(self):
+        return f'{self.teacher} - {self.period_year}-{self.period_month:02d} ({self.amount})'
+
+
 class ClassTemplate(TimestampedModel):
     class Weekday(models.IntegerChoices):
         MONDAY = 0, 'Lunes'
