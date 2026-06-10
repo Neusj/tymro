@@ -1,0 +1,43 @@
+# Imagen de producción single-service para Railway.
+# Contexto de build = raíz del repo. Django (gunicorn) sirve la API y el SPA.
+
+# --- Stage 1: build del SPA (Vite) ---
+FROM node:20-alpine AS frontend
+WORKDIR /app/frontend
+
+COPY frontend/package*.json ./
+RUN npm ci
+
+COPY frontend/ ./
+# En single-service la API es relativa al mismo origen.
+ENV VITE_API_URL=/api
+RUN npm run build
+
+# --- Stage 2: backend Django + gunicorn ---
+FROM python:3.12-slim AS backend
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app/backend
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY backend/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY backend/ /app/backend/
+
+# El build del SPA va donde settings.py lo espera: BASE_DIR.parent/frontend/dist
+COPY --from=frontend /app/frontend/dist /app/frontend/dist
+
+COPY backend/entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
+# MEDIA_ROOT — Railway monta aquí un Volume persistente.
+RUN mkdir -p /app/backend/media
+
+EXPOSE 8000
+ENTRYPOINT ["/app/entrypoint.sh"]

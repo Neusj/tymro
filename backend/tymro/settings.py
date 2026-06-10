@@ -6,6 +6,10 @@ from django.core.exceptions import ImproperlyConfigured
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# Ruta al build del SPA (Vite). En la imagen de producción, frontend/dist se copia
+# junto al backend, de modo que BASE_DIR.parent/frontend/dist apunta al build.
+FRONTEND_DIST = BASE_DIR.parent / 'frontend' / 'dist'
+
 def _env_bool(name, default=False):
     value = os.getenv(name)
     if value is None:
@@ -97,6 +101,9 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    # WhiteNoise sirve los estáticos (admin/DRF) y el build del SPA. Va justo
+    # después de SecurityMiddleware, como recomienda la documentación.
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -110,7 +117,9 @@ ROOT_URLCONF = 'tymro.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        # Incluye el dist del SPA para poder servir index.html como template
+        # en el catch-all de React Router.
+        'DIRS': [FRONTEND_DIST],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -149,7 +158,24 @@ TIME_ZONE = 'America/Santiago'
 USE_I18N = True
 USE_TZ = True
 
-STATIC_URL = 'static/'
+STATIC_URL = '/static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+
+# WhiteNoise: estáticos de admin/DRF comprimidos + manifest (cache-busting).
+STORAGES = {
+    'default': {
+        'BACKEND': 'django.core.files.storage.FileSystemStorage',
+    },
+    'staticfiles': {
+        'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage',
+    },
+}
+
+# WhiteNoise sirve además el build del SPA (assets con hash de Vite) en la raíz,
+# p.ej. /assets/index-xxxx.js. El index.html se entrega vía el catch-all (ver urls.py).
+if FRONTEND_DIST.exists():
+    WHITENOISE_ROOT = FRONTEND_DIST
+
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 AUTH_USER_MODEL = 'accounts.CustomUser'
 

@@ -1,9 +1,26 @@
+# Contexto de build = raíz del repo. Mantener la imagen limpia y sin secretos.
+.git
+.gitignore
+**/.env
+**/.env.*
+!**/.env.example
+**/.venv/
 **/__pycache__/
 **/*.pyc
+**/.pytest_cache/
 **/.DS_Store
-**/.env
-**/.venv/
+
+# El frontend se reconstruye dentro de la imagen.
 **/node_modules/
-**/dist/
+frontend/dist/
+
+# Artefactos de backend que no deben viajar a prod.
+backend/staticfiles/
 backend/db.sqlite3
 backend/media/
+
+# Solo dev / docs.
+docker-compose.yml
+README*.md
+**/CLAUDE.MD
+.claude/

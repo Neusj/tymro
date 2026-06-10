@@ -1,0 +1,4 @@
+# Los scripts de shell deben conservar saltos de línea LF aunque se commiteen
+# desde Windows; con CRLF el contenedor Linux falla con "/usr/bin/env: 'sh\r'".
+*.sh text eol=lf
+entrypoint.sh text eol=lf
