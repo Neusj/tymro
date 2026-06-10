@@ -61,8 +61,17 @@ function resolveConfig(kind, value) {
     if (normalized === 'per_student') {
       return { label: 'Por alumno', className: `${common.base} border-emerald-500/40 text-emerald-200` }
     }
+    if (normalized === 'per_enrolled') {
+      return { label: 'Por inscrito', className: `${common.base} border-teal-500/40 text-teal-200` }
+    }
+    if (normalized === 'per_hour') {
+      return { label: 'Por hora', className: `${common.base} border-sky-500/40 text-sky-200` }
+    }
     if (normalized === 'revenue_share') {
       return { label: '% ingreso', className: `${common.base} border-amber-500/40 text-amber-200` }
+    }
+    if (normalized === 'monthly_fixed') {
+      return { label: 'Mensual', className: `${common.base} border-fuchsia-500/40 text-fuchsia-200` }
     }
     return { label: value || '-', className: `${common.base} ${common.neutral}` }
   }

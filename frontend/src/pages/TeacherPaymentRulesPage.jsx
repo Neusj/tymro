@@ -14,6 +14,21 @@ const EMPTY_FORM = {
   is_active: true,
 }
 
+const AMOUNT_LABELS = {
+  fixed_per_class: 'Monto por clase',
+  per_student: 'Monto por alumno presente',
+  per_enrolled: 'Monto por alumno inscrito',
+  per_hour: 'Valor por hora',
+  revenue_share: 'Porcentaje (%)',
+  monthly_fixed: 'Sueldo mensual',
+}
+
+const AMOUNT_HINTS = {
+  per_hour: 'Se multiplica por la duracion de cada clase.',
+  per_enrolled: 'Se multiplica por los alumnos inscritos activos al cerrar la clase.',
+  monthly_fixed: 'Monto completo por cada mes del periodo. No genera pago por clase.',
+}
+
 function firstApiError(detail, fallback) {
   if (!detail) {
     return fallback
@@ -394,12 +409,15 @@ export default function TeacherPaymentRulesPage() {
             >
               <option value="fixed_per_class">Fijo por clase</option>
               <option value="per_student">Por alumno presente</option>
+              <option value="per_enrolled">Por alumno inscrito</option>
+              <option value="per_hour">Por hora</option>
               <option value="revenue_share">% sobre ingreso</option>
+              <option value="monthly_fixed">Sueldo mensual fijo</option>
             </select>
           </label>
 
           <label className="space-y-1 text-sm">
-            <span className="text-brand-muted">Monto</span>
+            <span className="text-brand-muted">{AMOUNT_LABELS[form.payment_type] || 'Monto'}</span>
             <input
               type="number"
               min={0}
@@ -407,6 +425,9 @@ export default function TeacherPaymentRulesPage() {
               onChange={(event) => setForm((prev) => ({ ...prev, amount: event.target.value }))}
               className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
             />
+            {AMOUNT_HINTS[form.payment_type] ? (
+              <span className="block text-xs text-brand-muted">{AMOUNT_HINTS[form.payment_type]}</span>
+            ) : null}
           </label>
 
           {form.payment_type === 'revenue_share' ? (

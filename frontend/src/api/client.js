@@ -421,6 +421,17 @@ export const teacherPaymentsApi = {
     const { data } = await api.get('/teacher-payments/my/', { params })
     return data
   },
+  summary: async (params = {}) => {
+    const { data } = await api.get('/teacher-payments/summary/', { params })
+    return data
+  },
+  exportSummary: async (params = {}) => {
+    const response = await api.get('/teacher-payments/summary/export/', {
+      params,
+      responseType: 'blob',
+    })
+    return response
+  },
 }
 
 export const attendanceQrApi = {

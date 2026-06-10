@@ -395,7 +395,10 @@ class TeacherPaymentRule(TimestampedModel):
     class PaymentType(models.TextChoices):
         FIXED_PER_CLASS = 'fixed_per_class', 'Fijo por clase'
         PER_STUDENT = 'per_student', 'Por alumno presente'
+        PER_ENROLLED = 'per_enrolled', 'Por alumno inscrito'
+        PER_HOUR = 'per_hour', 'Por hora'
         REVENUE_SHARE = 'revenue_share', 'Porcentaje de ingreso'
+        MONTHLY_FIXED = 'monthly_fixed', 'Sueldo mensual fijo'
 
     class CalculationBase(models.TextChoices):
         ATTENDANCE = 'attendance', 'Asistencia'

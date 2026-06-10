@@ -1,8 +1,10 @@
 ﻿from django.contrib.auth import authenticate, get_user_model
+import csv
 from datetime import datetime, timedelta
 from uuid import uuid4
 
 from django.conf import settings
+from django.http import HttpResponse
 from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.tokens import default_token_generator
 from django.core import signing
@@ -92,7 +94,7 @@ from .services.reservations import (
     should_refund_consumption,
     validate_student_plan_for_reservation,
 )
-from .services.teacher_payments import calculate_teacher_payment
+from .services.teacher_payments import build_teacher_payment_summary, calculate_teacher_payment
 
 User = get_user_model()
 QR_ATTENDANCE_SALT = 'tymro.attendance.qr'
@@ -166,6 +168,12 @@ def _register_teacher_payment_for_class(gym_class):
     if gym_class.status not in {GymClass.Status.COMPLETED, GymClass.Status.COMPLETED_EARLY}:
         return
     calculate_teacher_payment(gym_class)
+
+
+def _payment_type_label(code):
+    if not code:
+        return '-'
+    return dict(TeacherPaymentRule.PaymentType.choices).get(code, code)
 
 
 def _parse_bool(value, default=True):
@@ -2740,5 +2748,122 @@ class TeacherPaymentRecordViewSet(ModelViewSet):
         queryset = self.get_queryset().filter(teacher_id=user.id)
         serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data)
+
+    # --- Resumen agregado por profesor en un periodo ---
+    @staticmethod
+    def _parse_summary_period(request):
+        today = timezone.localdate()
+        default_from = today.replace(day=1)
+        if default_from.month == 12:
+            next_month = default_from.replace(year=default_from.year + 1, month=1)
+        else:
+            next_month = default_from.replace(month=default_from.month + 1)
+        default_to = next_month - timedelta(days=1)
+
+        def _parse(value, fallback):
+            if not value:
+                return fallback
+            try:
+                return datetime.strptime(value, '%Y-%m-%d').date()
+            except ValueError:
+                raise ValidationError({'period': 'Formato de fecha invalido (usa YYYY-MM-DD).'})
+
+        date_from = _parse(request.query_params.get('date_from'), default_from)
+        date_to = _parse(request.query_params.get('date_to'), default_to)
+        if date_to < date_from:
+            raise ValidationError({'period': 'date_to no puede ser anterior a date_from.'})
+        return date_from, date_to
+
+    def _resolve_summary_scope(self, request):
+        user = request.user
+        teacher_id = None
+        if _is_superadmin(user):
+            organization_id = request.query_params.get('organization_id')
+            if not organization_id:
+                raise ValidationError({'organization_id': 'Debes indicar la organizacion.'})
+        elif _is_gym_admin(user) and user.organization_id:
+            organization_id = user.organization_id
+        elif _is_teacher(user) and user.organization_id:
+            organization_id = user.organization_id
+            teacher_id = user.id  # el profe solo ve su propia fila
+        else:
+            raise PermissionDenied('No tienes permisos para ver el resumen de pagos.')
+
+        requested_teacher = request.query_params.get('teacher_id')
+        if requested_teacher and teacher_id is None:
+            teacher_id = requested_teacher
+
+        date_from, date_to = self._parse_summary_period(request)
+        return organization_id, date_from, date_to, teacher_id
+
+    @action(detail=False, methods=['get'], url_path='summary')
+    def summary(self, request):
+        organization_id, date_from, date_to, teacher_id = self._resolve_summary_scope(request)
+        data = build_teacher_payment_summary(organization_id, date_from, date_to, teacher_id=teacher_id)
+        return Response(data)
+
+    @action(detail=False, methods=['get'], url_path='summary/export')
+    def summary_export(self, request):
+        organization_id, date_from, date_to, teacher_id = self._resolve_summary_scope(request)
+        data = build_teacher_payment_summary(organization_id, date_from, date_to, teacher_id=teacher_id)
+        # OJO: no usar el param 'format' (lo reserva DRF para negociacion de contenido).
+        export_format = (request.query_params.get('fmt') or 'csv').lower()
+        filename = f"pagos_profesores_{data['period']['date_from']}_{data['period']['date_to']}"
+        if export_format == 'xlsx':
+            return self._export_summary_xlsx(data, filename)
+        return self._export_summary_csv(data, filename)
+
+    @staticmethod
+    def _summary_header():
+        return ['Profesor', 'Modalidades', 'Clases', 'Asistentes', 'Sueldo base', 'Por clase', 'Total']
+
+    @staticmethod
+    def _summary_data_row(row):
+        return [
+            row['teacher_name'],
+            ', '.join(_payment_type_label(code) for code in row['modalities']),
+            row['classes_count'],
+            row['attendees_total'],
+            int(round(row['monthly_total'])),
+            int(round(row['per_class_total'])),
+            int(round(row['total'])),
+        ]
+
+    @classmethod
+    def _export_summary_csv(cls, data, filename):
+        response = HttpResponse(content_type='text/csv; charset=utf-8')
+        response['Content-Disposition'] = f'attachment; filename="{filename}.csv"'
+        response.write('﻿')  # BOM para que Excel respete acentos
+        writer = csv.writer(response)
+        writer.writerow(cls._summary_header())
+        for row in data['rows']:
+            writer.writerow(cls._summary_data_row(row))
+        writer.writerow(['TOTAL', '', '', '', '', '', int(round(data['grand_total']))])
+        return response
+
+    @classmethod
+    def _export_summary_xlsx(cls, data, filename):
+        from openpyxl import Workbook
+        from openpyxl.styles import Font
+
+        workbook = Workbook()
+        worksheet = workbook.active
+        worksheet.title = 'Pagos profesores'
+        worksheet.append(cls._summary_header())
+        for cell in worksheet[1]:
+            cell.font = Font(bold=True)
+        for row in data['rows']:
+            worksheet.append(cls._summary_data_row(row))
+        total_row = ['TOTAL', '', '', '', '', '', int(round(data['grand_total']))]
+        worksheet.append(total_row)
+        for cell in worksheet[worksheet.max_row]:
+            cell.font = Font(bold=True)
+
+        response = HttpResponse(
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        response['Content-Disposition'] = f'attachment; filename="{filename}.xlsx"'
+        workbook.save(response)
+        return response
 
 
