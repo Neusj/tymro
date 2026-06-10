@@ -81,7 +81,7 @@ if not SECRET_KEY:
         )
 ALLOWED_HOSTS = _env_list(
     'ALLOWED_HOSTS',
-    ['localhost', '127.0.0.1', 'backend', 'frontend', 'tymroapp.com', '.trycloudflare.com'],
+    ['localhost', '127.0.0.1', 'backend', 'frontend', 'tymroapp.com', 'qa.tymroapp.com', '.trycloudflare.com'],
 )
 
 INSTALLED_APPS = [
@@ -186,6 +186,7 @@ CORS_ALLOWED_ORIGINS = _env_list(
         'http://localhost:5173',
         'http://127.0.0.1:5173',
         'https://tymroapp.com',
+        'https://qa.tymroapp.com',
     ],
 )
 CORS_ALLOWED_ORIGIN_REGEXES = [
@@ -197,6 +198,7 @@ CSRF_TRUSTED_ORIGINS = _env_list(
         'http://localhost:5173',
         'http://127.0.0.1:5173',
         'https://tymroapp.com',
+        'https://qa.tymroapp.com',
         'https://*.trycloudflare.com',
     ],
 )
