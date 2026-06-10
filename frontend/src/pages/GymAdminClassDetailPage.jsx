@@ -119,6 +119,7 @@ export default function GymAdminClassDetailPage() {
       <DashboardHeader
         title="Detalle de clase"
         subtitle={gymClass ? `${gymClass.name} · ${gymClass.branch_name}` : 'Cargando clase...'}
+        back={{ to: '/gym-admin/classes', label: 'Clases' }}
         extra={
           <div className="flex gap-2">
             <button type="button" onClick={() => setModalOpen(true)} className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white">
@@ -126,9 +127,6 @@ export default function GymAdminClassDetailPage() {
             </button>
             <Link to={`/gym-admin/classes/${id}/edit`} className="rounded-xl border border-brand-line px-4 py-2 text-sm font-semibold text-brand-muted">
               Editar clase
-            </Link>
-            <Link to="/gym-admin/classes" className="rounded-xl border border-brand-line px-4 py-2 text-sm font-semibold text-brand-muted">
-              Volver
             </Link>
           </div>
         }

@@ -72,11 +72,7 @@ export default function GymAdminClassCreatePage() {
       <DashboardHeader
         title="Gym Admin · Crear Clase"
         subtitle="Programa una nueva clase con profesor, tipo y cupos."
-        extra={
-          <Link to="/gym-admin/classes" className="rounded-xl border border-brand-line px-4 py-2 text-sm font-semibold text-brand-muted">
-            Volver
-          </Link>
-        }
+        back={{ to: '/gym-admin/classes', label: 'Clases' }}
       />
 
       <section className="card-surface p-5">

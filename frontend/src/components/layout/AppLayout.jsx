@@ -1,9 +1,11 @@
-﻿import { useEffect, useState } from 'react'
+﻿import { useEffect, useRef, useState } from 'react'
 import RoleBadge from '../RoleBadge'
+import ScrollToTopButton from '../ScrollToTopButton'
 import Sidebar from './Sidebar'
 
 export default function AppLayout({ user, onLogout, children }) {
   const [isOpen, setIsOpen] = useState(false)
+  const mainRef = useRef(null)
   const [isMobile, setIsMobile] = useState(() => {
     if (typeof window === 'undefined') {
       return false
@@ -52,8 +54,8 @@ export default function AppLayout({ user, onLogout, children }) {
         />
       ) : null}
 
-      <div className="relative z-10 flex min-w-0 flex-1 flex-col overflow-hidden">
-        <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-brand-line bg-brand-black/80 px-4 backdrop-blur-md md:px-6">
+      <div className="relative z-10 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <header className="sticky top-0 z-20 flex h-16 shrink-0 items-center justify-between border-b border-brand-line bg-brand-black/80 px-4 backdrop-blur-md md:px-6">
           <div className="flex min-w-0 items-center gap-3">
             <button
               type="button"
@@ -85,10 +87,12 @@ export default function AppLayout({ user, onLogout, children }) {
           </div>
         </header>
 
-        <main className="flex-1 overflow-y-auto px-4 py-5 sm:px-6 sm:py-7 lg:px-8 lg:py-9 3xl:px-12">
+        <main ref={mainRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6 sm:py-7 lg:px-8 lg:py-9 3xl:px-12">
           <div className="app-container animate-fade-rise">{children}</div>
         </main>
       </div>
+
+      <ScrollToTopButton scrollRef={mainRef} />
     </div>
   )
 }

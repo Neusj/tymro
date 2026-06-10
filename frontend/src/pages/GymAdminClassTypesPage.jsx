@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
 import { classTypesApi } from '../api/client'
 import ConfirmDialog from '../components/ConfirmDialog'
 import DashboardHeader from '../components/DashboardHeader'
@@ -146,11 +145,7 @@ export default function GymAdminClassTypesPage() {
       <DashboardHeader
         title="Gym Admin · Tipos de Clase"
         subtitle="Gestiona tipos de clase de tu organización."
-        extra={
-          <Link to="/gym-admin/classes" className="rounded-xl border border-brand-line px-4 py-2 text-sm font-semibold text-brand-muted">
-            Volver a clases
-          </Link>
-        }
+        back={{ to: '/gym-admin/classes', label: 'Clases' }}
       />
 
       <section className="card-surface p-5 space-y-3">

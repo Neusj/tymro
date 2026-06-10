@@ -1,5 +1,4 @@
 ﻿import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
 import { branchesApi, dashboardApi, usersApi } from '../api/client'
 import DashboardHeader from '../components/DashboardHeader'
 import StatCard from '../components/StatCard'
@@ -31,29 +30,13 @@ export default function GymAdminDashboard() {
 
   return (
     <div className="space-y-6">
-      <DashboardHeader
-        title="Gym Admin · Dashboard"
-        subtitle={`Gestión de ${summary.organization || 'tu organización'}`}
-        extra={
-          <div className="flex gap-2">
-            <Link to="/gym-admin/users" className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white">
-              Gestionar usuarios
-            </Link>
-            <Link to="/gym-admin/branches" className="rounded-xl bg-brand-orange px-4 py-2 text-sm font-semibold text-white">
-              Gestionar sucursales
-            </Link>
-            <Link to="/gym-admin/classes" className="rounded-xl bg-brand-red px-4 py-2 text-sm font-semibold text-white">
-              Gestionar clases
-            </Link>
-          </div>
-        }
-      />
+      <DashboardHeader title="Gym Admin · Dashboard" subtitle={`Gestión de ${summary.organization || 'tu organización'}`} />
 
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard title="Sucursales" value={summary.branches} accent="blue" />
-        <StatCard title="Profesores" value={summary.teachers} accent="orange" />
-        <StatCard title="Alumnos" value={summary.students} accent="red" />
-        <StatCard title="Usuarios" value={summary.users} accent="orange" />
+      <section className="grid grid-cols-2 gap-3 md:gap-4 xl:grid-cols-4">
+        <StatCard title="Sucursales" value={summary.branches} accent="blue" to="/gym-admin/branches" />
+        <StatCard title="Profesores" value={summary.teachers} accent="orange" to="/gym-admin/users" />
+        <StatCard title="Alumnos" value={summary.students} accent="red" to="/gym-admin/users" />
+        <StatCard title="Usuarios" value={summary.users} accent="orange" to="/gym-admin/users" />
       </section>
 
       <PublicRegistrationCard />

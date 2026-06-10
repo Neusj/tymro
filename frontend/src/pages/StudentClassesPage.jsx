@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { classTemplatesApi, classesApi, enrollmentsApi, getMyPlan, recurringEnrollmentsApi } from '../api/client'
 import DashboardHeader from '../components/DashboardHeader'
 import FilterDropdown from '../components/FilterDropdown'
+import FilterPanel from '../components/FilterPanel'
+import KpiStrip from '../components/KpiStrip'
 import DataTable from '../components/ui/DataTable'
 import TouchTooltip from '../components/ui/TouchTooltip'
 import ValueBadge from '../components/ui/ValueBadge'
@@ -32,6 +34,10 @@ const initialReservationFilters = {
   classType: '',
   mode: '',
   dateRange: '',
+}
+
+function countActiveFilters(filters, initial) {
+  return Object.keys(initial).reduce((count, key) => (filters[key] !== initial[key] ? count + 1 : count), 0)
 }
 
 function QuickChips({ items }) {
@@ -608,82 +614,66 @@ export default function StudentClassesPage({ mode = 'available' }) {
   )
 
   const renderClassFilters = (filters, setFilters, options) => (
-    <div className="space-y-3">
-      <QuickChips
-        items={[
-          { label: 'Hoy', active: filters.dateRange === 'today', onClick: () => setFilters((prev) => ({ ...prev, dateRange: prev.dateRange === 'today' ? '' : 'today' })) },
-          { label: 'Semana', active: filters.dateRange === 'week', onClick: () => setFilters((prev) => ({ ...prev, dateRange: prev.dateRange === 'week' ? '' : 'week' })) },
-          { label: 'Disponibles', active: filters.status === 'scheduled', onClick: () => setFilters((prev) => ({ ...prev, status: prev.status === 'scheduled' ? '' : 'scheduled' })) },
-          { label: 'Completadas', active: filters.status === 'completed', onClick: () => setFilters((prev) => ({ ...prev, status: prev.status === 'completed' ? '' : 'completed' })) },
-          { label: 'Canceladas', active: filters.status === 'cancelled', onClick: () => setFilters((prev) => ({ ...prev, status: prev.status === 'cancelled' ? '' : 'cancelled' })) },
-        ]}
-      />
-      <div className="flex flex-wrap items-end gap-2">
-        <FilterDropdown label="Profesor" value={filters.teacher} options={options.teacherOptions} onChange={(value) => setFilters((prev) => ({ ...prev, teacher: value }))} />
-        <FilterDropdown label="Disciplina" value={filters.discipline} options={options.disciplineOptions} onChange={(value) => setFilters((prev) => ({ ...prev, discipline: value }))} />
-        <FilterDropdown label="Estado" value={filters.status} options={CLASS_STATUS_OPTIONS} onChange={(value) => setFilters((prev) => ({ ...prev, status: value }))} />
-        <button
-          type="button"
-          onClick={() => setFilters(initialClassFilters)}
-          className="min-h-10 rounded-lg border border-brand-line px-3 py-2 text-xs text-brand-muted transition hover:text-brand-white"
-        >
-          Limpiar filtros
-        </button>
+    <FilterPanel activeCount={countActiveFilters(filters, initialClassFilters)} onClear={() => setFilters(initialClassFilters)}>
+      <div className="space-y-3">
+        <QuickChips
+          items={[
+            { label: 'Hoy', active: filters.dateRange === 'today', onClick: () => setFilters((prev) => ({ ...prev, dateRange: prev.dateRange === 'today' ? '' : 'today' })) },
+            { label: 'Semana', active: filters.dateRange === 'week', onClick: () => setFilters((prev) => ({ ...prev, dateRange: prev.dateRange === 'week' ? '' : 'week' })) },
+          ]}
+        />
+        <div className="flex flex-wrap items-end gap-2">
+          <FilterDropdown label="Profesor" value={filters.teacher} options={options.teacherOptions} onChange={(value) => setFilters((prev) => ({ ...prev, teacher: value }))} />
+          <FilterDropdown label="Disciplina" value={filters.discipline} options={options.disciplineOptions} onChange={(value) => setFilters((prev) => ({ ...prev, discipline: value }))} />
+          <FilterDropdown label="Estado" value={filters.status} options={CLASS_STATUS_OPTIONS} onChange={(value) => setFilters((prev) => ({ ...prev, status: value }))} />
+        </div>
       </div>
-    </div>
+    </FilterPanel>
   )
 
   const renderReservationFilters = () => (
-    <div className="space-y-3">
-      <QuickChips
-        items={[
-          { label: 'Hoy', active: reservationFilters.dateRange === 'today', onClick: () => setReservationFilters((prev) => ({ ...prev, dateRange: prev.dateRange === 'today' ? '' : 'today' })) },
-          { label: 'Semana', active: reservationFilters.dateRange === 'week', onClick: () => setReservationFilters((prev) => ({ ...prev, dateRange: prev.dateRange === 'week' ? '' : 'week' })) },
-          { label: 'Activas', active: reservationFilters.status === 'active', onClick: () => setReservationFilters((prev) => ({ ...prev, status: 'active' })) },
-          { label: 'Finalizadas', active: reservationFilters.status === 'finished', onClick: () => setReservationFilters((prev) => ({ ...prev, status: 'finished' })) },
-          { label: 'Canceladas', active: reservationFilters.status === 'cancelled', onClick: () => setReservationFilters((prev) => ({ ...prev, status: 'cancelled' })) },
-        ]}
-      />
-      <div className="flex flex-wrap items-end gap-2">
-        <FilterDropdown
-          label="Profesor"
-          value={reservationFilters.teacher}
-          options={reservationFilterOptions.teacherOptions}
-          onChange={(value) => setReservationFilters((prev) => ({ ...prev, teacher: value }))}
+    <FilterPanel activeCount={countActiveFilters(reservationFilters, initialReservationFilters)} onClear={() => setReservationFilters(initialReservationFilters)}>
+      <div className="space-y-3">
+        <QuickChips
+          items={[
+            { label: 'Hoy', active: reservationFilters.dateRange === 'today', onClick: () => setReservationFilters((prev) => ({ ...prev, dateRange: prev.dateRange === 'today' ? '' : 'today' })) },
+            { label: 'Semana', active: reservationFilters.dateRange === 'week', onClick: () => setReservationFilters((prev) => ({ ...prev, dateRange: prev.dateRange === 'week' ? '' : 'week' })) },
+          ]}
         />
-      <FilterDropdown
-        label="Disciplina"
-        value={reservationFilters.discipline}
-        options={reservationFilterOptions.disciplineOptions}
-        onChange={(value) => setReservationFilters((prev) => ({ ...prev, discipline: value }))}
-      />
-      <FilterDropdown
-        label="Estado"
-        value={reservationFilters.status}
-        options={RESERVATION_STATUS_OPTIONS}
-        onChange={(value) => setReservationFilters((prev) => ({ ...prev, status: value }))}
-      />
-      <FilterDropdown
-        label="Tipo clase"
-        value={reservationFilters.classType}
-        options={reservationFilterOptions.classTypeOptions}
-        onChange={(value) => setReservationFilters((prev) => ({ ...prev, classType: value }))}
-      />
-      <FilterDropdown
-        label="Modalidad"
-        value={reservationFilters.mode}
-        options={RESERVATION_MODE_OPTIONS}
-        onChange={(value) => setReservationFilters((prev) => ({ ...prev, mode: value }))}
-      />
-        <button
-          type="button"
-          onClick={() => setReservationFilters(initialReservationFilters)}
-          className="min-h-10 rounded-lg border border-brand-line px-3 py-2 text-xs text-brand-muted transition hover:text-brand-white"
-        >
-          Limpiar filtros
-        </button>
+        <div className="flex flex-wrap items-end gap-2">
+          <FilterDropdown
+            label="Profesor"
+            value={reservationFilters.teacher}
+            options={reservationFilterOptions.teacherOptions}
+            onChange={(value) => setReservationFilters((prev) => ({ ...prev, teacher: value }))}
+          />
+          <FilterDropdown
+            label="Disciplina"
+            value={reservationFilters.discipline}
+            options={reservationFilterOptions.disciplineOptions}
+            onChange={(value) => setReservationFilters((prev) => ({ ...prev, discipline: value }))}
+          />
+          <FilterDropdown
+            label="Estado"
+            value={reservationFilters.status}
+            options={RESERVATION_STATUS_OPTIONS}
+            onChange={(value) => setReservationFilters((prev) => ({ ...prev, status: value }))}
+          />
+          <FilterDropdown
+            label="Tipo clase"
+            value={reservationFilters.classType}
+            options={reservationFilterOptions.classTypeOptions}
+            onChange={(value) => setReservationFilters((prev) => ({ ...prev, classType: value }))}
+          />
+          <FilterDropdown
+            label="Modalidad"
+            value={reservationFilters.mode}
+            options={RESERVATION_MODE_OPTIONS}
+            onChange={(value) => setReservationFilters((prev) => ({ ...prev, mode: value }))}
+          />
+        </div>
       </div>
-    </div>
+    </FilterPanel>
   )
 
   const viewConfig = useMemo(
@@ -736,20 +726,13 @@ export default function StudentClassesPage({ mode = 'available' }) {
                 {remainingClasses} clases
               </span>
             </div>
-            <div className="grid gap-3 md:grid-cols-3">
-              <div className="rounded-xl border border-brand-line bg-black/20 p-3">
-                <p className="text-xs text-brand-muted">Total clases visibles</p>
-                <p className="text-xl font-semibold">{availableKpis.totalVisible}</p>
-              </div>
-              <div className="rounded-xl border border-brand-line bg-black/20 p-3">
-                <p className="text-xs text-brand-muted">Mis reservas activas (visibles)</p>
-                <p className="text-xl font-semibold">{availableKpis.activeVisible}</p>
-              </div>
-              <div className="rounded-xl border border-brand-line bg-black/20 p-3">
-                <p className="text-xs text-brand-muted">Próximas clases mías</p>
-                <p className="text-xl font-semibold">{availableKpis.upcomingMine}</p>
-              </div>
-            </div>
+            <KpiStrip
+              items={[
+                { label: 'Total clases visibles', value: availableKpis.totalVisible },
+                { label: 'Mis reservas activas (visibles)', value: availableKpis.activeVisible },
+                { label: 'Próximas clases mías', value: availableKpis.upcomingMine },
+              ]}
+            />
             {renderClassFilters(classFilters, setClassFilters, availableFilterOptions)}
             <div className="flex flex-wrap items-center gap-2 rounded-lg border border-brand-line bg-black/20 px-3 py-2 text-xs">
               <span className="text-brand-muted">Seleccionadas: {selectedAvailable.length}</span>
@@ -768,20 +751,13 @@ export default function StudentClassesPage({ mode = 'available' }) {
 
         {mode === 'reservations' ? (
           <>
-            <div className="grid gap-3 md:grid-cols-3">
-              <div className="rounded-xl border border-brand-line bg-black/20 p-3">
-                <p className="text-xs text-brand-muted">Total reservas</p>
-                <p className="text-xl font-semibold">{reservationKpis.total}</p>
-              </div>
-              <div className="rounded-xl border border-brand-line bg-black/20 p-3">
-                <p className="text-xs text-brand-muted">Próximas reservas</p>
-                <p className="text-xl font-semibold">{reservationKpis.upcoming}</p>
-              </div>
-              <div className="rounded-xl border border-brand-line bg-black/20 p-3">
-                <p className="text-xs text-brand-muted">Recurrencias activas</p>
-                <p className="text-xl font-semibold">{reservationKpis.recurringActive}</p>
-              </div>
-            </div>
+            <KpiStrip
+              items={[
+                { label: 'Total reservas', value: reservationKpis.total },
+                { label: 'Próximas reservas', value: reservationKpis.upcoming },
+                { label: 'Recurrencias activas', value: reservationKpis.recurringActive },
+              ]}
+            />
             {renderReservationFilters()}
             <div className="flex flex-wrap items-center gap-2 rounded-lg border border-brand-line bg-black/20 px-3 py-2 text-xs">
               <span className="text-brand-muted">Seleccionadas: {selectedReservations.length}</span>

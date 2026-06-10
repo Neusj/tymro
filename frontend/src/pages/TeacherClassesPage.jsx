@@ -3,6 +3,8 @@ import { classesApi, enrollmentsApi } from '../api/client'
 import BulkActionModal from '../components/BulkActionModal'
 import DashboardHeader from '../components/DashboardHeader'
 import FilterDropdown from '../components/FilterDropdown'
+import FilterPanel from '../components/FilterPanel'
+import KpiStrip from '../components/KpiStrip'
 import FormModal from '../components/FormModal'
 import DataTable from '../components/ui/DataTable'
 import ValueBadge from '../components/ui/ValueBadge'
@@ -475,42 +477,33 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
       {error ? <p className="rounded-lg border border-brand-red/50 bg-brand-red/10 px-3 py-2 text-sm text-red-200">{error}</p> : null}
 
       <section className="card-surface space-y-4 p-5">
-        <div className="grid gap-3 md:grid-cols-3">
-          <div className="rounded-xl border border-brand-line bg-black/20 p-3">
-            <p className="text-xs text-brand-muted">Total clases</p>
-            <p className="text-xl font-semibold">{kpis.totalClasses}</p>
-          </div>
-          <div className="rounded-xl border border-brand-line bg-black/20 p-3">
-            <p className="text-xs text-brand-muted">{kpis.peopleLabel}</p>
-            <p className="text-xl font-semibold">{kpis.totalPeople}</p>
-          </div>
-          <div className="rounded-xl border border-brand-line bg-black/20 p-3">
-            <p className="text-xs text-brand-muted">Ocupacion promedio</p>
-            <p className="text-xl font-semibold">{kpis.occupancy}%</p>
-          </div>
-        </div>
+        <KpiStrip
+          items={[
+            { label: 'Total clases', value: kpis.totalClasses },
+            { label: kpis.peopleLabel, value: kpis.totalPeople },
+            { label: 'Ocupacion promedio', value: `${kpis.occupancy}%` },
+          ]}
+        />
 
-        <div className="flex flex-wrap items-end gap-2">
-          <FilterDropdown
-            label="Estado"
-            value={filters.status}
-            options={statusOptions}
-            onChange={(value) => setFilters((prev) => ({ ...prev, status: value }))}
-          />
-          <FilterDropdown
-            label="Disciplina"
-            value={filters.discipline}
-            options={disciplineOptions}
-            onChange={(value) => setFilters((prev) => ({ ...prev, discipline: value }))}
-          />
-          <button
-            type="button"
-            onClick={resetFilters}
-            className="rounded-lg border border-brand-line px-3 py-2 text-xs text-brand-muted transition hover:text-brand-white"
-          >
-            Limpiar filtros
-          </button>
-        </div>
+        <FilterPanel
+          activeCount={(filters.status ? 1 : 0) + (filters.discipline ? 1 : 0)}
+          onClear={resetFilters}
+        >
+          <div className="flex flex-wrap items-end gap-2">
+            <FilterDropdown
+              label="Estado"
+              value={filters.status}
+              options={statusOptions}
+              onChange={(value) => setFilters((prev) => ({ ...prev, status: value }))}
+            />
+            <FilterDropdown
+              label="Disciplina"
+              value={filters.discipline}
+              options={disciplineOptions}
+              onChange={(value) => setFilters((prev) => ({ ...prev, discipline: value }))}
+            />
+          </div>
+        </FilterPanel>
       </section>
 
       <section className="card-surface p-5">

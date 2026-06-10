@@ -4,6 +4,8 @@ import { branchesApi, organizationsApi, usersApi } from '../api/client'
 import Avatar from '../components/Avatar'
 import ConfirmDialog from '../components/ConfirmDialog'
 import DashboardHeader from '../components/DashboardHeader'
+import FilterDropdown from '../components/FilterDropdown'
+import FilterPanel from '../components/FilterPanel'
 import DataTable from '../components/ui/DataTable'
 import FormModal from '../components/FormModal'
 import RoleBadge from '../components/RoleBadge'
@@ -25,6 +27,9 @@ const userInitialForm = {
 }
 
 const editableRoles = ['superadmin', 'gym_admin', 'teacher', 'student']
+
+const roleLabels = { superadmin: 'Superadmin', gym_admin: 'Gym Admin', teacher: 'Profesor', student: 'Alumno' }
+const roleFilterOptions = [{ value: '', label: 'Todos' }, ...editableRoles.map((role) => ({ value: role, label: roleLabels[role] }))]
 
 export default function SuperadminUsersPage() {
   const navigate = useNavigate()
@@ -219,34 +224,20 @@ export default function SuperadminUsersPage() {
       />
 
       <section className="card-surface p-5">
-        <div className="grid gap-3 md:grid-cols-2">
-          <label className="space-y-1 text-sm">
-            <span>Organización</span>
-            <select
+        <FilterPanel
+          activeCount={(organizationFilter ? 1 : 0) + (roleFilter ? 1 : 0)}
+          onClear={() => setSearchParams(new URLSearchParams())}
+        >
+          <div className="flex flex-wrap items-end gap-2">
+            <FilterDropdown
+              label="Organización"
               value={organizationFilter}
-              onChange={(event) => setFilter('organization_id', event.target.value)}
-              className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
-            >
-              <option value="">Selecciona una organización</option>
-              {organizations.map((organization) => (
-                <option key={organization.id} value={organization.id}>
-                  {organization.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="space-y-1 text-sm">
-            <span>Rol</span>
-            <select value={roleFilter} onChange={(event) => setFilter('role', event.target.value)} className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2">
-              <option value="">Todos</option>
-              {editableRoles.map((role) => (
-                <option key={role} value={role}>
-                  {role}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
+              options={[{ value: '', label: 'Selecciona una organización' }, ...organizations.map((organization) => ({ value: String(organization.id), label: organization.name }))]}
+              onChange={(value) => setFilter('organization_id', value)}
+            />
+            <FilterDropdown label="Rol" value={roleFilter} options={roleFilterOptions} onChange={(value) => setFilter('role', value)} />
+          </div>
+        </FilterPanel>
       </section>
 
       {error ? <p className="rounded-xl border border-brand-red/50 bg-brand-red/10 p-3 text-sm text-red-100">{error}</p> : null}

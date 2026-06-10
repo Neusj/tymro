@@ -135,7 +135,7 @@ export default function GymAdminHolidaysPage() {
 
   return (
     <div className="space-y-6">
-      <DashboardHeader title="Gym Admin · Festivos" subtitle="Los festivos activos bloquean generacion de clases. Puedes gestionar base del sistema y excepciones manuales." />
+      <DashboardHeader title="Gym Admin · Festivos" subtitle="Los festivos activos bloquean generacion de clases. Puedes gestionar base del sistema y excepciones manuales." back={{ to: '/gym-admin/classes', label: 'Clases' }} />
 
       <section className="card-surface p-5">
         <form onSubmit={submit} className="grid gap-3 md:grid-cols-2">

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import DashboardHeader from '../components/DashboardHeader'
 import FilterDropdown from '../components/FilterDropdown'
+import FilterPanel from '../components/FilterPanel'
+import KpiStrip from '../components/KpiStrip'
 import DataTable from '../components/ui/DataTable'
 import ValueBadge from '../components/ui/ValueBadge'
 import { enrollmentsApi, recurringEnrollmentsApi } from '../api/client'
@@ -174,33 +176,24 @@ export default function StudentRecurringEnrollmentsPage() {
       {policyMessage ? <p className="rounded-lg border border-brand-line bg-black/20 px-3 py-2 text-xs text-brand-muted">{policyMessage}</p> : null}
 
       <section className="card-surface space-y-4 p-5">
-        <div className="grid gap-3 md:grid-cols-3">
-          <div className="rounded-xl border border-brand-line bg-black/20 p-3">
-            <p className="text-xs text-brand-muted">Total recurrencias</p>
-            <p className="text-xl font-semibold">{kpis.total}</p>
-          </div>
-          <div className="rounded-xl border border-brand-line bg-black/20 p-3">
-            <p className="text-xs text-brand-muted">Activas</p>
-            <p className="text-xl font-semibold">{kpis.active}</p>
-          </div>
-          <div className="rounded-xl border border-brand-line bg-black/20 p-3">
-            <p className="text-xs text-brand-muted">Pausadas</p>
-            <p className="text-xl font-semibold">{kpis.paused}</p>
-          </div>
-        </div>
+        <KpiStrip
+          items={[
+            { label: 'Total recurrencias', value: kpis.total },
+            { label: 'Activas', value: kpis.active },
+            { label: 'Pausadas', value: kpis.paused },
+          ]}
+        />
 
-        <div className="flex flex-wrap items-end gap-2">
-          <FilterDropdown label="Profesor" value={filters.teacher} options={options.teacherOptions} onChange={(value) => setFilters((prev) => ({ ...prev, teacher: value }))} />
-          <FilterDropdown label="Disciplina" value={filters.discipline} options={options.disciplineOptions} onChange={(value) => setFilters((prev) => ({ ...prev, discipline: value }))} />
-          <FilterDropdown label="Estado" value={filters.status} options={statusOptions} onChange={(value) => setFilters((prev) => ({ ...prev, status: value }))} />
-          <button
-            type="button"
-            onClick={() => setFilters(initialFilters)}
-            className="rounded-lg border border-brand-line px-3 py-2 text-xs text-brand-muted transition hover:text-brand-white"
-          >
-            Limpiar filtros
-          </button>
-        </div>
+        <FilterPanel
+          activeCount={(filters.teacher ? 1 : 0) + (filters.discipline ? 1 : 0) + (filters.status ? 1 : 0)}
+          onClear={() => setFilters(initialFilters)}
+        >
+          <div className="flex flex-wrap items-end gap-2">
+            <FilterDropdown label="Profesor" value={filters.teacher} options={options.teacherOptions} onChange={(value) => setFilters((prev) => ({ ...prev, teacher: value }))} />
+            <FilterDropdown label="Disciplina" value={filters.discipline} options={options.disciplineOptions} onChange={(value) => setFilters((prev) => ({ ...prev, discipline: value }))} />
+            <FilterDropdown label="Estado" value={filters.status} options={statusOptions} onChange={(value) => setFilters((prev) => ({ ...prev, status: value }))} />
+          </div>
+        </FilterPanel>
       </section>
 
       <section className="card-surface p-5">

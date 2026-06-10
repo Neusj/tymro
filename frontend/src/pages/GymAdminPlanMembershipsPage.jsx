@@ -146,11 +146,7 @@ export default function GymAdminPlanMembershipsPage() {
       <DashboardHeader
         title={`Membresias · ${plan?.name || 'Plan'}`}
         subtitle="Gestiona alumnos con este plan. Solo puedes quitar membresias sin consumo."
-        extra={
-          <button type="button" onClick={() => navigate('/gym-admin/plans')} className="rounded-xl border border-brand-line px-4 py-2 text-sm font-semibold text-brand-white">
-            Volver a planes
-          </button>
-        }
+        back={{ to: '/gym-admin/plans', label: 'Planes' }}
       />
 
       {error ? <p className="rounded-lg border border-brand-red/50 bg-brand-red/10 px-3 py-2 text-sm text-red-200">{error}</p> : null}

@@ -122,16 +122,12 @@ export default function GymAdminClassEditPage() {
     <div className="space-y-6">
       <DashboardHeader
         title="Gym Admin · Editar Clase"
-        subtitle="Actualiza profesor, horario, tipo y cupos de la clase." 
+        subtitle="Actualiza profesor, horario, tipo y cupos de la clase."
+        back={{ to: `/gym-admin/classes/${id}`, label: 'Detalle' }}
         extra={
-          <div className="flex gap-2">
-            <Link to={`/gym-admin/classes/${id}`} className="rounded-xl border border-brand-line px-4 py-2 text-sm font-semibold text-brand-muted">
-              Ver detalle
-            </Link>
-            <Link to="/gym-admin/classes" className="rounded-xl border border-brand-line px-4 py-2 text-sm font-semibold text-brand-muted">
-              Volver
-            </Link>
-          </div>
+          <Link to={`/gym-admin/classes/${id}`} className="rounded-xl border border-brand-line px-4 py-2 text-sm font-semibold text-brand-muted">
+            Ver detalle
+          </Link>
         }
       />
 

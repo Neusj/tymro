@@ -4,6 +4,8 @@ import { branchesApi, usersApi } from '../api/client'
 import Avatar from '../components/Avatar'
 import ConfirmDialog from '../components/ConfirmDialog'
 import DashboardHeader from '../components/DashboardHeader'
+import FilterDropdown from '../components/FilterDropdown'
+import FilterPanel from '../components/FilterPanel'
 import DataTable from '../components/ui/DataTable'
 import FormModal from '../components/FormModal'
 import RoleBadge from '../components/RoleBadge'
@@ -24,6 +26,12 @@ const userInitialForm = {
 }
 
 const allowedRoles = ['teacher', 'student']
+
+const roleFilterOptions = [
+  { value: '', label: 'Todos' },
+  { value: 'teacher', label: 'Profesor' },
+  { value: 'student', label: 'Alumno' },
+]
 
 export default function GymAdminUsersPage() {
   const navigate = useNavigate()
@@ -172,17 +180,9 @@ export default function GymAdminUsersPage() {
       />
 
       <section className="card-surface p-5">
-        <label className="space-y-1 text-sm">
-          <span>Filtrar por rol</span>
-          <select value={roleFilter} onChange={(event) => setRoleFilter(event.target.value)} className="w-full max-w-sm rounded-lg border border-brand-line bg-black/30 px-3 py-2">
-            <option value="">Todos</option>
-            {allowedRoles.map((role) => (
-              <option key={role} value={role}>
-                {role}
-              </option>
-            ))}
-          </select>
-        </label>
+        <FilterPanel activeCount={roleFilter ? 1 : 0} onClear={() => setRoleFilter('')}>
+          <FilterDropdown label="Rol" value={roleFilter} options={roleFilterOptions} onChange={setRoleFilter} />
+        </FilterPanel>
       </section>
 
       <section className="card-surface p-5">

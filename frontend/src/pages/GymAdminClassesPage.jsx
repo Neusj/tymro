@@ -5,6 +5,8 @@ import BulkActionModal from '../components/BulkActionModal'
 import ConfirmDialog from '../components/ConfirmDialog'
 import DashboardHeader from '../components/DashboardHeader'
 import FilterDropdown from '../components/FilterDropdown'
+import FilterPanel from '../components/FilterPanel'
+import KpiStrip from '../components/KpiStrip'
 import DataTable from '../components/ui/DataTable'
 import ValueBadge from '../components/ui/ValueBadge'
 
@@ -218,36 +220,27 @@ export default function GymAdminClassesPage() {
       />
 
       <section className="card-surface p-5 space-y-4">
-        <h2 className="panel-title">Resumen</h2>
-        <div className="grid gap-3 md:grid-cols-3">
-          <div className="rounded-xl border border-brand-line bg-black/20 p-3">
-            <p className="text-xs text-brand-muted">Total clases</p>
-            <p className="text-xl font-semibold">{totals.total_classes || 0}</p>
-          </div>
-          <div className="rounded-xl border border-brand-line bg-black/20 p-3">
-            <p className="text-xs text-brand-muted">Inscritos</p>
-            <p className="text-xl font-semibold">{totals.total_active_enrollments || 0}</p>
-          </div>
-          <div className="rounded-xl border border-brand-line bg-black/20 p-3">
-            <p className="text-xs text-brand-muted">Ocupacion promedio</p>
-            <p className="text-xl font-semibold">{totals.occupancy_percent || 0}%</p>
-          </div>
-        </div>
+        <h2 className="panel-title hidden md:block">Resumen</h2>
+        <KpiStrip
+          items={[
+            { label: 'Total clases', value: totals.total_classes || 0 },
+            { label: 'Inscritos', value: totals.total_active_enrollments || 0 },
+            { label: 'Ocupacion promedio', value: `${totals.occupancy_percent || 0}%` },
+          ]}
+        />
 
-        <div className="flex flex-wrap items-center gap-2">
-          <FilterDropdown label="Estado" value={activeStatus} options={STATUS_OPTIONS} onChange={setActiveStatus} />
-          <FilterDropdown label="Disciplina" value={activeDiscipline} options={disciplineOptions} onChange={setActiveDiscipline} />
-          <button
-            type="button"
-            onClick={() => {
-              setActiveStatus('')
-              setActiveDiscipline('')
-            }}
-            className="rounded-lg border border-brand-line px-3 py-2 text-xs text-brand-muted hover:text-brand-white"
-          >
-            Limpiar filtros
-          </button>
-        </div>
+        <FilterPanel
+          activeCount={(activeStatus ? 1 : 0) + (activeDiscipline ? 1 : 0)}
+          onClear={() => {
+            setActiveStatus('')
+            setActiveDiscipline('')
+          }}
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <FilterDropdown label="Estado" value={activeStatus} options={STATUS_OPTIONS} onChange={setActiveStatus} />
+            <FilterDropdown label="Disciplina" value={activeDiscipline} options={disciplineOptions} onChange={setActiveDiscipline} />
+          </div>
+        </FilterPanel>
       </section>
 
       <section className="card-surface p-5">

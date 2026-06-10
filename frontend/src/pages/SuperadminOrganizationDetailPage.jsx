@@ -130,6 +130,7 @@ export default function SuperadminOrganizationDetailPage() {
       <DashboardHeader
         title={`Organización · ${organization?.name || ''}`}
         subtitle="Contexto de sucursales y usuarios de esta organización."
+        back={{ to: '/superadmin/organizations', label: 'Organizaciones' }}
         extra={
           <div className="flex gap-2">
             <button type="button" onClick={openCreateBranch} className="rounded-xl bg-brand-orange px-4 py-2 text-sm font-semibold text-white">

@@ -312,6 +312,7 @@ export default function GymAdminClassTemplatesPage() {
       <DashboardHeader
         title="Gym Admin · Series recurrentes"
         subtitle="Crea, edita y administra series. Al crear, las clases se generan automaticamente segun fecha inicio/fin."
+        back={{ to: '/gym-admin/classes', label: 'Clases' }}
       />
 
       <section className="card-surface p-5 space-y-3">
