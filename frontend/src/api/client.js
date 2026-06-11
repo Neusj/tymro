@@ -6,6 +6,15 @@ const api = axios.create({
   baseURL: API_BASE_URL,
 })
 
+// Instancia separada para endpoints PÚBLICOS (registro de clase de prueba y
+// pantalla pública de asistencia). NUNCA adjunta Authorization ni tiene el
+// interceptor de 401→/login: así un token caducado guardado en localStorage no
+// puede provocar un 401 espurio ni expulsar al visitante anónimo. `setAuthToken`
+// no la toca (solo escribe en `api`).
+const publicApi = axios.create({
+  baseURL: API_BASE_URL,
+})
+
 // Claves de sesión (mismas que usa AuthContext).
 const TOKEN_KEY = 'tymro_token'
 const USER_KEY = 'tymro_user'
@@ -19,8 +28,19 @@ api.interceptors.response.use(
     const status = error?.response?.status
     const requestUrl = error?.config?.url || ''
     const isAuthEndpoint = requestUrl.includes('/login/') || requestUrl.includes('/password-reset')
+    // Endpoints públicos AllowAny (clase de prueba + pantalla pública de asistencia):
+    // aunque normalmente usan `publicApi` sin token, blindamos también `api` para que
+    // un 401 espurio jamás redirija a /login a un visitante anónimo. OJO: se enumeran
+    // de forma exacta y NO con un `/public/` amplio, porque /public/trial-classes/ y
+    // /public/trial/book/ SÍ son autenticados (alumno) y su 401 sí debe redirigir.
+    const isPublicEndpoint =
+      requestUrl.includes('/public/invite/') ||
+      requestUrl.includes('/public/register/') ||
+      requestUrl.includes('/public/verify-email/') ||
+      requestUrl.includes('/attendance-qr/screen-auto') ||
+      requestUrl.includes('/attendance-qr/screen/')
 
-    if (status === 401 && !isAuthEndpoint && window.location.pathname !== '/login') {
+    if (status === 401 && !isAuthEndpoint && !isPublicEndpoint && window.location.pathname !== '/login') {
       localStorage.removeItem(TOKEN_KEY)
       localStorage.removeItem(USER_KEY)
       setAuthToken(null)
@@ -90,14 +110,16 @@ export const authApi = {
 }
 
 // Registro público de prospectos + clase de prueba gratis (links por gimnasio).
+// Usa `publicApi` (sin Authorization, sin redirect 401): la persona que escanea
+// el QR no está autenticada y un token viejo en el navegador no debe interferir.
 export const registrationApi = {
   // Valida el slug del gym y devuelve su branding para la landing.
   validateInvite: async ({ slug }) => {
-    const { data } = await api.get('/public/invite/', { params: { slug } })
+    const { data } = await publicApi.get('/public/invite/', { params: { slug } })
     return data
   },
   register: async ({ slug, firstName, lastName, email, password, phone }) => {
-    const { data } = await api.post('/public/register/', {
+    const { data } = await publicApi.post('/public/register/', {
       slug,
       first_name: firstName,
       last_name: lastName,
@@ -108,7 +130,7 @@ export const registrationApi = {
     return data
   },
   verifyEmail: async ({ uid, token }) => {
-    const { data } = await api.post('/public/verify-email/', { uid, token })
+    const { data } = await publicApi.post('/public/verify-email/', { uid, token })
     return data
   },
   listTrialClasses: async () => {
@@ -447,13 +469,15 @@ export const attendanceQrApi = {
     const { data } = await api.get('/attendance-qr/current/')
     return data
   },
+  // Pantalla pública de recepción (sin sesión): usa `publicApi`, sin token.
   screen: async (code) => {
-    const { data } = await api.post('/attendance-qr/screen/', { code })
+    const { data } = await publicApi.post('/attendance-qr/screen/', { code })
     return data
   },
   // Pantalla automática por gym: usa el código permanente embebido en la URL.
+  // Pública (TV/tablet sin sesión): `publicApi`, sin token.
   screenAuto: async (code) => {
-    const { data } = await api.get('/attendance-qr/screen-auto/', { params: { code } })
+    const { data } = await publicApi.get('/attendance-qr/screen-auto/', { params: { code } })
     return data
   },
   screenCode: async () => {

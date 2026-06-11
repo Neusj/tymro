@@ -34,8 +34,10 @@ export default function GymAdminClassCreatePage() {
     ])
     setBranches(branchesData)
     setTeachers(teachersData)
-    setClassTypes(classTypeData)
-    setDisciplines(disciplineData)
+    // Al crear una clase solo ofrecemos tipos/disciplinas activos. (is_active !== false
+    // mantiene compatibilidad con registros previos sin el campo.)
+    setClassTypes((classTypeData || []).filter((item) => item.is_active !== false))
+    setDisciplines((disciplineData || []).filter((item) => item.is_active !== false))
   }
 
   useEffect(() => {

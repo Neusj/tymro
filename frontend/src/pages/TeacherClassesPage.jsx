@@ -49,11 +49,11 @@ function firstApiError(detail, fallback) {
   return fallback
 }
 
-function BalanceBadge({ available }) {
-  const hasBalance = Number(available || 0) > 0
+function BalanceBadge({ available, unlimited = false }) {
+  const hasBalance = unlimited || Number(available || 0) > 0
   return (
     <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${hasBalance ? 'border-emerald-500/40 text-emerald-200' : 'border-brand-red/40 text-red-200'}`}>
-      {hasBalance ? `${available} clases` : 'Sin saldo'}
+      {unlimited ? 'Ilimitado' : hasBalance ? `${available} clases` : 'Sin saldo'}
     </span>
   )
 }
@@ -577,7 +577,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
                   <span className="font-semibold">{student.name}</span>
                   <span className="block text-xs text-brand-muted">{student.email || student.username}</span>
                   <span className="mt-1 block">
-                    <BalanceBadge available={student.available_classes} />
+                    <BalanceBadge available={student.available_classes} unlimited={student.unlimited_classes} />
                   </span>
                   <span className="mt-1 block">
                     <PlanStatusBadge student={student} />
@@ -659,7 +659,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
                   <span className="font-semibold">{student.name}</span>
                   <span className="block text-xs text-brand-muted">{student.email || student.username}</span>
                   <span className="mt-1 block">
-                    <BalanceBadge available={student.available_classes} />
+                    <BalanceBadge available={student.available_classes} unlimited={student.unlimited_classes} />
                   </span>
                   <span className="mt-1 block">
                     <PlanStatusBadge student={student} />
@@ -738,7 +738,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
                   <span className="font-semibold">{student.name}</span>
                   <span className="block text-xs text-brand-muted">{student.email || student.username}</span>
                   <span className="mt-1 block">
-                    <BalanceBadge available={student.available_classes} />
+                    <BalanceBadge available={student.available_classes} unlimited={student.unlimited_classes} />
                   </span>
                 </span>
                 <input

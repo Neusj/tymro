@@ -46,12 +46,12 @@ export default function AssignPlanPage() {
     user: '',
     plan: '',
     start_date: new Date().toISOString().slice(0, 10),
-    total_classes: '',
     discount_percentage: '',
   })
 
   const selectedPlan = useMemo(() => plans.find((item) => String(item.id) === String(form.plan)), [plans, form.plan])
-  const totalClasses = form.total_classes !== '' ? Number(form.total_classes) : Number(selectedPlan?.total_classes || 0)
+  const isUnlimited = Boolean(selectedPlan?.unlimited_classes)
+  const totalClasses = Number(selectedPlan?.total_classes || 0)
   const discount = form.discount_percentage !== '' ? Number(form.discount_percentage) : Number(selectedPlan?.discount_percentage || 0)
   const basePrice = Number(selectedPlan?.price || 0)
   const finalEstimate = Math.max(basePrice * (1 - discount / 100), 0)
@@ -99,7 +99,6 @@ export default function AssignPlanPage() {
         user: Number(form.user),
         plan: Number(form.plan),
         start_date: form.start_date,
-        total_classes: totalClasses,
         discount_percentage: discount,
       })
       setNotice('Plan asignado correctamente.')
@@ -165,18 +164,11 @@ export default function AssignPlanPage() {
               className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
             />
           </label>
-          <label className="space-y-1 text-sm">
-            <span>Total clases (editable)</span>
-            <input
-              type="number"
-              min="0"
-              disabled={working}
-              value={form.total_classes}
-              onChange={(event) => setForm((prev) => ({ ...prev, total_classes: event.target.value }))}
-              placeholder={selectedPlan ? String(selectedPlan.total_classes) : 'Segun plan'}
-              className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
-            />
-          </label>
+          <div className="rounded-lg border border-brand-line bg-black/20 px-3 py-2 text-sm">
+            <p className="text-brand-muted">Clases del plan</p>
+            <p className="text-base font-semibold">{selectedPlan ? (isUnlimited ? 'Ilimitado' : totalClasses) : 'Segun plan'}</p>
+            <p className="text-xs text-brand-muted">Definidas por el plan (no editable)</p>
+          </div>
           <label className="space-y-1 text-sm">
             <span>Descuento %</span>
             <input
@@ -194,7 +186,7 @@ export default function AssignPlanPage() {
           <div className="rounded-lg border border-brand-line bg-black/20 px-3 py-2 text-sm">
             <p className="text-brand-muted">Precio final estimado</p>
             <p className="text-lg font-semibold">${finalEstimate.toFixed(2)}</p>
-            <p className="text-xs text-brand-muted">Clases estimadas: {Number.isFinite(totalClasses) ? totalClasses : 0}</p>
+            <p className="text-xs text-brand-muted">Clases: {isUnlimited ? 'Ilimitado' : Number.isFinite(totalClasses) ? totalClasses : 0}</p>
           </div>
           <div className="md:col-span-2 flex justify-end">
             <button type="submit" disabled={working || loading} className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white disabled:opacity-60">

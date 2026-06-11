@@ -107,9 +107,11 @@ class Person(TimestampedModel):
 class ClassType(TimestampedModel):
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='class_types')
     name = models.CharField(max_length=120)
+    description = models.TextField(blank=True, default='')
     color = models.CharField(max_length=20, default='#f97316')
     duration_minutes = models.PositiveIntegerField(default=60)
     is_private = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
 
     class Meta:
         ordering = ['name']
@@ -122,6 +124,8 @@ class ClassType(TimestampedModel):
 class Discipline(TimestampedModel):
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='disciplines')
     name = models.CharField(max_length=120)
+    description = models.TextField(blank=True, default='')
+    is_active = models.BooleanField(default=True)
 
     class Meta:
         ordering = ['name']
@@ -347,6 +351,7 @@ class Plan(TimestampedModel):
     name = models.CharField(max_length=120)
     plan_type = models.CharField(max_length=20, choices=PlanType.choices)
     total_classes = models.IntegerField()
+    unlimited_classes = models.BooleanField(default=False)
     duration_days = models.IntegerField()
     price = models.FloatField()
     discount_percentage = models.FloatField(default=0)
@@ -366,6 +371,7 @@ class StudentPlan(TimestampedModel):
     start_date = models.DateField()
     end_date = models.DateField()
     total_classes = models.IntegerField()
+    unlimited_classes = models.BooleanField(default=False)
     classes_used = models.IntegerField(default=0)
     discount_percentage = models.FloatField(default=0)
     final_price = models.FloatField(null=True, blank=True)

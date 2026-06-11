@@ -34,7 +34,9 @@ def get_active_student_plan(student, on_date=None):
 
 def validate_student_plan_for_reservation(student, on_date=None):
     student_plan = get_active_student_plan(student, on_date=on_date)
-    if not student_plan or student_plan.classes_used >= student_plan.total_classes:
+    if not student_plan:
+        raise ReservationRuleError('No tienes clases disponibles o plan activo', code='plan_unavailable')
+    if not student_plan.unlimited_classes and student_plan.classes_used >= student_plan.total_classes:
         raise ReservationRuleError('No tienes clases disponibles o plan activo', code='plan_unavailable')
     return student_plan
 

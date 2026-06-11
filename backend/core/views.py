@@ -588,6 +588,9 @@ class PublicInviteValidateView(APIView):
     """Valida el link público y devuelve la marca del gimnasio para la landing.
     Slug desconocido o registro desactivado → 404."""
 
+    # Endpoint público: no autenticamos. Un token caducado en el header no debe
+    # producir 401 en una vista AllowAny (la autenticación corre antes que el permiso).
+    authentication_classes = []
     permission_classes = [AllowAny]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = 'public_invite'
@@ -603,6 +606,8 @@ class PublicRegisterView(APIView):
     """Registro público de un prospecto. La organización se fija server-side
     desde el slug; el rol es siempre STUDENT. El payload no puede elegir org/rol."""
 
+    # Endpoint público: no autenticamos (ver PublicInviteValidateView).
+    authentication_classes = []
     permission_classes = [AllowAny]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = 'public_register'
@@ -658,6 +663,9 @@ class PublicVerifyEmailView(APIView):
     """Confirma el email con uid + token del correo y auto-loguea (devuelve token
     de auth) para que el prospecto pueda agendar su clase de prueba."""
 
+    # Endpoint público: no autenticamos (ver PublicInviteValidateView). La identidad
+    # se prueba con el uid+token del correo, no con el header Authorization.
+    authentication_classes = []
     permission_classes = [AllowAny]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = 'public_verify'
@@ -1024,6 +1032,9 @@ class AttendanceQrCurrentView(APIView):
 
 
 class AttendanceQrScreenView(APIView):
+    # Pantalla pública de recepción: no autenticamos. Un token caducado en el
+    # header no debe producir 401 en esta vista AllowAny.
+    authentication_classes = []
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -1036,6 +1047,8 @@ class AttendanceQrScreenAutoView(APIView):
     devuelve el QR rotante sin requerir sesión temporal. Pensada para el enlace
     fijo de recepción (TV/tablet) que se abre y muestra el QR solo."""
 
+    # Pantalla pública por gimnasio: no autenticamos (ver AttendanceQrScreenView).
+    authentication_classes = []
     permission_classes = [AllowAny]
 
     def get(self, request):
@@ -1736,8 +1749,14 @@ class GymClassViewSet(ModelViewSet):
             student_plan = active_plan_by_student.get(student.id)
             latest_plan = latest_plan_by_student.get(student.id)
             remaining_classes = 0
+            has_available = False
             if student_plan:
-                remaining_classes = max((student_plan.total_classes or 0) - (student_plan.classes_used or 0), 0)
+                if student_plan.unlimited_classes:
+                    remaining_classes = None
+                    has_available = True
+                else:
+                    remaining_classes = max((student_plan.total_classes or 0) - (student_plan.classes_used or 0), 0)
+                    has_available = remaining_classes > 0
             plan_status = _plan_status_payload(latest_plan, today=today)
             full_name = f'{student.first_name} {student.last_name}'.strip()
             results.append(
@@ -1752,7 +1771,8 @@ class GymClassViewSet(ModelViewSet):
                     'attendance_marked_at': attendance.marked_at if attendance else None,
                     'attendance_checked_at': attendance.checked_at if attendance else None,
                     'available_classes': remaining_classes,
-                    'has_available_classes': remaining_classes > 0,
+                    'has_available_classes': has_available,
+                    'unlimited_classes': bool(student_plan.unlimited_classes) if student_plan else False,
                     **plan_status,
                 }
             )
@@ -1789,8 +1809,14 @@ class GymClassViewSet(ModelViewSet):
             student_plan = active_plan_by_student.get(student.id)
             latest_plan = latest_plan_by_student.get(student.id)
             remaining_classes = 0
+            has_available = False
             if student_plan:
-                remaining_classes = max((student_plan.total_classes or 0) - (student_plan.classes_used or 0), 0)
+                if student_plan.unlimited_classes:
+                    remaining_classes = None
+                    has_available = True
+                else:
+                    remaining_classes = max((student_plan.total_classes or 0) - (student_plan.classes_used or 0), 0)
+                    has_available = remaining_classes > 0
             plan_status = _plan_status_payload(latest_plan, today=today)
             full_name = f'{student.first_name} {student.last_name}'.strip()
             results.append(
@@ -1801,7 +1827,8 @@ class GymClassViewSet(ModelViewSet):
                     'email': student.email,
                     'branch_id': student.branch_id,
                     'available_classes': remaining_classes,
-                    'has_available_classes': remaining_classes > 0,
+                    'has_available_classes': has_available,
+                    'unlimited_classes': bool(student_plan.unlimited_classes) if student_plan else False,
                     **plan_status,
                 }
             )
@@ -2551,6 +2578,7 @@ class MembershipPlanViewSet(ModelViewSet):
                 start_date=validated['start_date'],
                 end_date=validated['end_date'],
                 total_classes=validated['total_classes'],
+                unlimited_classes=validated['unlimited_classes'],
                 discount_percentage=validated['discount_percentage'],
                 final_price=max(float(plan.price) * (1 - (validated['discount_percentage'] / 100)), 0),
                 is_active=True,

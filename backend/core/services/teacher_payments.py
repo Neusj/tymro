@@ -59,6 +59,13 @@ def _calculate_revenue_for_class(class_instance):
         student_plan = getattr(log, 'student_plan', None)
         if not student_plan:
             continue
+        # TODO(pagos-profesores): la política de revenue-share para planes ILIMITADOS
+        # está pendiente de definir. No existe un "precio por clase" derivable
+        # (no hay total_classes finito), y usar divisor=1 inflaría el ingreso por clase.
+        # Hasta cerrar la política en el módulo de pagos a profesores, los consumos de
+        # planes ilimitados se EXCLUYEN de la base de ingreso automática (no aportan).
+        if student_plan.unlimited_classes:
+            continue
         final_price = float(student_plan.final_price or 0)
         total_classes = int(student_plan.total_classes or 0)
         divisor = total_classes if total_classes > 0 else 1

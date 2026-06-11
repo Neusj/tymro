@@ -12,6 +12,7 @@ const initialForm = {
   name: '',
   plan_type: 'monthly',
   total_classes: 8,
+  unlimited_classes: false,
   duration_days: 30,
   price: 0,
   discount_percentage: 0,
@@ -115,10 +116,12 @@ export default function PlanListPage({
         setError('El nombre del plan es obligatorio.')
         return
       }
+      const unlimitedClasses = toBool(form.unlimited_classes, false)
       const payload = {
         name: normalizedName,
         plan_type: form.plan_type || 'monthly',
-        total_classes: Number(form.total_classes),
+        total_classes: unlimitedClasses ? 0 : Number(form.total_classes),
+        unlimited_classes: unlimitedClasses,
         duration_days: Number(form.duration_days),
         price: Number(form.price),
         discount_percentage: Number(form.discount_percentage),
@@ -158,6 +161,7 @@ export default function PlanListPage({
       name: plan.name || '',
       plan_type: plan.plan_type || 'monthly',
       total_classes: plan.total_classes ?? 0,
+      unlimited_classes: toBool(plan.unlimited_classes, false),
       duration_days: plan.duration_days ?? 30,
       price: plan.price ?? 0,
       discount_percentage: plan.discount_percentage ?? 0,
@@ -192,7 +196,7 @@ export default function PlanListPage({
       { key: 'name', label: 'Nombre' },
       ...(user?.role === 'superadmin' ? [{ key: 'organization_name', label: 'Organizacion' }] : []),
       { key: 'plan_type', label: 'Tipo', render: (row) => planTypeLabel[row.plan_type] || row.plan_type || '-' },
-      { key: 'total_classes', label: 'Clases' },
+      { key: 'total_classes', label: 'Clases', render: (row) => (row.unlimited_classes ? 'Ilimitado' : row.total_classes) },
       { key: 'duration_days', label: 'Duración (días)' },
       { key: 'price', label: 'Precio', render: (row) => `$${Number(row.price || 0).toFixed(0)}` },
       { key: 'discount_percentage', label: 'Desc. %', render: (row) => `${Number(row.discount_percentage || 0)}%` },
@@ -296,13 +300,23 @@ export default function PlanListPage({
           <label className="space-y-1 text-sm">
             <span>Clases totales</span>
             <input
-              required
+              required={!form.unlimited_classes}
+              disabled={form.unlimited_classes}
               type="number"
               min="0"
-              value={form.total_classes}
+              value={form.unlimited_classes ? '' : form.total_classes}
+              placeholder={form.unlimited_classes ? 'Ilimitado' : ''}
               onChange={(event) => setForm((prev) => ({ ...prev, total_classes: event.target.value }))}
-              className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
+              className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2 disabled:opacity-50"
             />
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={form.unlimited_classes}
+              onChange={(event) => setForm((prev) => ({ ...prev, unlimited_classes: event.target.checked }))}
+            />
+            Clases ilimitadas
           </label>
           <label className="space-y-1 text-sm">
             <span>Duración (días)</span>

@@ -254,9 +254,11 @@ class PersonSerializer(serializers.ModelSerializer):
 class ClassTypeSerializer(serializers.ModelSerializer):
     class Meta:
         model = ClassType
-        fields = ['id', 'organization', 'name']
+        fields = ['id', 'organization', 'name', 'description', 'is_active']
         extra_kwargs = {
             'organization': {'required': False},
+            'description': {'required': False},
+            'is_active': {'required': False},
         }
         validators = []
 
@@ -291,9 +293,11 @@ class ClassTypeSerializer(serializers.ModelSerializer):
 class DisciplineSerializer(serializers.ModelSerializer):
     class Meta:
         model = Discipline
-        fields = ['id', 'organization', 'name']
+        fields = ['id', 'organization', 'name', 'description', 'is_active']
         extra_kwargs = {
             'organization': {'required': False},
+            'description': {'required': False},
+            'is_active': {'required': False},
         }
         validators = []
 
@@ -1045,6 +1049,7 @@ class PlanSerializer(serializers.ModelSerializer):
             'name',
             'plan_type',
             'total_classes',
+            'unlimited_classes',
             'duration_days',
             'price',
             'discount_percentage',
@@ -1098,6 +1103,7 @@ class StudentPlanSerializer(serializers.ModelSerializer):
             'start_date',
             'end_date',
             'total_classes',
+            'unlimited_classes',
             'classes_used',
             'remaining_classes',
             'validity_status',
@@ -1109,12 +1115,15 @@ class StudentPlanSerializer(serializers.ModelSerializer):
             'is_active',
         ]
         read_only_fields = [
+            'unlimited_classes',
             'classes_used',
             'remaining_classes',
             'final_price',
         ]
 
     def get_remaining_classes(self, obj):
+        if getattr(obj, 'unlimited_classes', False):
+            return None
         return max((obj.total_classes or 0) - (obj.classes_used or 0), 0)
 
     def get_user_name(self, obj):
@@ -1179,7 +1188,6 @@ class StudentPlanAssignSerializer(serializers.Serializer):
     user = serializers.PrimaryKeyRelatedField(queryset=User.objects.filter(role=User.Role.STUDENT, is_active=True))
     plan = serializers.PrimaryKeyRelatedField(queryset=Plan.objects.filter(is_active=True))
     start_date = serializers.DateField()
-    total_classes = serializers.IntegerField(required=False, min_value=0)
     discount_percentage = serializers.FloatField(required=False, min_value=0, max_value=100)
 
     def validate(self, attrs):
@@ -1187,7 +1195,9 @@ class StudentPlanAssignSerializer(serializers.Serializer):
         student = attrs['user']
         if plan.organization_id != student.organization_id:
             raise serializers.ValidationError({'plan': 'El plan no pertenece a la organización del alumno.'})
-        attrs['total_classes'] = attrs.get('total_classes', plan.total_classes)
+        # La cantidad de clases (y si es ilimitado) se DERIVA del plan, no es editable en la asignación.
+        attrs['total_classes'] = plan.total_classes
+        attrs['unlimited_classes'] = plan.unlimited_classes
         attrs['discount_percentage'] = attrs.get('discount_percentage', plan.discount_percentage or 0)
         attrs['end_date'] = attrs['start_date'] + timedelta(days=max(plan.duration_days - 1, 0))
         return attrs

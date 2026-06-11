@@ -51,9 +51,14 @@ export default function GymAdminDisciplinesPage() {
   const [disciplines, setDisciplines] = useState([])
   const [loading, setLoading] = useState(true)
   const [newName, setNewName] = useState('')
+  const [newDescription, setNewDescription] = useState('')
+  const [newActive, setNewActive] = useState(true)
+  const [creating, setCreating] = useState(false)
   const [error, setError] = useState('')
   const [editing, setEditing] = useState(null)
   const [editName, setEditName] = useState('')
+  const [editDescription, setEditDescription] = useState('')
+  const [editActive, setEditActive] = useState(true)
   const [deleting, setDeleting] = useState(null)
 
   const loadData = async () => {
@@ -70,16 +75,32 @@ export default function GymAdminDisciplinesPage() {
     loadData()
   }, [])
 
-  const createItem = async () => {
+  const openCreate = () => {
+    setNewName('')
+    setNewDescription('')
+    setNewActive(true)
+    setError('')
+    setCreating(true)
+  }
+
+  const submitCreate = async (event) => {
+    event.preventDefault()
     const name = newName.trim()
     if (!name) {
       return
     }
     setError('')
     try {
-      const created = await disciplinesApi.create({ name })
+      const created = await disciplinesApi.create({
+        name,
+        description: newDescription.trim(),
+        is_active: newActive,
+      })
       setDisciplines((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)))
       setNewName('')
+      setNewDescription('')
+      setNewActive(true)
+      setCreating(false)
     } catch (apiError) {
       setError(extractApiErrorMessage(apiError, 'No se pudo crear la disciplina.'))
     }
@@ -88,6 +109,8 @@ export default function GymAdminDisciplinesPage() {
   const openEdit = (item) => {
     setEditing(item)
     setEditName(item.name || '')
+    setEditDescription(item.description || '')
+    setEditActive(item.is_active !== false)
     setError('')
   }
 
@@ -99,9 +122,14 @@ export default function GymAdminDisciplinesPage() {
 
     setError('')
     try {
-      await disciplinesApi.update(editing.id, { name: editName })
+      await disciplinesApi.update(editing.id, {
+        name: editName,
+        description: editDescription.trim(),
+        is_active: editActive,
+      })
       setEditing(null)
       setEditName('')
+      setEditDescription('')
       await loadData()
     } catch (apiError) {
       setError(extractApiErrorMessage(apiError, 'No se pudo editar la disciplina.'))
@@ -126,6 +154,21 @@ export default function GymAdminDisciplinesPage() {
   const columns = useMemo(
     () => [
       { key: 'name', label: 'Nombre' },
+      {
+        key: 'is_active',
+        label: 'Estado',
+        render: (row) => (
+          <span
+            className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold ${
+              row.is_active === false
+                ? 'border-brand-line bg-black/30 text-brand-muted'
+                : 'border-success-line bg-success-soft text-success'
+            }`}
+          >
+            {row.is_active === false ? 'Inactivo' : 'Activo'}
+          </span>
+        ),
+      },
       ...(canManage
         ? [
             {
@@ -157,25 +200,57 @@ export default function GymAdminDisciplinesPage() {
       />
 
       {canManage ? (
-        <section className="card-surface p-5 space-y-3">
-          <div className="flex flex-col gap-2 sm:flex-row">
-            <input
-              value={newName}
-              onChange={(event) => setNewName(event.target.value)}
-              placeholder="Ej: BJJ, Box, Muay Thai"
-              className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2 text-sm"
-            />
-            <button type="button" onClick={createItem} className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white">
-              Crear
-            </button>
-          </div>
-          {error ? <p className="rounded-lg border border-brand-red/50 bg-brand-red/10 px-3 py-2 text-sm text-red-200">{error}</p> : null}
-        </section>
+        <div className="flex justify-end">
+          <button type="button" onClick={openCreate} className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white">
+            Crear disciplina
+          </button>
+        </div>
       ) : null}
 
       <section className="card-surface p-5">
         <DataTable columns={columns} data={disciplines} loading={loading} />
       </section>
+
+      <FormModal open={creating} onClose={() => setCreating(false)} title="Nueva disciplina">
+        <form onSubmit={submitCreate} className="space-y-3">
+          <label className="space-y-1 text-sm block">
+            <span>Nombre</span>
+            <input
+              required
+              autoFocus
+              value={newName}
+              onChange={(event) => setNewName(event.target.value)}
+              placeholder="Ej: BJJ, Box, Muay Thai"
+              className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
+            />
+          </label>
+          <label className="space-y-1 text-sm block">
+            <span>Descripción <span className="text-brand-dim">(opcional)</span></span>
+            <textarea
+              rows={3}
+              value={newDescription}
+              onChange={(event) => setNewDescription(event.target.value)}
+              placeholder="Detalle opcional de la disciplina"
+              className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
+            />
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={newActive}
+              onChange={(event) => setNewActive(event.target.checked)}
+              className="h-4 w-4 rounded border-brand-line bg-black/30"
+            />
+            <span>Activo</span>
+          </label>
+          {error ? <p className="rounded-lg border border-brand-red/50 bg-brand-red/10 px-3 py-2 text-sm text-red-200">{error}</p> : null}
+          <div className="flex justify-end">
+            <button type="submit" className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white">
+              Crear
+            </button>
+          </div>
+        </form>
+      </FormModal>
 
       <FormModal open={Boolean(editing)} onClose={() => setEditing(null)} title="Editar disciplina">
         <form onSubmit={submitEdit} className="space-y-3">
@@ -187,6 +262,25 @@ export default function GymAdminDisciplinesPage() {
               onChange={(event) => setEditName(event.target.value)}
               className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
             />
+          </label>
+          <label className="space-y-1 text-sm block">
+            <span>Descripción <span className="text-brand-dim">(opcional)</span></span>
+            <textarea
+              rows={3}
+              value={editDescription}
+              onChange={(event) => setEditDescription(event.target.value)}
+              placeholder="Detalle opcional de la disciplina"
+              className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
+            />
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={editActive}
+              onChange={(event) => setEditActive(event.target.checked)}
+              className="h-4 w-4 rounded border-brand-line bg-black/30"
+            />
+            <span>Activo</span>
           </label>
           {error ? <p className="rounded-lg border border-brand-red/50 bg-brand-red/10 px-3 py-2 text-sm text-red-200">{error}</p> : null}
           <div className="flex justify-end">
