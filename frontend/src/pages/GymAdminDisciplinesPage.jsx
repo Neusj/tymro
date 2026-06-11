@@ -1,9 +1,11 @@
 ﻿import { useEffect, useMemo, useState } from 'react'
 import { disciplinesApi } from '../api/client'
+import { useAuth } from '../auth/AuthContext'
 import ConfirmDialog from '../components/ConfirmDialog'
 import DashboardHeader from '../components/DashboardHeader'
 import FormModal from '../components/FormModal'
 import DataTable from '../components/ui/DataTable'
+import { canManageOperational } from '../utils/roles'
 
 const extractApiErrorMessage = (apiError, fallbackMessage) => {
   const detail = apiError?.response?.data
@@ -44,6 +46,8 @@ const extractApiErrorMessage = (apiError, fallbackMessage) => {
 }
 
 export default function GymAdminDisciplinesPage() {
+  const { user } = useAuth()
+  const canManage = canManageOperational(user?.role)
   const [disciplines, setDisciplines] = useState([])
   const [loading, setLoading] = useState(true)
   const [newName, setNewName] = useState('')
@@ -122,22 +126,26 @@ export default function GymAdminDisciplinesPage() {
   const columns = useMemo(
     () => [
       { key: 'name', label: 'Nombre' },
-      {
-        key: 'actions',
-        label: 'Acciones',
-        render: (row) => (
-          <>
-            <button type="button" onClick={() => openEdit(row)} className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue">
-              Editar
-            </button>
-            <button type="button" onClick={() => setDeleting(row)} className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 transition hover:bg-brand-red/10">
-              Eliminar
-            </button>
-          </>
-        ),
-      },
+      ...(canManage
+        ? [
+            {
+              key: 'actions',
+              label: 'Acciones',
+              render: (row) => (
+                <>
+                  <button type="button" onClick={() => openEdit(row)} className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue">
+                    Editar
+                  </button>
+                  <button type="button" onClick={() => setDeleting(row)} className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 transition hover:bg-brand-red/10">
+                    Eliminar
+                  </button>
+                </>
+              ),
+            },
+          ]
+        : []),
     ],
-    [],
+    [canManage],
   )
 
   return (
@@ -148,20 +156,22 @@ export default function GymAdminDisciplinesPage() {
         back={{ to: '/gym-admin/classes', label: 'Clases' }}
       />
 
-      <section className="card-surface p-5 space-y-3">
-        <div className="flex flex-col gap-2 sm:flex-row">
-          <input
-            value={newName}
-            onChange={(event) => setNewName(event.target.value)}
-            placeholder="Ej: BJJ, Box, Muay Thai"
-            className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2 text-sm"
-          />
-          <button type="button" onClick={createItem} className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white">
-            Crear
-          </button>
-        </div>
-        {error ? <p className="rounded-lg border border-brand-red/50 bg-brand-red/10 px-3 py-2 text-sm text-red-200">{error}</p> : null}
-      </section>
+      {canManage ? (
+        <section className="card-surface p-5 space-y-3">
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <input
+              value={newName}
+              onChange={(event) => setNewName(event.target.value)}
+              placeholder="Ej: BJJ, Box, Muay Thai"
+              className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2 text-sm"
+            />
+            <button type="button" onClick={createItem} className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white">
+              Crear
+            </button>
+          </div>
+          {error ? <p className="rounded-lg border border-brand-red/50 bg-brand-red/10 px-3 py-2 text-sm text-red-200">{error}</p> : null}
+        </section>
+      ) : null}
 
       <section className="card-surface p-5">
         <DataTable columns={columns} data={disciplines} loading={loading} />

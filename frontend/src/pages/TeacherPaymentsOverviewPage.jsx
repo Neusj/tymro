@@ -4,6 +4,7 @@ import { useAuth } from '../auth/AuthContext'
 import DashboardHeader from '../components/DashboardHeader'
 import ValueBadge from '../components/ui/ValueBadge'
 import PayoutStatus from '../components/ui/PayoutStatus'
+import { canManageAdmin } from '../utils/roles'
 
 const MONTH_NAMES = [
   'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
@@ -65,6 +66,7 @@ function StatTile({ label, value, accent }) {
 export default function TeacherPaymentsOverviewPage() {
   const { user } = useAuth()
   const isSuperadmin = user?.role === 'superadmin'
+  const canMarkPaid = canManageAdmin(user?.role)
 
   const [month, setMonth] = useState(currentMonthValue())
   const [summary, setSummary] = useState(null)
@@ -333,18 +335,20 @@ export default function TeacherPaymentsOverviewPage() {
                     {/* Estado de pago del período + acción */}
                     <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                       <PayoutStatus payout={row.payout} pending={row.pending} />
-                      <button
-                        type="button"
-                        disabled={marking === row.teacher_id}
-                        onClick={() => handleMarkPaid(row.teacher_id)}
-                        className="inline-flex items-center gap-1.5 rounded-xl bg-success px-3 py-1.5 text-xs font-semibold text-black transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {marking === row.teacher_id
-                          ? 'Guardando…'
-                          : row.payout
-                            ? 'Actualizar pago'
-                            : 'Marcar como pagado'}
-                      </button>
+                      {canMarkPaid ? (
+                        <button
+                          type="button"
+                          disabled={marking === row.teacher_id}
+                          onClick={() => handleMarkPaid(row.teacher_id)}
+                          className="inline-flex items-center gap-1.5 rounded-xl bg-success px-3 py-1.5 text-xs font-semibold text-black transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {marking === row.teacher_id
+                            ? 'Guardando…'
+                            : row.payout
+                              ? 'Actualizar pago'
+                              : 'Marcar como pagado'}
+                        </button>
+                      ) : null}
                     </div>
 
                     {/* Desglose sueldo base + por clase = total */}

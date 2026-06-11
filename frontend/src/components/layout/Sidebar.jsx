@@ -95,6 +95,7 @@ const navByRole = {
   superadmin: [
     { type: 'item', to: '/superadmin/organizations', label: 'Organizaciones', icon: <OrgIcon /> },
     { type: 'item', to: '/superadmin/users', label: 'Usuarios por organización', icon: <UsersIcon /> },
+    { type: 'item', to: '/superadmin/platform', label: 'Plataforma', icon: <UsersIcon /> },
     { type: 'item', to: '/superadmin/plans', label: 'Planes', icon: <PlansIcon /> },
     {
       type: 'group',
@@ -173,6 +174,49 @@ const navByRole = {
         { to: '/student/classes/reservations', label: 'Mis reservas' },
         { to: '/student/classes/recurring', label: 'Mis recurrencias' },
         { to: '/student/classes/history', label: 'Historial' },
+      ],
+    },
+  ],
+  // Manager: páginas operativas del gym_admin (reutiliza /gym-admin/*). Sin planes,
+  // sin pagos a profesores, sin QR; ve sucursales en solo lectura.
+  manager: [
+    { type: 'item', to: '/gym-admin/dashboard', label: 'Dashboard', icon: <DashboardIcon /> },
+    { type: 'item', to: '/gym-admin/users', label: 'Usuarios', icon: <UsersIcon /> },
+    { type: 'item', to: '/gym-admin/branches', label: 'Sucursales', icon: <BranchesIcon /> },
+    {
+      type: 'group',
+      label: 'Clases',
+      icon: <ClassesIcon />,
+      children: [
+        { to: '/gym-admin/classes', label: 'Ver clases' },
+        { to: '/gym-admin/class-templates', label: 'Plantillas recurrentes' },
+        { to: '/gym-admin/holidays', label: 'Festivos' },
+        { to: '/gym-admin/class-types', label: 'Tipos de clase' },
+        { to: '/gym-admin/disciplines', label: 'Disciplinas' },
+      ],
+    },
+  ],
+  // Monitor: solo lectura sobre lo de su organización (reutiliza /gym-admin/*).
+  monitor: [
+    {
+      type: 'group',
+      label: 'Clases',
+      icon: <ClassesIcon />,
+      children: [
+        { to: '/gym-admin/classes', label: 'Ver clases' },
+        { to: '/gym-admin/holidays', label: 'Festivos' },
+        { to: '/gym-admin/class-types', label: 'Tipos de clase' },
+        { to: '/gym-admin/disciplines', label: 'Disciplinas' },
+      ],
+    },
+    { type: 'item', to: '/gym-admin/users', label: 'Usuarios', icon: <UsersIcon /> },
+    {
+      type: 'group',
+      label: 'Pagos Profesores',
+      icon: <PaymentsIcon />,
+      children: [
+        { to: '/gym-admin/teacher-payments', label: 'Resumen pagos' },
+        { to: '/gym-admin/teacher-payments/rules', label: 'Reglas de pago' },
       ],
     },
   ],

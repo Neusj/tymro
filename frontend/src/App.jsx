@@ -33,6 +33,7 @@ import StudentAttendanceScanPage from './pages/StudentAttendanceScanPage'
 import SuperadminOrganizationDetailPage from './pages/SuperadminOrganizationDetailPage'
 import SuperadminOrganizationsPage from './pages/SuperadminOrganizationsPage'
 import SuperadminUsersPage from './pages/SuperadminUsersPage'
+import SuperadminPlatformPage from './pages/SuperadminPlatformPage'
 import TeacherClassesPage from './pages/TeacherClassesPage'
 import TeacherDashboard from './pages/TeacherDashboard'
 import TeacherPaymentRulesPage from './pages/TeacherPaymentRulesPage'
@@ -125,6 +126,16 @@ export default function App() {
         }
       />
       <Route
+        path="/superadmin/platform"
+        element={
+          <ProtectedRoute allowedRoles={['superadmin']}>
+            <ShellRoute>
+              <SuperadminPlatformPage />
+            </ShellRoute>
+          </ProtectedRoute>
+        }
+      />
+      <Route
         path="/superadmin/plans"
         element={
           <ProtectedRoute allowedRoles={['superadmin']}>
@@ -176,7 +187,7 @@ export default function App() {
       <Route
         path="/gym-admin/dashboard"
         element={
-          <ProtectedRoute allowedRoles={['gym_admin']}>
+          <ProtectedRoute allowedRoles={['gym_admin', 'manager']}>
             <ShellRoute>
               <GymAdminDashboard />
             </ShellRoute>
@@ -186,7 +197,7 @@ export default function App() {
       <Route
         path="/gym-admin/users"
         element={
-          <ProtectedRoute allowedRoles={['gym_admin']}>
+          <ProtectedRoute allowedRoles={['gym_admin', 'manager', 'monitor']}>
             <ShellRoute>
               <GymAdminUsersPage />
             </ShellRoute>
@@ -196,7 +207,7 @@ export default function App() {
       <Route
         path="/gym-admin/branches"
         element={
-          <ProtectedRoute allowedRoles={['gym_admin']}>
+          <ProtectedRoute allowedRoles={['gym_admin', 'manager']}>
             <ShellRoute>
               <GymAdminBranchesPage />
             </ShellRoute>
@@ -206,7 +217,7 @@ export default function App() {
       <Route
         path="/gym-admin/classes"
         element={
-          <ProtectedRoute allowedRoles={['gym_admin']}>
+          <ProtectedRoute allowedRoles={['gym_admin', 'manager', 'monitor']}>
             <ShellRoute>
               <GymAdminClassesPage />
             </ShellRoute>
@@ -226,7 +237,7 @@ export default function App() {
       <Route
         path="/gym-admin/class-templates"
         element={
-          <ProtectedRoute allowedRoles={['gym_admin']}>
+          <ProtectedRoute allowedRoles={['gym_admin', 'manager']}>
             <ShellRoute>
               <GymAdminClassTemplatesPage />
             </ShellRoute>
@@ -236,7 +247,7 @@ export default function App() {
       <Route
         path="/gym-admin/classes/create"
         element={
-          <ProtectedRoute allowedRoles={['gym_admin']}>
+          <ProtectedRoute allowedRoles={['gym_admin', 'manager']}>
             <ShellRoute>
               <GymAdminClassCreatePage />
             </ShellRoute>
@@ -246,7 +257,7 @@ export default function App() {
       <Route
         path="/gym-admin/classes/:id/edit"
         element={
-          <ProtectedRoute allowedRoles={['gym_admin']}>
+          <ProtectedRoute allowedRoles={['gym_admin', 'manager']}>
             <ShellRoute>
               <GymAdminClassEditPage />
             </ShellRoute>
@@ -256,7 +267,7 @@ export default function App() {
       <Route
         path="/gym-admin/classes/:id"
         element={
-          <ProtectedRoute allowedRoles={['gym_admin']}>
+          <ProtectedRoute allowedRoles={['gym_admin', 'manager', 'monitor']}>
             <ShellRoute>
               <GymAdminClassDetailPage />
             </ShellRoute>
@@ -266,7 +277,7 @@ export default function App() {
       <Route
         path="/gym-admin/class-types"
         element={
-          <ProtectedRoute allowedRoles={['gym_admin']}>
+          <ProtectedRoute allowedRoles={['gym_admin', 'manager', 'monitor']}>
             <ShellRoute>
               <GymAdminClassTypesPage />
             </ShellRoute>
@@ -276,7 +287,7 @@ export default function App() {
       <Route
         path="/gym-admin/disciplines"
         element={
-          <ProtectedRoute allowedRoles={['gym_admin']}>
+          <ProtectedRoute allowedRoles={['gym_admin', 'manager', 'monitor']}>
             <ShellRoute>
               <GymAdminDisciplinesPage />
             </ShellRoute>
@@ -286,7 +297,7 @@ export default function App() {
       <Route
         path="/gym-admin/holidays"
         element={
-          <ProtectedRoute allowedRoles={['gym_admin']}>
+          <ProtectedRoute allowedRoles={['gym_admin', 'manager', 'monitor']}>
             <ShellRoute>
               <GymAdminHolidaysPage />
             </ShellRoute>
@@ -331,7 +342,7 @@ export default function App() {
       <Route
         path="/gym-admin/teacher-payments"
         element={
-          <ProtectedRoute allowedRoles={['gym_admin']}>
+          <ProtectedRoute allowedRoles={['gym_admin', 'monitor']}>
             <ShellRoute>
               <TeacherPaymentsOverviewPage />
             </ShellRoute>
@@ -341,7 +352,7 @@ export default function App() {
       <Route
         path="/gym-admin/teacher-payments/rules"
         element={
-          <ProtectedRoute allowedRoles={['gym_admin']}>
+          <ProtectedRoute allowedRoles={['gym_admin', 'monitor']}>
             <ShellRoute>
               <TeacherPaymentRulesPage />
             </ShellRoute>

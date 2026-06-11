@@ -3,6 +3,8 @@ import DashboardHeader from '../components/DashboardHeader'
 import DataTable from '../components/ui/DataTable'
 import ValueBadge from '../components/ui/ValueBadge'
 import { branchesApi, holidaysApi } from '../api/client'
+import { useAuth } from '../auth/AuthContext'
+import { canManageOperational } from '../utils/roles'
 
 const initialForm = {
   date: '',
@@ -14,6 +16,8 @@ const initialForm = {
 }
 
 export default function GymAdminHolidaysPage() {
+  const { user } = useAuth()
+  const canManage = canManageOperational(user?.role)
   const [form, setForm] = useState(initialForm)
   const [editingId, setEditingId] = useState(null)
   const [items, setItems] = useState([])
@@ -100,43 +104,48 @@ export default function GymAdminHolidaysPage() {
       { key: 'scope', label: 'Ambito', render: (row) => (row.scope === 'global' ? 'Global' : row.scope === 'branch' ? 'Sucursal' : 'Organizacion') },
       { key: 'branch_name', label: 'Sucursal', render: (row) => row.branch_name || '-' },
       { key: 'is_active', label: 'Estado', render: (row) => <ValueBadge kind="template_status" value={row.is_active ? 'active' : 'inactive'} /> },
-      {
-        key: 'actions',
-        label: 'Acciones',
-        render: (row) => (
-          <>
-            <button
-              type="button"
-              onClick={async () => {
-                try {
-                  await holidaysApi.update(row.id, { is_active: !row.is_active })
-                  await loadData()
-                } catch (apiError) {
-                  const detail = apiError?.response?.data
-                  setError(detail?.detail || 'No se pudo actualizar estado del festivo.')
-                }
-              }}
-              className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white"
-            >
-              {row.is_active ? 'Desactivar' : 'Activar'}
-            </button>
-            <button type="button" onClick={() => editItem(row)} className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white">
-              Editar
-            </button>
-            <button type="button" onClick={() => removeItem(row)} className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200">
-              Eliminar
-            </button>
-          </>
-        ),
-      },
+      ...(canManage
+        ? [
+            {
+              key: 'actions',
+              label: 'Acciones',
+              render: (row) => (
+                <>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        await holidaysApi.update(row.id, { is_active: !row.is_active })
+                        await loadData()
+                      } catch (apiError) {
+                        const detail = apiError?.response?.data
+                        setError(detail?.detail || 'No se pudo actualizar estado del festivo.')
+                      }
+                    }}
+                    className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white"
+                  >
+                    {row.is_active ? 'Desactivar' : 'Activar'}
+                  </button>
+                  <button type="button" onClick={() => editItem(row)} className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white">
+                    Editar
+                  </button>
+                  <button type="button" onClick={() => removeItem(row)} className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200">
+                    Eliminar
+                  </button>
+                </>
+              ),
+            },
+          ]
+        : []),
     ],
-    [],
+    [canManage],
   )
 
   return (
     <div className="space-y-6">
       <DashboardHeader title="Gym Admin · Festivos" subtitle="Los festivos activos bloquean generacion de clases. Puedes gestionar base del sistema y excepciones manuales." back={{ to: '/gym-admin/classes', label: 'Clases' }} />
 
+      {canManage ? (
       <section className="card-surface p-5">
         <form onSubmit={submit} className="grid gap-3 md:grid-cols-2">
           <label className="space-y-1 text-sm">
@@ -183,6 +192,7 @@ export default function GymAdminHolidaysPage() {
         </form>
         {error ? <p className="mt-3 rounded-lg border border-brand-red/50 bg-brand-red/10 px-3 py-2 text-sm text-red-200">{error}</p> : null}
       </section>
+      ) : null}
 
       <section className="card-surface p-5">
         <p className="mb-3 text-sm text-brand-muted">Seleccionados en pagina actual: {selectedIds.length}</p>

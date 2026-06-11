@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { classesApi, enrollmentsApi, usersApi } from '../api/client'
+import { useAuth } from '../auth/AuthContext'
 import ConfirmDialog from '../components/ConfirmDialog'
 import DashboardHeader from '../components/DashboardHeader'
 import FormModal from '../components/FormModal'
 import DataTable from '../components/ui/DataTable'
 import ValueBadge from '../components/ui/ValueBadge'
+import { canManageOperational } from '../utils/roles'
 
 function formatDateTime(value) {
   if (!value) {
@@ -19,6 +21,8 @@ function formatDateTime(value) {
 
 export default function GymAdminClassDetailPage() {
   const { id } = useParams()
+  const { user } = useAuth()
+  const canManage = canManageOperational(user?.role)
   const [gymClass, setGymClass] = useState(null)
   const [students, setStudents] = useState([])
   const [loading, setLoading] = useState(true)
@@ -101,17 +105,21 @@ export default function GymAdminClassDetailPage() {
       { key: 'student_name', label: 'Alumno' },
       { key: 'student_email', label: 'Email' },
       { key: 'status', label: 'Estado', render: (row) => <ValueBadge kind="enrollment_status" value={row.status} /> },
-      {
-        key: 'actions',
-        label: 'Acciones',
-        render: (row) => (
-          <button type="button" onClick={() => setDeleting(row)} className="rounded border border-brand-red/40 px-2 py-1 text-xs text-red-200">
-            Eliminar inscripción
-          </button>
-        ),
-      },
+      ...(canManage
+        ? [
+            {
+              key: 'actions',
+              label: 'Acciones',
+              render: (row) => (
+                <button type="button" onClick={() => setDeleting(row)} className="rounded border border-brand-red/40 px-2 py-1 text-xs text-red-200">
+                  Eliminar inscripción
+                </button>
+              ),
+            },
+          ]
+        : []),
     ],
-    [],
+    [canManage],
   )
 
   return (
@@ -121,14 +129,16 @@ export default function GymAdminClassDetailPage() {
         subtitle={gymClass ? `${gymClass.name} · ${gymClass.branch_name}` : 'Cargando clase...'}
         back={{ to: '/gym-admin/classes', label: 'Clases' }}
         extra={
-          <div className="flex gap-2">
-            <button type="button" onClick={() => setModalOpen(true)} className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white">
-              Inscribir alumno
-            </button>
-            <Link to={`/gym-admin/classes/${id}/edit`} className="rounded-xl border border-brand-line px-4 py-2 text-sm font-semibold text-brand-muted">
-              Editar clase
-            </Link>
-          </div>
+          canManage ? (
+            <div className="flex gap-2">
+              <button type="button" onClick={() => setModalOpen(true)} className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white">
+                Inscribir alumno
+              </button>
+              <Link to={`/gym-admin/classes/${id}/edit`} className="rounded-xl border border-brand-line px-4 py-2 text-sm font-semibold text-brand-muted">
+                Editar clase
+              </Link>
+            </div>
+          ) : null
         }
       />
 

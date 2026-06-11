@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { classesApi, disciplinesApi } from '../api/client'
+import { useAuth } from '../auth/AuthContext'
+import { canManageOperational } from '../utils/roles'
 import BulkActionModal from '../components/BulkActionModal'
 import ConfirmDialog from '../components/ConfirmDialog'
 import DashboardHeader from '../components/DashboardHeader'
@@ -30,6 +32,8 @@ const STATUS_OPTIONS = [
 ]
 
 export default function GymAdminClassesPage() {
+  const { user } = useAuth()
+  const canManage = canManageOperational(user?.role)
   const [classes, setClasses] = useState([])
   const [summary, setSummary] = useState(null)
   const [disciplines, setDisciplines] = useState([])
@@ -168,41 +172,45 @@ export default function GymAdminClassesPage() {
               >
                 Detalle
               </Link>
-              <Link
-                to={`/gym-admin/classes/${row.id}/edit`}
-                className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue"
-              >
-                Editar
-              </Link>
-              <button
-                type="button"
-                disabled={!canClose || working}
-                onClick={() => closeSingleClass(row, 'complete_early')}
-                className="w-full rounded-lg border border-brand-orange/50 px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-orange disabled:opacity-60"
-              >
-                Cerrar anticipadamente
-              </button>
-              <button
-                type="button"
-                disabled={!canClose || working}
-                onClick={() => closeSingleClass(row, 'cancel')}
-                className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 transition hover:bg-brand-red/10 disabled:opacity-60"
-              >
-                Cancelar
-              </button>
-              <button
-                type="button"
-                onClick={() => setDeleting(row)}
-                className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 transition hover:bg-brand-red/10"
-              >
-                Eliminar
-              </button>
+              {canManage ? (
+                <>
+                  <Link
+                    to={`/gym-admin/classes/${row.id}/edit`}
+                    className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue"
+                  >
+                    Editar
+                  </Link>
+                  <button
+                    type="button"
+                    disabled={!canClose || working}
+                    onClick={() => closeSingleClass(row, 'complete_early')}
+                    className="w-full rounded-lg border border-brand-orange/50 px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-orange disabled:opacity-60"
+                  >
+                    Cerrar anticipadamente
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!canClose || working}
+                    onClick={() => closeSingleClass(row, 'cancel')}
+                    className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 transition hover:bg-brand-red/10 disabled:opacity-60"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDeleting(row)}
+                    className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 transition hover:bg-brand-red/10"
+                  >
+                    Eliminar
+                  </button>
+                </>
+              ) : null}
             </>
           )
         },
       },
     ],
-    [working],
+    [working, canManage],
   )
 
   const totals = summary?.totals || {}
@@ -213,9 +221,11 @@ export default function GymAdminClassesPage() {
         title="Gym Admin · Clases"
         subtitle="Gestion operativa de clases con filtros, KPIs y acciones seguras."
         extra={
-          <Link to="/gym-admin/classes/create" className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white">
-            Crear clase
-          </Link>
+          canManage ? (
+            <Link to="/gym-admin/classes/create" className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white">
+              Crear clase
+            </Link>
+          ) : null
         }
       />
 
@@ -246,21 +256,23 @@ export default function GymAdminClassesPage() {
       <section className="card-surface p-5">
         <div className="mb-4 flex items-center justify-between gap-3">
           <h2 className="panel-title">Detalle de clases (filtrado)</h2>
-          <button
-            type="button"
-            disabled={!selectedIds.length}
-            onClick={() => setBulkModalOpen(true)}
-            className="rounded-lg border border-brand-orange px-3 py-2 text-xs font-semibold text-brand-white disabled:opacity-50"
-          >
-            Acciones masivas ({selectedIds.length})
-          </button>
+          {canManage ? (
+            <button
+              type="button"
+              disabled={!selectedIds.length}
+              onClick={() => setBulkModalOpen(true)}
+              className="rounded-lg border border-brand-orange px-3 py-2 text-xs font-semibold text-brand-white disabled:opacity-50"
+            >
+              Acciones masivas ({selectedIds.length})
+            </button>
+          ) : null}
         </div>
         {error ? <p className="mb-3 rounded-lg border border-brand-red/50 bg-brand-red/10 px-3 py-2 text-sm text-red-200">{error}</p> : null}
         <DataTable
           columns={columns}
           data={classes}
           loading={loading}
-          selectableRows
+          selectableRows={canManage}
           selectAllScope="filtered"
           selectedRowIds={selectedIds}
           onSelectedRowIdsChange={setSelectedIds}

@@ -5,6 +5,7 @@ import DashboardHeader from '../components/DashboardHeader'
 import FormModal from '../components/FormModal'
 import DataTable from '../components/ui/DataTable'
 import ValueBadge from '../components/ui/ValueBadge'
+import { canManageAdmin } from '../utils/roles'
 
 const EMPTY_FORM = {
   organization: '',
@@ -49,6 +50,7 @@ function firstApiError(detail, fallback) {
 export default function TeacherPaymentRulesPage() {
   const { user } = useAuth()
   const isSuperadmin = user?.role === 'superadmin'
+  const canManage = canManageAdmin(user?.role)
 
   const [rules, setRules] = useState([])
   const [organizations, setOrganizations] = useState([])
@@ -279,7 +281,8 @@ export default function TeacherPaymentRulesPage() {
       { key: 'usage_count', label: 'Asignaciones' },
       { key: 'assigned_teachers_count', label: 'Profesores asignados' },
       { key: 'is_active', label: 'Estado', render: (row) => <ValueBadge kind="template_status" value={row.is_active ? 'active' : 'inactive'} /> },
-      {
+      ...(canManage
+        ? [{
         key: 'actions',
         label: 'Acciones',
         sortable: false,
@@ -323,9 +326,10 @@ export default function TeacherPaymentRulesPage() {
             )}
           </div>
         ),
-      },
+      }]
+        : []),
     ],
-    [working],
+    [working, canManage],
   )
 
   return (
@@ -334,9 +338,11 @@ export default function TeacherPaymentRulesPage() {
         title="Pagos Profesores - Reglas"
         subtitle="Configura reglas por profesor para calcular pagos al cerrar clase."
         extra={
-          <button type="button" onClick={openCreate} className="rounded-xl bg-brand-orange px-4 py-2 text-sm font-semibold text-black transition hover:brightness-110">
-            Nueva regla
-          </button>
+          canManage ? (
+            <button type="button" onClick={openCreate} className="rounded-xl bg-brand-orange px-4 py-2 text-sm font-semibold text-black transition hover:brightness-110">
+              Nueva regla
+            </button>
+          ) : null
         }
       />
 

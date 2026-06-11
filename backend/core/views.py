@@ -423,7 +423,8 @@ def dashboard_summary(request):
             'gym_admins': User.objects.filter(role=User.Role.GYM_ADMIN).count(),
             'users': User.objects.count(),
         }
-    elif _is_gym_admin(user) and user.organization_id:
+    elif roles.is_org_admin(user) and user.organization_id:
+        # gym_admin y manager: conteos agregados de su organización (solo lectura).
         data = {
             'organization': user.organization.name,
             'branches': Branch.objects.filter(organization=user.organization).count(),
@@ -1273,6 +1274,10 @@ class UserViewSet(ModelViewSet):
 
             if self.action == 'list':
                 if not organization_id:
+                    # Sin organización solo se listan usuarios de plataforma
+                    # (superadmins, que no tienen organización); el resto exige org.
+                    if role in roles.PLATFORM_ROLES:
+                        return queryset.filter(role=role)
                     return queryset.none()
                 queryset = queryset.filter(organization_id=organization_id)
 
@@ -1280,7 +1285,8 @@ class UserViewSet(ModelViewSet):
                 queryset = queryset.filter(role=role)
             return queryset
 
-        if roles.is_org_admin(user) and user.organization_id:
+        # gym_admin/manager (escritura) y monitor (solo lectura) ven su organización.
+        if (roles.is_org_admin(user) or _is_monitor(user)) and user.organization_id:
             role = self.request.query_params.get('role')
             queryset = queryset.filter(organization_id=user.organization_id)
             if role:
@@ -1292,9 +1298,13 @@ class UserViewSet(ModelViewSet):
         return queryset.none()
 
     def list(self, request, *args, **kwargs):
-        if _is_teacher(request.user) or _is_student(request.user) or _is_monitor(request.user):
+        if _is_teacher(request.user) or _is_student(request.user):
             raise PermissionDenied('No tienes acceso al listado general de usuarios.')
-        if _is_superadmin(request.user) and not request.query_params.get('organization_id'):
+        if (
+            _is_superadmin(request.user)
+            and not request.query_params.get('organization_id')
+            and request.query_params.get('role') not in roles.PLATFORM_ROLES
+        ):
             raise PermissionDenied('Debes filtrar por organization_id para listar usuarios como superadmin.')
         return super().list(request, *args, **kwargs)
 

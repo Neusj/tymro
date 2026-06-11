@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
 import { branchesApi } from '../api/client'
+import { useAuth } from '../auth/AuthContext'
 import ConfirmDialog from '../components/ConfirmDialog'
 import DashboardHeader from '../components/DashboardHeader'
 import DataTable from '../components/ui/DataTable'
 import FormModal from '../components/FormModal'
+import { canManageAdmin } from '../utils/roles'
 
 const initialForm = {
   name: '',
@@ -15,6 +17,8 @@ const initialForm = {
 }
 
 export default function GymAdminBranchesPage() {
+  const { user } = useAuth()
+  const canManage = canManageAdmin(user?.role)
   const [branches, setBranches] = useState([])
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState(null)
@@ -79,20 +83,24 @@ export default function GymAdminBranchesPage() {
     { key: 'code', label: 'Código' },
     { key: 'address', label: 'Dirección' },
     { key: 'primary_color', label: 'Color primario', render: (row) => row.primary_color || '-' },
-    {
-      key: 'actions',
-      label: 'Acciones',
-      render: (row) => (
-        <div className="flex gap-2">
-          <button type="button" onClick={() => openEdit(row)} className="rounded border border-brand-line px-2 py-1 text-xs text-brand-muted">
-            Editar
-          </button>
-          <button type="button" onClick={() => setDeleting(row)} className="rounded border border-brand-red/40 px-2 py-1 text-xs text-red-200">
-            Eliminar
-          </button>
-        </div>
-      ),
-    },
+    ...(canManage
+      ? [
+          {
+            key: 'actions',
+            label: 'Acciones',
+            render: (row) => (
+              <div className="flex gap-2">
+                <button type="button" onClick={() => openEdit(row)} className="rounded border border-brand-line px-2 py-1 text-xs text-brand-muted">
+                  Editar
+                </button>
+                <button type="button" onClick={() => setDeleting(row)} className="rounded border border-brand-red/40 px-2 py-1 text-xs text-red-200">
+                  Eliminar
+                </button>
+              </div>
+            ),
+          },
+        ]
+      : []),
   ]
 
   return (
@@ -101,9 +109,11 @@ export default function GymAdminBranchesPage() {
         title="Gym Admin · Sucursales"
         subtitle="CRUD de sucursales dentro de tu organización."
         extra={
-          <button type="button" onClick={openCreate} className="rounded-xl bg-brand-orange px-4 py-2 text-sm font-semibold text-white">
-            Nueva sucursal
-          </button>
+          canManage ? (
+            <button type="button" onClick={openCreate} className="rounded-xl bg-brand-orange px-4 py-2 text-sm font-semibold text-white">
+              Nueva sucursal
+            </button>
+          ) : null
         }
       />
 
