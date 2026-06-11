@@ -1209,11 +1209,15 @@ class BranchViewSet(ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
+        # Partimos siempre de un queryset fresco: devolver self.queryset (la
+        # instancia de clase) reusaría su _result_cache entre requests del mismo
+        # proceso y dejaría el listado obsoleto hasta reiniciar el worker.
+        queryset = Branch.objects.select_related('organization').all()
 
         if _is_superadmin(user):
-            return self.queryset
+            return queryset
         if user.organization_id:
-            return self.queryset.filter(organization_id=user.organization_id)
+            return queryset.filter(organization_id=user.organization_id)
         return Branch.objects.none()
 
     def perform_create(self, serializer):
