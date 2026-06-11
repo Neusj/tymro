@@ -40,7 +40,8 @@ python manage.py runserver        # http://127.0.0.1:8000
 - `TokenAuthentication` + `SessionAuthentication`. Login (`POST /api/login/`) devuelve token.
 - Permiso por defecto: `IsAuthenticated` (salvo endpoints `AllowAny` como `/health/` y `/login/`).
 - Permisos custom en `permissions.py`: `IsSuperAdmin`, `IsSuperAdminOrGymAdmin`.
-- 4 roles (`CustomUser.Role`): `superadmin`, `gym_admin`, `teacher`, `student`. Acceso por rol vía helpers `_is_superadmin/_is_gym_admin/_is_teacher/_is_student`.
+- 6 roles (`CustomUser.Role`): `superadmin` (plataforma), `gym_admin`, `manager`, `monitor`, `teacher`, `student` (organización). Acceso por rol vía helpers `_is_superadmin/_is_gym_admin/_is_manager/_is_monitor/_is_teacher/_is_student`.
+- **`accounts/roles.py` es la ÚNICA fuente de verdad** de qué rol puede asignar/gestionar quién (`PLATFORM_ROLES`, `ORG_ROLES`, `assignable_roles`, `can_assign`, `is_org_admin`). La misma matriz gobierna crear usuarios y editar/borrar instancias. No duplicar esa lógica en views/serializers.
 - Locale: `es-cl`, `America/Santiago`, `USE_TZ=True`.
 
 ## Variables de entorno (nombres)

@@ -6,8 +6,10 @@ class CustomUser(AbstractUser):
     class Role(models.TextChoices):
         SUPERADMIN = 'superadmin', 'Superadmin'
         GYM_ADMIN = 'gym_admin', 'Gym Admin'
-        TEACHER = 'teacher', 'Teacher'
-        STUDENT = 'student', 'Student'
+        MANAGER = 'manager', 'Manager'
+        MONITOR = 'monitor', 'Monitor'
+        TEACHER = 'teacher', 'Profesor'
+        STUDENT = 'student', 'Alumno'
 
     role = models.CharField(max_length=20, choices=Role.choices, default=Role.STUDENT)
     organization = models.ForeignKey(

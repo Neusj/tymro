@@ -185,6 +185,10 @@ export const usersApi = {
     const { data } = await api.get(`/users/${id}/`)
     return data
   },
+  assignableRoles: async () => {
+    const { data } = await api.get('/users/assignable-roles/')
+    return data
+  },
   create: async (payload, asFormData = false) => {
     const body = asFormData ? toFormData(payload) : payload
     const { data } = await api.post('/users/', body)

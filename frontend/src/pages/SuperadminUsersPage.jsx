@@ -10,13 +10,15 @@ import DataTable from '../components/ui/DataTable'
 import FormModal from '../components/FormModal'
 import RoleBadge from '../components/RoleBadge'
 import ValueBadge from '../components/ui/ValueBadge'
+import { extractApiErrorMessage } from '../utils/apiErrors'
+import { platformRoles } from '../utils/roles'
 
 const userInitialForm = {
   username: '',
   first_name: '',
   last_name: '',
   email: '',
-  role: 'teacher',
+  role: '',
   organization: '',
   branch: '',
   password: '',
@@ -26,17 +28,13 @@ const userInitialForm = {
   is_active: true,
 }
 
-const editableRoles = ['superadmin', 'gym_admin', 'teacher', 'student']
-
-const roleLabels = { superadmin: 'Superadmin', gym_admin: 'Gym Admin', teacher: 'Profesor', student: 'Alumno' }
-const roleFilterOptions = [{ value: '', label: 'Todos' }, ...editableRoles.map((role) => ({ value: role, label: roleLabels[role] }))]
-
 export default function SuperadminUsersPage() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const [organizations, setOrganizations] = useState([])
   const [branches, setBranches] = useState([])
   const [users, setUsers] = useState([])
+  const [assignableRoles, setAssignableRoles] = useState([])
   const [error, setError] = useState('')
   const [modalOpen, setModalOpen] = useState(false)
   const [form, setForm] = useState(userInitialForm)
@@ -45,6 +43,17 @@ export default function SuperadminUsersPage() {
 
   const organizationFilter = searchParams.get('organization_id') || ''
   const roleFilter = searchParams.get('role') || ''
+
+  // Esta página gestiona usuarios DE organización: los roles de plataforma
+  // (superadmin) no se ofrecen aunque el endpoint los devuelva al superadmin.
+  const orgAssignableRoles = useMemo(
+    () => assignableRoles.filter((option) => !platformRoles.includes(option.value)),
+    [assignableRoles],
+  )
+
+  const roleFilterOptions = useMemo(() => [{ value: '', label: 'Todos' }, ...orgAssignableRoles], [orgAssignableRoles])
+
+  const canManage = (role) => orgAssignableRoles.some((option) => option.value === role)
 
   const loadOrganizations = async () => {
     const data = await organizationsApi.list()
@@ -68,7 +77,7 @@ export default function SuperadminUsersPage() {
       setError('')
     } catch (err) {
       setUsers([])
-      setError(err?.response?.data?.detail || 'No se pudo cargar usuarios.')
+      setError(extractApiErrorMessage(err, 'No se pudo cargar usuarios.'))
     }
   }
 
@@ -78,8 +87,9 @@ export default function SuperadminUsersPage() {
   }
 
   useEffect(() => {
-    loadOrganizations()
-    loadBranches()
+    Promise.all([loadOrganizations(), loadBranches(), usersApi.assignableRoles().then(setAssignableRoles)]).catch(
+      (err) => setError(extractApiErrorMessage(err, 'No se pudo cargar la página.')),
+    )
   }, [])
 
   useEffect(() => {
@@ -95,6 +105,7 @@ export default function SuperadminUsersPage() {
     setEditing(null)
     setForm({
       ...userInitialForm,
+      role: (orgAssignableRoles.find((option) => option.value === 'teacher') || orgAssignableRoles[0])?.value || '',
       organization: organizationFilter || '',
     })
     setModalOpen(true)
@@ -107,7 +118,7 @@ export default function SuperadminUsersPage() {
       first_name: user.first_name || '',
       last_name: user.last_name || '',
       email: user.email || '',
-      role: user.role || 'student',
+      role: user.role || '',
       organization: user.organization || organizationFilter,
       branch: user.branch || '',
       password: '',
@@ -128,26 +139,42 @@ export default function SuperadminUsersPage() {
     if (!payload.password) {
       delete payload.password
     }
-    if (editing) {
-      await usersApi.update(editing.id, payload, true)
-    } else {
-      await usersApi.create(payload, true)
+    try {
+      if (editing) {
+        await usersApi.update(editing.id, payload, true)
+      } else {
+        await usersApi.create(payload, true)
+      }
+      setError('')
+      setModalOpen(false)
+      await loadUsers()
+    } catch (err) {
+      setError(extractApiErrorMessage(err, 'No tienes permisos para esa acción.'))
+      setModalOpen(false)
     }
-    setModalOpen(false)
-    await loadUsers()
   }
 
   const removeUser = async () => {
     if (!deleting) {
       return
     }
-    await usersApi.remove(deleting.id)
+    try {
+      await usersApi.remove(deleting.id)
+      setError('')
+    } catch (err) {
+      setError(extractApiErrorMessage(err, 'No tienes permisos para esa acción.'))
+    }
     setDeleting(null)
     await loadUsers()
   }
 
   const toggleActive = async (row) => {
-    await usersApi.update(row.id, { is_active: !row.is_active })
+    try {
+      await usersApi.update(row.id, { is_active: !row.is_active })
+      setError('')
+    } catch (err) {
+      setError(extractApiErrorMessage(err, 'No tienes permisos para esa acción.'))
+    }
     await loadUsers()
   }
 
@@ -181,28 +208,31 @@ export default function SuperadminUsersPage() {
     {
       key: 'actions',
       label: 'Acciones',
-      render: (row) => (
-        <div className="flex gap-2">
-          <button type="button" onClick={() => openEdit(row)} className="rounded border border-brand-line px-2 py-1 text-xs text-brand-muted">
-            Editar
-          </button>
-          <button type="button" onClick={() => toggleActive(row)} className="rounded border border-brand-line px-2 py-1 text-xs text-brand-muted">
-            {row.is_active ? 'Desactivar' : 'Activar'}
-          </button>
-          {row.role === 'student' ? (
-            <button
-              type="button"
-              onClick={() => navigate(`/superadmin/plans/assign?organization_id=${row.organization || ''}&user_id=${row.id}`)}
-              className="rounded border border-brand-blue/40 px-2 py-1 text-xs text-blue-200"
-            >
-              Planes
+      render: (row) =>
+        canManage(row.role) ? (
+          <div className="flex gap-2">
+            <button type="button" onClick={() => openEdit(row)} className="rounded border border-brand-line px-2 py-1 text-xs text-brand-muted">
+              Editar
             </button>
-          ) : null}
-          <button type="button" onClick={() => setDeleting(row)} className="rounded border border-brand-red/40 px-2 py-1 text-xs text-red-200">
-            Eliminar
-          </button>
-        </div>
-      ),
+            <button type="button" onClick={() => toggleActive(row)} className="rounded border border-brand-line px-2 py-1 text-xs text-brand-muted">
+              {row.is_active ? 'Desactivar' : 'Activar'}
+            </button>
+            {row.role === 'student' ? (
+              <button
+                type="button"
+                onClick={() => navigate(`/superadmin/plans/assign?organization_id=${row.organization || ''}&user_id=${row.id}`)}
+                className="rounded border border-brand-blue/40 px-2 py-1 text-xs text-blue-200"
+              >
+                Planes
+              </button>
+            ) : null}
+            <button type="button" onClick={() => setDeleting(row)} className="rounded border border-brand-red/40 px-2 py-1 text-xs text-red-200">
+              Eliminar
+            </button>
+          </div>
+        ) : (
+          <span className="text-xs text-brand-muted">Solo lectura</span>
+        ),
     },
   ]
 
@@ -212,14 +242,16 @@ export default function SuperadminUsersPage() {
         title="Superadmin · Usuarios"
         subtitle="Listado por organización (filtro obligatorio)."
         extra={
-          <button
-            type="button"
-            disabled={!organizationFilter}
-            onClick={openCreate}
-            className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-          >
-            Crear usuario
-          </button>
+          orgAssignableRoles.length > 0 ? (
+            <button
+              type="button"
+              disabled={!organizationFilter}
+              onClick={openCreate}
+              className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+            >
+              Crear usuario
+            </button>
+          ) : null
         }
       />
 
@@ -285,9 +317,9 @@ export default function SuperadminUsersPage() {
           <label className="space-y-1 text-sm">
             <span>Rol</span>
             <select value={form.role} onChange={(event) => setForm((prev) => ({ ...prev, role: event.target.value }))} className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2">
-              {editableRoles.map((role) => (
-                <option key={role} value={role}>
-                  {role}
+              {orgAssignableRoles.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
                 </option>
               ))}
             </select>

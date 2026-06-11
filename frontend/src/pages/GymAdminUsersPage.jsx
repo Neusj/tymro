@@ -10,13 +10,14 @@ import DataTable from '../components/ui/DataTable'
 import FormModal from '../components/FormModal'
 import RoleBadge from '../components/RoleBadge'
 import ValueBadge from '../components/ui/ValueBadge'
+import { extractApiErrorMessage } from '../utils/apiErrors'
 
 const userInitialForm = {
   username: '',
   first_name: '',
   last_name: '',
   email: '',
-  role: 'teacher',
+  role: '',
   branch: '',
   password: '',
   phone: '',
@@ -25,18 +26,12 @@ const userInitialForm = {
   is_active: true,
 }
 
-const allowedRoles = ['teacher', 'student']
-
-const roleFilterOptions = [
-  { value: '', label: 'Todos' },
-  { value: 'teacher', label: 'Profesor' },
-  { value: 'student', label: 'Alumno' },
-]
-
 export default function GymAdminUsersPage() {
   const navigate = useNavigate()
   const [branches, setBranches] = useState([])
   const [users, setUsers] = useState([])
+  const [assignableRoles, setAssignableRoles] = useState([])
+  const [error, setError] = useState('')
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState(null)
   const [form, setForm] = useState(userInitialForm)
@@ -44,18 +39,35 @@ export default function GymAdminUsersPage() {
   const [roleFilter, setRoleFilter] = useState('')
 
   const loadData = async () => {
-    const [branchesData, usersData] = await Promise.all([branchesApi.list(), usersApi.list(roleFilter ? { role: roleFilter } : {})])
-    setBranches(branchesData)
-    setUsers(usersData)
+    try {
+      const [branchesData, usersData] = await Promise.all([branchesApi.list(), usersApi.list(roleFilter ? { role: roleFilter } : {})])
+      setBranches(branchesData)
+      setUsers(usersData)
+    } catch (apiError) {
+      setError(extractApiErrorMessage(apiError, 'No se pudo cargar usuarios.'))
+    }
   }
+
+  useEffect(() => {
+    usersApi
+      .assignableRoles()
+      .then(setAssignableRoles)
+      .catch((apiError) => setError(extractApiErrorMessage(apiError, 'No se pudo cargar los roles disponibles.')))
+  }, [])
 
   useEffect(() => {
     loadData()
   }, [roleFilter])
 
+  const roleFilterOptions = useMemo(() => [{ value: '', label: 'Todos' }, ...assignableRoles], [assignableRoles])
+
+  const canManage = (role) => assignableRoles.some((option) => option.value === role)
+
+  const defaultRoleValue = () => (assignableRoles.find((option) => option.value === 'teacher') || assignableRoles[0])?.value || ''
+
   const openCreate = () => {
     setEditing(null)
-    setForm(userInitialForm)
+    setForm({ ...userInitialForm, role: defaultRoleValue() })
     setModalOpen(true)
   }
 
@@ -66,7 +78,7 @@ export default function GymAdminUsersPage() {
       first_name: user.first_name || '',
       last_name: user.last_name || '',
       email: user.email || '',
-      role: user.role || 'student',
+      role: user.role || '',
       branch: user.branch || '',
       password: '',
       phone: user.phone || '',
@@ -87,26 +99,42 @@ export default function GymAdminUsersPage() {
       delete payload.password
     }
 
-    if (editing) {
-      await usersApi.update(editing.id, payload, true)
-    } else {
-      await usersApi.create(payload, true)
+    try {
+      if (editing) {
+        await usersApi.update(editing.id, payload, true)
+      } else {
+        await usersApi.create(payload, true)
+      }
+      setError('')
+      setModalOpen(false)
+      await loadData()
+    } catch (apiError) {
+      setError(extractApiErrorMessage(apiError, 'No tienes permisos para esa acción.'))
+      setModalOpen(false)
     }
-    setModalOpen(false)
-    await loadData()
   }
 
   const removeUser = async () => {
     if (!deleting) {
       return
     }
-    await usersApi.remove(deleting.id)
+    try {
+      await usersApi.remove(deleting.id)
+      setError('')
+    } catch (apiError) {
+      setError(extractApiErrorMessage(apiError, 'No tienes permisos para esa acción.'))
+    }
     setDeleting(null)
     await loadData()
   }
 
   const toggleActive = async (user) => {
-    await usersApi.update(user.id, { is_active: !user.is_active })
+    try {
+      await usersApi.update(user.id, { is_active: !user.is_active })
+      setError('')
+    } catch (apiError) {
+      setError(extractApiErrorMessage(apiError, 'No tienes permisos para esa acción.'))
+    }
     await loadData()
   }
 
@@ -132,13 +160,13 @@ export default function GymAdminUsersPage() {
         key: 'actions',
         label: 'Acciones',
         mobilePrimary: (row) =>
-          allowedRoles.includes(row.role) ? (
+          canManage(row.role) ? (
             <button type="button" onClick={() => openEdit(row)} className="rounded-lg border border-brand-blue bg-brand-blue/10 px-3 py-2 text-xs font-semibold text-brand-white">
               Editar
             </button>
           ) : null,
         render: (row) =>
-          allowedRoles.includes(row.role) ? (
+          canManage(row.role) ? (
             <div className="flex gap-2">
               <button type="button" onClick={() => openEdit(row)} className="rounded border border-brand-line px-2 py-1 text-xs text-brand-muted">
                 Editar
@@ -164,18 +192,20 @@ export default function GymAdminUsersPage() {
           ),
       },
     ],
-    [],
+    [assignableRoles],
   )
 
   return (
     <div className="space-y-6">
       <DashboardHeader
         title="Gym Admin · Usuarios"
-        subtitle="CRUD de teachers y students de tu organización."
+        subtitle="CRUD de usuarios de tu organización."
         extra={
-          <button type="button" onClick={openCreate} className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white">
-            Crear usuario
-          </button>
+          assignableRoles.length > 0 ? (
+            <button type="button" onClick={openCreate} className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white">
+              Crear usuario
+            </button>
+          ) : null
         }
       />
 
@@ -184,6 +214,8 @@ export default function GymAdminUsersPage() {
           <FilterDropdown label="Rol" value={roleFilter} options={roleFilterOptions} onChange={setRoleFilter} />
         </FilterPanel>
       </section>
+
+      {error ? <p className="rounded-xl border border-brand-red/50 bg-brand-red/10 px-4 py-3 text-sm text-red-200">{error}</p> : null}
 
       <section className="card-surface p-5">
         <DataTable columns={columns} data={users} />
@@ -229,9 +261,9 @@ export default function GymAdminUsersPage() {
           <label className="space-y-1 text-sm">
             <span>Rol</span>
             <select value={form.role} onChange={(event) => setForm((prev) => ({ ...prev, role: event.target.value }))} className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2">
-              {allowedRoles.map((role) => (
-                <option key={role} value={role}>
-                  {role}
+              {assignableRoles.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
                 </option>
               ))}
             </select>

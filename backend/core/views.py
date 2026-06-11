@@ -24,6 +24,8 @@ from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from rest_framework.viewsets import ModelViewSet
 
+from accounts import roles
+
 from .models import (
     Attendance,
     Branch,
@@ -44,7 +46,11 @@ from .models import (
     TeacherPaymentRule,
     TeacherPayout,
 )
-from .permissions import IsSuperAdminOrGymAdmin
+from .permissions import (
+    FinancialResourcePermission,
+    IsSuperAdminOrGymAdmin,
+    OperationalResourcePermission,
+)
 from .serializers import (
     AttendanceBulkWriteSerializer,
     AttendanceSerializer,
@@ -128,6 +134,14 @@ def _is_gym_admin(user):
     return _user_role(user) == User.Role.GYM_ADMIN
 
 
+def _is_manager(user):
+    return _user_role(user) == User.Role.MANAGER
+
+
+def _is_monitor(user):
+    return _user_role(user) == User.Role.MONITOR
+
+
 def _is_teacher(user):
     return _user_role(user) == User.Role.TEACHER
 
@@ -148,7 +162,7 @@ def _sync_class_statuses(base_queryset=None):
 def _can_close_or_cancel(user, gym_class):
     if _is_superadmin(user):
         return True
-    if _is_gym_admin(user) and gym_class.organization_id == user.organization_id:
+    if roles.is_org_admin(user) and gym_class.organization_id == user.organization_id:
         return True
     if _is_teacher(user) and gym_class.teacher_id == user.id:
         return True
@@ -159,6 +173,16 @@ def _can_manage_org_resource(user, organization_id):
     if _is_superadmin(user):
         return True
     if _is_gym_admin(user) and user.organization_id == organization_id:
+        return True
+    return False
+
+
+def _can_manage_operational_resource(user, organization_id):
+    """Gestión de recursos operativos (grupo a): superadmin o org-admin (gym_admin/manager)
+    de la misma organización. Para config de organización usar _can_manage_org_resource."""
+    if _is_superadmin(user):
+        return True
+    if roles.is_org_admin(user) and user.organization_id == organization_id:
         return True
     return False
 
@@ -1256,50 +1280,49 @@ class UserViewSet(ModelViewSet):
                 queryset = queryset.filter(role=role)
             return queryset
 
-        if _is_gym_admin(user) and user.organization_id:
+        if roles.is_org_admin(user) and user.organization_id:
             role = self.request.query_params.get('role')
             queryset = queryset.filter(organization_id=user.organization_id)
             if role:
                 queryset = queryset.filter(role=role)
             return queryset
 
-        if _is_teacher(user) or _is_student(user):
+        if _is_teacher(user) or _is_student(user) or _is_monitor(user):
             return queryset.filter(id=user.id)
         return queryset.none()
 
     def list(self, request, *args, **kwargs):
-        if _is_teacher(request.user) or _is_student(request.user):
+        if _is_teacher(request.user) or _is_student(request.user) or _is_monitor(request.user):
             raise PermissionDenied('No tienes acceso al listado general de usuarios.')
         if _is_superadmin(request.user) and not request.query_params.get('organization_id'):
             raise PermissionDenied('Debes filtrar por organization_id para listar usuarios como superadmin.')
         return super().list(request, *args, **kwargs)
 
+    @action(detail=False, methods=['get'], url_path='assignable-roles')
+    def assignable_roles(self, request):
+        """Roles que request.user puede asignar, como [{'value','label'}].
+        La matriz y los labels viven SOLO en accounts/roles.py."""
+        return Response(roles.assignable_role_choices(request.user))
+
     def _validate_write_permissions(self, data=None, instance=None):
+        """Autorización de escrituras sobre usuarios. La matriz de qué rol puede
+        asignar/gestionar quién vive SOLO en accounts/roles.py."""
         user = self.request.user
         data = data or {}
         requested_role = data.get('role')
         requested_organization = data.get('organization')
 
-        if _is_superadmin(user):
-            return
-
-        if not _is_gym_admin(user):
+        if not roles.assignable_roles(user):
             raise PermissionDenied('No tienes permisos para gestionar usuarios.')
 
-        if instance and instance.role == User.Role.SUPERADMIN:
-            raise PermissionDenied('No puedes gestionar usuarios superadmin.')
+        if instance is not None and not roles.can_assign(user, instance.role):
+            raise PermissionDenied('No tienes permisos para gestionar usuarios con ese rol.')
 
-        if instance and instance.role == User.Role.GYM_ADMIN:
-            raise PermissionDenied('No puedes gestionar usuarios gym_admin.')
+        if requested_role and not roles.can_assign(user, requested_role):
+            raise PermissionDenied('No puedes asignar ese rol.')
 
-        if requested_role == User.Role.SUPERADMIN:
-            raise PermissionDenied('No puedes crear o editar superadmins.')
-
-        if requested_role and requested_role not in (User.Role.GYM_ADMIN, User.Role.TEACHER, User.Role.STUDENT):
-            raise PermissionDenied('Rol no permitido para gym_admin.')
-
-        if requested_role == User.Role.GYM_ADMIN:
-            raise PermissionDenied('Gym admin no puede crear otros gym_admin.')
+        if roles.role_of(user) in roles.PLATFORM_ROLES:
+            return
 
         if requested_organization is not None:
             try:
@@ -1330,7 +1353,7 @@ class UserViewSet(ModelViewSet):
         user = self.request.user
         save_kwargs = {}
 
-        if _is_gym_admin(user):
+        if roles.is_org_admin(user):
             save_kwargs['organization'] = user.organization
 
         created_user = serializer.save(**save_kwargs)
@@ -1344,7 +1367,7 @@ class UserViewSet(ModelViewSet):
         instance = self.get_object()
         self._validate_write_permissions(self.request.data, instance=instance)
 
-        if _is_gym_admin(self.request.user):
+        if roles.is_org_admin(self.request.user):
             serializer.save(organization=self.request.user.organization)
         else:
             serializer.save()
@@ -1370,7 +1393,7 @@ class PersonViewSet(ModelViewSet):
 class ClassTypeViewSet(ModelViewSet):
     queryset = ClassType.objects.all()
     serializer_class = ClassTypeSerializer
-    permission_classes = [IsSuperAdminOrGymAdmin]
+    permission_classes = [OperationalResourcePermission]
 
     def get_queryset(self):
         user = self.request.user
@@ -1388,7 +1411,7 @@ class ClassTypeViewSet(ModelViewSet):
         if _is_superadmin(user):
             serializer.save()
             return
-        if _is_gym_admin(user):
+        if roles.is_org_admin(user):
             serializer.save(organization=user.organization)
             return
         raise PermissionDenied('No tienes permisos para crear tipos de clase.')
@@ -1399,7 +1422,7 @@ class ClassTypeViewSet(ModelViewSet):
         if _is_superadmin(user):
             serializer.save()
             return
-        if _is_gym_admin(user) and class_type.organization_id == user.organization_id:
+        if roles.is_org_admin(user) and class_type.organization_id == user.organization_id:
             serializer.save(organization=user.organization)
             return
         raise PermissionDenied('No tienes permisos para editar este tipo de clase.')
@@ -1409,7 +1432,7 @@ class ClassTypeViewSet(ModelViewSet):
         if _is_superadmin(user):
             instance.delete()
             return
-        if _is_gym_admin(user) and instance.organization_id == user.organization_id:
+        if roles.is_org_admin(user) and instance.organization_id == user.organization_id:
             instance.delete()
             return
         raise PermissionDenied('No tienes permisos para eliminar este tipo de clase.')
@@ -1418,7 +1441,7 @@ class ClassTypeViewSet(ModelViewSet):
 class DisciplineViewSet(ModelViewSet):
     queryset = Discipline.objects.all()
     serializer_class = DisciplineSerializer
-    permission_classes = [IsSuperAdminOrGymAdmin]
+    permission_classes = [OperationalResourcePermission]
 
     def get_queryset(self):
         user = self.request.user
@@ -1436,7 +1459,7 @@ class DisciplineViewSet(ModelViewSet):
         if _is_superadmin(user):
             serializer.save()
             return
-        if _is_gym_admin(user):
+        if roles.is_org_admin(user):
             serializer.save(organization=user.organization)
             return
         raise PermissionDenied('No tienes permisos para crear disciplinas.')
@@ -1447,7 +1470,7 @@ class DisciplineViewSet(ModelViewSet):
         if _is_superadmin(user):
             serializer.save()
             return
-        if _is_gym_admin(user) and discipline.organization_id == user.organization_id:
+        if roles.is_org_admin(user) and discipline.organization_id == user.organization_id:
             serializer.save(organization=user.organization)
             return
         raise PermissionDenied('No tienes permisos para editar esta disciplina.')
@@ -1457,7 +1480,7 @@ class DisciplineViewSet(ModelViewSet):
         if _is_superadmin(user):
             instance.delete()
             return
-        if _is_gym_admin(user) and instance.organization_id == user.organization_id:
+        if roles.is_org_admin(user) and instance.organization_id == user.organization_id:
             instance.delete()
             return
         raise PermissionDenied('No tienes permisos para eliminar esta disciplina.')
@@ -1466,7 +1489,7 @@ class DisciplineViewSet(ModelViewSet):
 class HolidayViewSet(ModelViewSet):
     queryset = Holiday.objects.select_related('organization', 'branch').all()
     serializer_class = HolidaySerializer
-    permission_classes = [IsSuperAdminOrGymAdmin]
+    permission_classes = [OperationalResourcePermission]
 
     def get_queryset(self):
         user = self.request.user
@@ -1485,7 +1508,7 @@ class HolidayViewSet(ModelViewSet):
             if organization_id:
                 queryset = queryset.filter(models.Q(organization_id=organization_id) | models.Q(scope=Holiday.Scope.GLOBAL))
             return _apply_ordering(queryset, ordering, ordering_map, default_ordering)
-        if _is_gym_admin(user) and user.organization_id:
+        if (roles.is_org_admin(user) or _is_monitor(user)) and user.organization_id:
             queryset = queryset.filter(models.Q(scope=Holiday.Scope.GLOBAL) | models.Q(organization_id=user.organization_id))
             return _apply_ordering(queryset, ordering, ordering_map, default_ordering)
         return queryset.none()
@@ -1495,7 +1518,7 @@ class HolidayViewSet(ModelViewSet):
         if _is_superadmin(user):
             serializer.save()
             return
-        if _is_gym_admin(user):
+        if roles.is_org_admin(user):
             serializer.save(organization=user.organization, source_type=Holiday.SourceType.MANUAL)
             return
         raise PermissionDenied('No tienes permisos para crear festivos.')
@@ -1506,7 +1529,7 @@ class HolidayViewSet(ModelViewSet):
         if _is_superadmin(user):
             serializer.save()
             return
-        if _is_gym_admin(user):
+        if roles.is_org_admin(user):
             if holiday.scope == Holiday.Scope.GLOBAL:
                 raise PermissionDenied('No puedes editar festivos globales.')
             if holiday.organization_id != user.organization_id:
@@ -1525,7 +1548,7 @@ class HolidayViewSet(ModelViewSet):
         if _is_superadmin(user):
             instance.delete()
             return
-        if _is_gym_admin(user):
+        if roles.is_org_admin(user):
             if instance.scope == Holiday.Scope.GLOBAL:
                 raise PermissionDenied('No puedes eliminar festivos globales.')
             if instance.source_type == Holiday.SourceType.SYSTEM:
@@ -1603,7 +1626,7 @@ class GymClassViewSet(ModelViewSet):
             _sync_class_statuses(queryset)
             return queryset
 
-        if _is_gym_admin(user) and user.organization_id:
+        if (roles.is_org_admin(user) or _is_monitor(user)) and user.organization_id:
             queryset = self.queryset.filter(organization_id=user.organization_id)
             queryset = apply_common_filters(queryset)
             queryset = _apply_ordering(queryset, ordering, ordering_map, default_ordering)
@@ -1640,7 +1663,7 @@ class GymClassViewSet(ModelViewSet):
         if _is_superadmin(user):
             serializer.save(created_by=user)
             return
-        if _is_gym_admin(user):
+        if roles.is_org_admin(user):
             serializer.save(organization=user.organization, created_by=user)
             return
         raise PermissionDenied('No tienes permisos para crear clases.')
@@ -1655,7 +1678,7 @@ class GymClassViewSet(ModelViewSet):
         if _is_superadmin(user):
             serializer.save()
             return
-        if _is_gym_admin(user) and gym_class.organization_id == user.organization_id:
+        if roles.is_org_admin(user) and gym_class.organization_id == user.organization_id:
             serializer.save(organization=user.organization)
             return
         raise PermissionDenied('No tienes permisos para editar esta clase.')
@@ -1665,7 +1688,7 @@ class GymClassViewSet(ModelViewSet):
         if _is_superadmin(user):
             instance.delete()
             return
-        if _is_gym_admin(user) and instance.organization_id == user.organization_id:
+        if roles.is_org_admin(user) and instance.organization_id == user.organization_id:
             instance.delete()
             return
         raise PermissionDenied('No tienes permisos para eliminar esta clase.')
@@ -1677,7 +1700,7 @@ class GymClassViewSet(ModelViewSet):
 
         if not (
             _is_superadmin(user)
-            or (_is_gym_admin(user) and gym_class.organization_id == user.organization_id)
+            or ((roles.is_org_admin(user) or _is_monitor(user)) and gym_class.organization_id == user.organization_id)
             or (_is_teacher(user) and gym_class.teacher_id == user.id)
         ):
             raise PermissionDenied('No tienes permisos para ver los alumnos inscritos en esta clase.')
@@ -1729,7 +1752,7 @@ class GymClassViewSet(ModelViewSet):
 
         if not (
             _is_superadmin(user)
-            or (_is_gym_admin(user) and gym_class.organization_id == user.organization_id)
+            or ((roles.is_org_admin(user) or _is_monitor(user)) and gym_class.organization_id == user.organization_id)
             or (_is_teacher(user) and gym_class.teacher_id == user.id)
         ):
             raise PermissionDenied('No tienes permisos para listar alumnos inscribibles en esta clase.')
@@ -1776,7 +1799,7 @@ class GymClassViewSet(ModelViewSet):
         gym_class = self.get_object()
         user = request.user
 
-        if not (_is_superadmin(user) or (_is_gym_admin(user) and gym_class.organization_id == user.organization_id) or (_is_teacher(user) and gym_class.teacher_id == user.id)):
+        if not (_is_superadmin(user) or (roles.is_org_admin(user) and gym_class.organization_id == user.organization_id) or (_is_teacher(user) and gym_class.teacher_id == user.id)):
             raise PermissionDenied('No tienes permisos para registrar asistencia en esta clase.')
 
         gym_class.refresh_status_from_schedule(save=True)
@@ -1969,7 +1992,7 @@ class ClassTemplateViewSet(ModelViewSet):
                 skip_holidays=True,
             )
             return
-        if _is_gym_admin(user):
+        if roles.is_org_admin(user):
             template = serializer.save(organization=user.organization, created_by=user)
             generate_instances_for_template_range(
                 template=template,
@@ -1984,7 +2007,7 @@ class ClassTemplateViewSet(ModelViewSet):
     def perform_update(self, serializer):
         user = self.request.user
         template = self.get_object()
-        if _can_manage_org_resource(user, template.organization_id):
+        if _can_manage_operational_resource(user, template.organization_id):
             updated_template = serializer.save()
             apply_updates = _parse_bool(self.request.data.get('apply_to_future_instances'), default=True)
             if apply_updates:
@@ -1994,7 +2017,7 @@ class ClassTemplateViewSet(ModelViewSet):
 
     def perform_destroy(self, instance):
         user = self.request.user
-        if _can_manage_org_resource(user, instance.organization_id):
+        if _can_manage_operational_resource(user, instance.organization_id):
             delete_result = delete_template_safely(instance)
             if delete_result.get('deleted'):
                 return
@@ -2021,7 +2044,7 @@ class ClassTemplateViewSet(ModelViewSet):
     def generate_instances(self, request, pk=None):
         template = self.get_object()
         user = request.user
-        if not _can_manage_org_resource(user, template.organization_id):
+        if not _can_manage_operational_resource(user, template.organization_id):
             raise PermissionDenied('No tienes permisos para generar clases de esta plantilla.')
 
         from_date = request.data.get('from_date') or template.start_date
@@ -2054,7 +2077,7 @@ class ClassTemplateViewSet(ModelViewSet):
             serializer.save(created_by=user)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
 
-        if _can_manage_org_resource(user, template.organization_id):
+        if _can_manage_operational_resource(user, template.organization_id):
             payload = dict(request.data)
             payload['class_template'] = template.id
             serializer = RecurringEnrollmentSerializer(data=payload, context={'request': request})
@@ -2068,7 +2091,7 @@ class ClassTemplateViewSet(ModelViewSet):
     def cancel_future_instances(self, request, pk=None):
         template = self.get_object()
         user = request.user
-        if not _can_manage_org_resource(user, template.organization_id):
+        if not _can_manage_operational_resource(user, template.organization_id):
             raise PermissionDenied('No tienes permisos para cancelar futuras de esta serie.')
         comment = str(request.data.get('comment', '')).strip() or 'Cancelacion de futuras desde serie'
         summary = cancel_future_instances_for_template(template, actor=user, comment=comment)
@@ -2078,7 +2101,7 @@ class ClassTemplateViewSet(ModelViewSet):
     def reactivate_future_cancelled(self, request, pk=None):
         template = self.get_object()
         user = request.user
-        if not _can_manage_org_resource(user, template.organization_id):
+        if not _can_manage_operational_resource(user, template.organization_id):
             raise PermissionDenied('No tienes permisos para reactivar futuras de esta serie.')
         summary = reactivate_future_cancelled_instances_for_template(template)
         return Response(summary)
@@ -2099,7 +2122,7 @@ class ClassTemplateViewSet(ModelViewSet):
         comment = str(request.data.get('comment', '')).strip() or 'Cancelacion masiva de futuras'
 
         for template in templates:
-            if not _can_manage_org_resource(user, template.organization_id):
+            if not _can_manage_operational_resource(user, template.organization_id):
                 summary['skipped'].append({'id': template.id, 'reason': 'Sin permisos'})
                 continue
 
@@ -2193,7 +2216,7 @@ class RecurringEnrollmentViewSet(ModelViewSet):
 
         if _is_superadmin(user):
             return queryset
-        if _is_gym_admin(user) and user.organization_id:
+        if (roles.is_org_admin(user) or _is_monitor(user)) and user.organization_id:
             return queryset.filter(class_template__organization_id=user.organization_id)
         if _is_student(user):
             return queryset.filter(student_id=user.id)
@@ -2206,7 +2229,7 @@ class RecurringEnrollmentViewSet(ModelViewSet):
             return
 
         template = serializer.validated_data.get('class_template')
-        if template and _can_manage_org_resource(user, template.organization_id):
+        if template and _can_manage_operational_resource(user, template.organization_id):
             serializer.save(created_by=user)
             return
         raise PermissionDenied('No tienes permisos para crear esta recurrencia.')
@@ -2216,9 +2239,9 @@ class RecurringEnrollmentViewSet(ModelViewSet):
         recurring_enrollment = self.get_object()
         if _is_student(user) and recurring_enrollment.student_id != user.id:
             raise PermissionDenied('Solo puedes editar tus propias recurrencias.')
-        if _is_gym_admin(user) and recurring_enrollment.class_template.organization_id != user.organization_id:
+        if roles.is_org_admin(user) and recurring_enrollment.class_template.organization_id != user.organization_id:
             raise PermissionDenied('No tienes permisos para editar esta recurrencia.')
-        if not (_is_superadmin(user) or _is_gym_admin(user) or _is_student(user)):
+        if not (_is_superadmin(user) or roles.is_org_admin(user) or _is_student(user)):
             raise PermissionDenied('No tienes permisos para editar recurrencias.')
 
         if _is_student(user):
@@ -2249,7 +2272,7 @@ class RecurringEnrollmentViewSet(ModelViewSet):
         if _is_superadmin(user):
             instance.delete()
             return
-        if _is_gym_admin(user) and instance.class_template.organization_id == user.organization_id:
+        if roles.is_org_admin(user) and instance.class_template.organization_id == user.organization_id:
             instance.delete()
             return
         if _is_student(user) and instance.student_id == user.id:
@@ -2322,7 +2345,7 @@ class EnrollmentViewSet(ModelViewSet):
             if organization_id:
                 queryset = queryset.filter(gym_class__organization_id=organization_id)
             return queryset
-        if _is_gym_admin(user) and user.organization_id:
+        if (roles.is_org_admin(user) or _is_monitor(user)) and user.organization_id:
             return queryset.filter(gym_class__organization_id=user.organization_id)
         if _is_teacher(user):
             return queryset.filter(gym_class__teacher_id=user.id)
@@ -2345,11 +2368,11 @@ class EnrollmentViewSet(ModelViewSet):
 
         if _is_student(user) and enrollment.student_id != user.id:
             raise PermissionDenied('Solo puedes cancelar tus propias reservas.')
-        if _is_gym_admin(user) and enrollment.gym_class.organization_id != user.organization_id:
+        if roles.is_org_admin(user) and enrollment.gym_class.organization_id != user.organization_id:
             raise PermissionDenied('No tienes permisos para esta reserva.')
         if _is_teacher(user) and enrollment.gym_class.teacher_id != user.id:
             raise PermissionDenied('Solo puedes cancelar inscripciones en tus propias clases.')
-        if not (_is_superadmin(user) or _is_gym_admin(user) or _is_teacher(user) or _is_student(user)):
+        if not (_is_superadmin(user) or roles.is_org_admin(user) or _is_teacher(user) or _is_student(user)):
             raise PermissionDenied('No tienes permisos para cancelar esta reserva.')
         if _is_student(user):
             can_cancel, reason = _student_can_cancel_enrollment(enrollment)
@@ -2380,7 +2403,7 @@ class EnrollmentViewSet(ModelViewSet):
                 serializer.save()
                 return
 
-            if _is_superadmin(user) or _is_gym_admin(user):
+            if _is_superadmin(user) or roles.is_org_admin(user):
                 try:
                     enrollment = reserve_student_in_class(
                         student=student,
@@ -2423,7 +2446,7 @@ class EnrollmentViewSet(ModelViewSet):
         if _is_superadmin(user):
             serializer.save()
             return
-        if _is_gym_admin(user) and enrollment.gym_class.organization_id == user.organization_id:
+        if roles.is_org_admin(user) and enrollment.gym_class.organization_id == user.organization_id:
             serializer.save()
             return
         raise PermissionDenied('No tienes permisos para editar inscripciones.')
@@ -2433,7 +2456,7 @@ class EnrollmentViewSet(ModelViewSet):
         if _is_superadmin(user):
             instance.delete()
             return
-        if _is_gym_admin(user) and instance.gym_class.organization_id == user.organization_id:
+        if roles.is_org_admin(user) and instance.gym_class.organization_id == user.organization_id:
             instance.delete()
             return
         if _is_student(user) and instance.student_id == user.id:
@@ -2445,6 +2468,7 @@ class EnrollmentViewSet(ModelViewSet):
 class MembershipPlanViewSet(ModelViewSet):
     queryset = Plan.objects.select_related('organization').all()
     serializer_class = PlanSerializer
+    permission_classes = [FinancialResourcePermission]
 
     def get_queryset(self):
         base_queryset = Plan.objects.select_related('organization').all()
@@ -2454,7 +2478,7 @@ class MembershipPlanViewSet(ModelViewSet):
             if organization_id:
                 base_queryset = base_queryset.filter(organization_id=organization_id)
             return base_queryset
-        if (_is_gym_admin(user) or _is_student(user)) and user.organization_id:
+        if (_is_gym_admin(user) or _is_student(user) or _is_monitor(user)) and user.organization_id:
             return base_queryset.filter(organization_id=user.organization_id)
         return base_queryset.none()
 
@@ -2614,6 +2638,7 @@ class MembershipPlanViewSet(ModelViewSet):
 class TeacherPaymentRuleViewSet(ModelViewSet):
     queryset = TeacherPaymentRule.objects.select_related('organization', 'branch', 'discipline', 'class_type').prefetch_related('teachers').all()
     serializer_class = TeacherPaymentRuleSerializer
+    permission_classes = [FinancialResourcePermission]
 
     def get_queryset(self):
         user = self.request.user
@@ -2623,7 +2648,7 @@ class TeacherPaymentRuleViewSet(ModelViewSet):
             if organization_id:
                 queryset = queryset.filter(organization_id=organization_id)
             return queryset
-        if _is_gym_admin(user) and user.organization_id:
+        if (_is_gym_admin(user) or _is_monitor(user)) and user.organization_id:
             return queryset.filter(organization_id=user.organization_id)
         return queryset.none()
 
@@ -2679,7 +2704,12 @@ class TeacherPaymentRuleViewSet(ModelViewSet):
     def assignments(self, request, pk=None):
         rule = self.get_object()
         user = request.user
-        if not (_is_superadmin(user) or (_is_gym_admin(user) and rule.organization_id == user.organization_id)):
+        is_read = request.method.lower() == 'get'
+        allowed = _is_superadmin(user) or (
+            (roles.is_org_admin(user) or (is_read and _is_monitor(user)))
+            and rule.organization_id == user.organization_id
+        )
+        if not allowed:
             raise PermissionDenied('No tienes permisos para gestionar asignaciones de esta regla.')
 
         teachers_qs = User.objects.filter(
@@ -2715,6 +2745,7 @@ class TeacherPaymentRuleViewSet(ModelViewSet):
 class TeacherPaymentRecordViewSet(ModelViewSet):
     queryset = TeacherPaymentRecord.objects.select_related('teacher', 'class_instance', 'rule').all()
     serializer_class = TeacherPaymentRecordSerializer
+    permission_classes = [FinancialResourcePermission]
     http_method_names = ['get', 'post', 'head', 'options']
 
     def create(self, request, *args, **kwargs):
@@ -2730,7 +2761,7 @@ class TeacherPaymentRecordViewSet(ModelViewSet):
         queryset = self.queryset
         if _is_superadmin(user):
             pass
-        elif _is_gym_admin(user) and user.organization_id:
+        elif (_is_gym_admin(user) or _is_monitor(user)) and user.organization_id:
             queryset = queryset.filter(class_instance__organization_id=user.organization_id)
         elif _is_teacher(user):
             queryset = queryset.filter(teacher_id=user.id)
@@ -2786,7 +2817,7 @@ class TeacherPaymentRecordViewSet(ModelViewSet):
             organization_id = request.query_params.get('organization_id')
             if not organization_id:
                 raise ValidationError({'organization_id': 'Debes indicar la organizacion.'})
-        elif _is_gym_admin(user) and user.organization_id:
+        elif (_is_gym_admin(user) or _is_monitor(user)) and user.organization_id:
             organization_id = user.organization_id
         elif _is_teacher(user) and user.organization_id:
             organization_id = user.organization_id

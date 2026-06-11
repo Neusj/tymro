@@ -7,6 +7,8 @@ from django.db.models import Q
 from django.utils import timezone
 from rest_framework import serializers
 
+from accounts import roles
+
 from .models import (
     Attendance,
     Branch,
@@ -176,28 +178,35 @@ class CustomUserSerializer(serializers.ModelSerializer):
         ]
 
     def validate(self, attrs):
+        """Integridad de datos del usuario. La decisión de qué rol puede asignar
+        quién vive SOLO en accounts/roles.py (can_assign); aquí solo se consulta
+        como defensa en profundidad (el viewset ya la aplica con PermissionDenied)."""
         request = self.context.get('request')
-        user = getattr(request, 'user', None)
-        role = attrs.get('role', getattr(self.instance, 'role', None))
+        actor = getattr(request, 'user', None)
+
+        # Rol efectivo: el del payload; en updates sin 'role', el de la instancia;
+        # en create sin 'role', el default del modelo.
+        effective_role = attrs.get('role') or (self.instance.role if self.instance else User.Role.STUDENT)
+
+        # Actores org-admin (gym_admin/manager): la organización SIEMPRE es la suya.
+        if roles.is_org_admin(actor):
+            attrs['organization'] = actor.organization
+
+        if actor is not None and getattr(actor, 'is_authenticated', False):
+            if not roles.can_assign(actor, effective_role):
+                raise serializers.ValidationError({'role': 'No puedes asignar este rol.'})
+
         organization = attrs.get('organization', getattr(self.instance, 'organization', None))
         branch = attrs.get('branch', getattr(self.instance, 'branch', None))
 
-        if branch and organization and branch.organization_id != organization.id:
-            raise serializers.ValidationError({'branch': 'La sucursal no pertenece a la organización seleccionada.'})
-
-        if role == User.Role.SUPERADMIN:
+        if effective_role in roles.PLATFORM_ROLES:
             attrs['organization'] = None
             attrs['branch'] = None
-
-        if role in (User.Role.GYM_ADMIN, User.Role.TEACHER, User.Role.STUDENT) and not organization:
+        elif effective_role in roles.ORG_ROLES and not organization:
             raise serializers.ValidationError({'organization': 'Este rol requiere una organización.'})
 
-        if user and user.is_authenticated and user.role == User.Role.GYM_ADMIN:
-            attrs['organization'] = user.organization
-            if attrs.get('role') == User.Role.SUPERADMIN:
-                raise serializers.ValidationError({'role': 'Gym admin no puede crear ni editar superadmin.'})
-            if attrs.get('branch') and attrs['branch'].organization_id != user.organization_id:
-                raise serializers.ValidationError({'branch': 'La sucursal debe pertenecer a tu organización.'})
+        if branch and organization and branch.organization_id != organization.id:
+            raise serializers.ValidationError({'branch': 'La sucursal no pertenece a la organización seleccionada.'})
 
         return attrs
 
@@ -257,7 +266,7 @@ class ClassTypeSerializer(serializers.ModelSerializer):
         organization = attrs.get('organization', getattr(instance, 'organization', None))
         name = attrs.get('name', getattr(instance, 'name', ''))
 
-        if request and request.user.is_authenticated and request.user.role == User.Role.GYM_ADMIN:
+        if request and request.user.is_authenticated and roles.is_org_admin(request.user):
             attrs['organization'] = request.user.organization
             organization = attrs['organization']
 
@@ -294,7 +303,7 @@ class DisciplineSerializer(serializers.ModelSerializer):
         organization = attrs.get('organization', getattr(instance, 'organization', None))
         name = attrs.get('name', getattr(instance, 'name', ''))
 
-        if request and request.user.is_authenticated and request.user.role == User.Role.GYM_ADMIN:
+        if request and request.user.is_authenticated and roles.is_org_admin(request.user):
             attrs['organization'] = request.user.organization
             organization = attrs['organization']
 
@@ -348,7 +357,7 @@ class HolidaySerializer(serializers.ModelSerializer):
         organization = attrs.get('organization', getattr(instance, 'organization', None))
         branch = attrs.get('branch', getattr(instance, 'branch', None))
 
-        if user and user.is_authenticated and user.role == User.Role.GYM_ADMIN:
+        if user and user.is_authenticated and roles.is_org_admin(user):
             if scope == Holiday.Scope.GLOBAL:
                 raise serializers.ValidationError({'scope': 'Gym admin no puede crear festivos globales.'})
             if source_type == Holiday.SourceType.SYSTEM:
@@ -511,7 +520,7 @@ class EnrollmentSerializer(serializers.ModelSerializer):
         if status_value == 'active' and gym_class.status in TERMINAL_CLASS_STATUSES:
             raise serializers.ValidationError({'gym_class': 'No puedes reservar una clase cerrada.'})
 
-        if user and user.role == User.Role.GYM_ADMIN and gym_class.organization_id != user.organization_id:
+        if user and roles.is_org_admin(user) and gym_class.organization_id != user.organization_id:
             raise serializers.ValidationError({'gym_class': 'Solo puedes gestionar clases de tu organización.'})
 
         duplicate_exists = Enrollment.objects.filter(gym_class=gym_class, student=student)
@@ -643,7 +652,7 @@ class GymClassSerializer(serializers.ModelSerializer):
             if editable_fields.intersection(attrs.keys()):
                 raise serializers.ValidationError({'status': 'No puedes editar una clase que ya está cerrada.'})
 
-        if user and user.is_authenticated and user.role == User.Role.GYM_ADMIN:
+        if user and user.is_authenticated and roles.is_org_admin(user):
             organization = user.organization
             attrs['organization'] = organization
 
@@ -815,7 +824,7 @@ class ClassTemplateSerializer(serializers.ModelSerializer):
         class_type = attrs.get('class_type', getattr(instance, 'class_type', None))
         discipline = attrs.get('discipline', getattr(instance, 'discipline', None))
 
-        if user and user.is_authenticated and user.role == User.Role.GYM_ADMIN:
+        if user and user.is_authenticated and roles.is_org_admin(user):
             organization = user.organization
             attrs['organization'] = organization
 

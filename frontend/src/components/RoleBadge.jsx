@@ -3,6 +3,8 @@
 const roleClasses = {
   superadmin: 'border-brand-blue/40 bg-brand-blue/20 text-brand-white',
   gym_admin: 'border-brand-orange/40 bg-brand-orange/20 text-brand-white',
+  manager: 'border-brand-orange/40 bg-brand-orange/10 text-brand-white',
+  monitor: 'border-brand-blue/40 bg-brand-blue/10 text-brand-white',
   teacher: 'border-brand-red/40 bg-brand-red/20 text-brand-white',
   student: 'border-brand-line bg-brand-soft text-brand-white',
 }
