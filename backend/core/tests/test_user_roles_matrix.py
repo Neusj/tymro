@@ -305,17 +305,27 @@ def test_manager_lists_only_own_org_users(api_client, make_user, org, other_org)
     assert foreign_teacher.id not in ids
 
 
-def test_monitor_cannot_list_users(api_client, make_user, org):
-    _auth_as(api_client, make_user, org, 'monitor')
+def test_monitor_lists_own_org_users_readonly(api_client, make_user, org, other_org):
+    """Monitor es un visor de solo lectura de su organización: lista los usuarios
+    de su org (no los de otra). La denegación de escritura se cubre en
+    test_non_managing_roles_cannot_edit_even_themselves y la matriz de borrado."""
+    actor = _auth_as(api_client, make_user, org, 'monitor')
+    own_teacher = make_user('own_teacher', organization=org, role='teacher')
+    foreign_teacher = make_user('foreign_teacher', organization=other_org, role='teacher')
 
     response = api_client.get('/api/users/')
 
-    assert response.status_code == 403
+    assert response.status_code == 200
+    ids = _listed_ids(response.data)
+    assert {actor.id, own_teacher.id} <= ids
+    assert foreign_teacher.id not in ids
 
 
-def test_monitor_can_retrieve_self_but_not_others(api_client, make_user, org):
+def test_monitor_can_retrieve_own_org_users_but_not_cross_org(api_client, make_user, org, other_org):
     actor = _auth_as(api_client, make_user, org, 'monitor')
-    other = make_user('some_teacher', organization=org, role='teacher')
+    own = make_user('some_teacher', organization=org, role='teacher')
+    outsider = make_user('outsider_teacher', organization=other_org, role='teacher')
 
     assert api_client.get(f'/api/users/{actor.id}/').status_code == 200
-    assert api_client.get(f'/api/users/{other.id}/').status_code == 404
+    assert api_client.get(f'/api/users/{own.id}/').status_code == 200
+    assert api_client.get(f'/api/users/{outsider.id}/').status_code == 404
