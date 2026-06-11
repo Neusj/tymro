@@ -98,6 +98,19 @@ class OrganizationSerializer(serializers.ModelSerializer):
             'attendance_screen_session_expires_at',
         ]
 
+    def get_fields(self):
+        fields = super().get_fields()
+        # `is_active` y `public_registration_enabled` son editables solo al ACTUALIZAR
+        # (PATCH del superadmin). En la creación se ignoran a propósito: las
+        # organizaciones deben nacer SIEMPRE con los defaults del modelo
+        # (is_active=True, public_registration_enabled=True). Sin esto, un payload
+        # de create podría dar a luz una org desactivada o con el registro público
+        # apagado. `self.instance is None` ⇒ estamos creando.
+        if self.instance is None:
+            fields['is_active'].read_only = True
+            fields['public_registration_enabled'].read_only = True
+        return fields
+
     def get_public_registration_url(self, obj):
         base = settings.FRONTEND_URL.rstrip('/')
         return f'{base}/{obj.slug}/clase-gratis'

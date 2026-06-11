@@ -68,6 +68,8 @@ export default function SuperadminOrganizationsPage() {
       primary_color: organization.primary_color || '',
       secondary_color: organization.secondary_color || '',
       logo: null,
+      is_active: Boolean(organization.is_active),
+      public_registration_enabled: Boolean(organization.public_registration_enabled),
     })
     setError('')
     setModalOpen(true)
@@ -220,6 +222,40 @@ export default function SuperadminOrganizationsPage() {
               className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
             />
           </label>
+          {editing ? (
+            <div className="md:col-span-2 space-y-3 rounded-xl border border-brand-line bg-black/20 p-3">
+              <label className="flex items-start gap-3 text-sm">
+                <input
+                  type="checkbox"
+                  checked={Boolean(form.is_active)}
+                  onChange={(event) => setForm((prev) => ({ ...prev, is_active: event.target.checked }))}
+                  className="mt-1 h-4 w-4 shrink-0"
+                />
+                <span>
+                  Organización activa
+                  <span className="mt-0.5 block text-xs text-brand-muted">
+                    Si está desactivada, la organización no opera.
+                  </span>
+                </span>
+              </label>
+              <label className="flex items-start gap-3 text-sm">
+                <input
+                  type="checkbox"
+                  checked={Boolean(form.public_registration_enabled)}
+                  onChange={(event) =>
+                    setForm((prev) => ({ ...prev, public_registration_enabled: event.target.checked }))
+                  }
+                  className="mt-1 h-4 w-4 shrink-0"
+                />
+                <span>
+                  Permitir registro público (clase de prueba / QR)
+                  <span className="mt-0.5 block text-xs text-brand-muted">
+                    Si está apagado, el link/QR de clase de prueba no funciona.
+                  </span>
+                </span>
+              </label>
+            </div>
+          ) : null}
           {error ? <p className="text-sm text-red-200 md:col-span-2">{error}</p> : null}
           <div className="md:col-span-2 flex justify-end">
             <button type="submit" className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white">
