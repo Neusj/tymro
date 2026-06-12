@@ -1,6 +1,7 @@
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
+from .importer.views import ImporterViewSet
 from .views import (
     BranchViewSet,
     AttendanceQrCheckInView,
@@ -52,6 +53,7 @@ router.register('enrollments', EnrollmentViewSet)
 router.register('plans', MembershipPlanViewSet)
 router.register('teacher-payment-rules', TeacherPaymentRuleViewSet)
 router.register('teacher-payments', TeacherPaymentRecordViewSet, basename='teacher-payments')
+router.register('imports', ImporterViewSet, basename='imports')
 
 urlpatterns = [
     path('health/', health_check),

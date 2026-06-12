@@ -9,6 +9,7 @@ import GymAdminClassesPage from './pages/GymAdminClassesPage'
 import GymAdminClassTypesPage from './pages/GymAdminClassTypesPage'
 import GymAdminDisciplinesPage from './pages/GymAdminDisciplinesPage'
 import GymAdminHolidaysPage from './pages/GymAdminHolidaysPage'
+import GymAdminImportPage from './pages/GymAdminImportPage'
 import GymAdminBranchesPage from './pages/GymAdminBranchesPage'
 import GymAdminAttendanceQrPage from './pages/GymAdminAttendanceQrPage'
 import AssignPlanPage from './pages/AssignPlanPage'
@@ -280,6 +281,16 @@ export default function App() {
           <ProtectedRoute allowedRoles={['gym_admin', 'manager', 'monitor']}>
             <ShellRoute>
               <GymAdminClassTypesPage />
+            </ShellRoute>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/gym-admin/import"
+        element={
+          <ProtectedRoute allowedRoles={['gym_admin']}>
+            <ShellRoute>
+              <GymAdminImportPage />
             </ShellRoute>
           </ProtectedRoute>
         }

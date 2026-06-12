@@ -48,6 +48,18 @@ function ClassesIcon() {
   )
 }
 
+function ImportIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5">
+      <path d="M12 3v12" />
+      <path d="M7 10l5 5 5-5" />
+      <path d="M4 21h16" />
+      <path d="M4 17v4" />
+      <path d="M20 17v4" />
+    </svg>
+  )
+}
+
 function OrgIcon() {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5">
@@ -112,6 +124,7 @@ const navByRole = {
     { type: 'item', to: '/gym-admin/users', label: 'Usuarios', icon: <UsersIcon /> },
     { type: 'item', to: '/gym-admin/branches', label: 'Sucursales', icon: <BranchesIcon /> },
     { type: 'item', to: '/gym-admin/attendance-qr', label: 'QR asistencia', icon: <ClassesIcon /> },
+    { type: 'item', to: '/gym-admin/import', label: 'Importar datos', icon: <ImportIcon /> },
     {
       type: 'group',
       label: 'Clases',

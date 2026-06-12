@@ -464,6 +464,28 @@ export const teacherPaymentsApi = {
   },
 }
 
+// Importador de datos (onboarding): solo gym_admin/superadmin (el backend lo
+// exige; aquí no hay control real). El flujo es plantilla → validate → commit
+// con el MISMO archivo + token de previsualización.
+export const importsApi = {
+  entities: async () => {
+    const { data } = await api.get('/imports/entities/')
+    return data
+  },
+  downloadTemplate: async (entity) => {
+    const response = await api.get(`/imports/${entity}/template/`, { responseType: 'blob' })
+    return response
+  },
+  validate: async (entity, file) => {
+    const { data } = await api.post(`/imports/${entity}/validate/`, toFormData({ file }))
+    return data
+  },
+  commit: async (entity, file, token) => {
+    const { data } = await api.post(`/imports/${entity}/commit/`, toFormData({ file, token }))
+    return data
+  },
+}
+
 export const attendanceQrApi = {
   current: async () => {
     const { data } = await api.get('/attendance-qr/current/')
