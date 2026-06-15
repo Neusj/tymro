@@ -1,4 +1,6 @@
-﻿from django.core.exceptions import ValidationError
+﻿from datetime import timedelta
+
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
 import secrets
@@ -60,6 +62,46 @@ class Organization(TimestampedModel):
 
     def __str__(self):
         return self.name
+
+
+class TrialFollowupConfiguration(TimestampedModel):
+    """Configuración por organización del email de seguimiento post clase de prueba.
+
+    Variables disponibles en asunto/cuerpo: {student_name}, {org_name},
+    {class_name}, {teacher_name}, {signup_link}.
+    """
+
+    DEFAULT_SUBJECT = '¿Qué te pareció tu clase en {org_name}?'
+    DEFAULT_BODY = (
+        'Hola {student_name},\n\n'
+        'Gracias por venir a tu clase de prueba de {class_name} en {org_name}. '
+        '¡Esperamos que la hayas disfrutado!\n\n'
+        'Si quieres seguir entrenando con nosotros, inscríbete aquí: {signup_link}\n\n'
+        '¡Te esperamos!\n— Equipo {org_name}'
+    )
+
+    organization = models.OneToOneField(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name='trial_followup_config',
+    )
+    is_active = models.BooleanField(
+        default=True,
+        help_text='¿Enviar emails de seguimiento de clases de prueba?',
+    )
+    minutes_after_class_end = models.PositiveIntegerField(
+        default=30,
+        help_text='Minutos tras el fin de la clase para enviar el email.',
+    )
+    email_subject = models.CharField(max_length=200, default=DEFAULT_SUBJECT)
+    email_body = models.TextField(default=DEFAULT_BODY)
+
+    class Meta:
+        verbose_name = 'Configuración de email de prueba'
+        verbose_name_plural = 'Configuraciones de email de prueba'
+
+    def __str__(self):
+        return f'Config prueba - {self.organization.name}'
 
 
 class Branch(TimestampedModel):
@@ -142,6 +184,7 @@ class GymClass(TimestampedModel):
         COMPLETED = 'completed', 'Completada'
         CANCELLED = 'cancelled', 'Cancelada'
         COMPLETED_EARLY = 'completed_early', 'Completada anticipadamente'
+        SUSPENDED = 'suspended', 'Suspendida'
 
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='classes')
     class_template = models.ForeignKey(
@@ -177,6 +220,16 @@ class GymClass(TimestampedModel):
     )
     closed_at = models.DateTimeField(null=True, blank=True)
     closure_comment = models.TextField(blank=True)
+    suspended_at = models.DateTimeField(null=True, blank=True)
+    suspend_reason = models.TextField(blank=True, default='')
+    suspended_by = models.ForeignKey(
+        'accounts.CustomUser',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='suspended_classes',
+    )
+    reactivation_expected_date = models.DateField(null=True, blank=True)
     is_active = models.BooleanField(default=True)
 
     class Meta:
@@ -188,6 +241,10 @@ class GymClass(TimestampedModel):
     @property
     def is_closed(self):
         return self.status in {self.Status.COMPLETED, self.Status.CANCELLED, self.Status.COMPLETED_EARLY}
+
+    @property
+    def is_suspended(self):
+        return self.status == self.Status.SUSPENDED
 
     def consolidate_attendance(self, marked_by=None, marked_at=None):
         from django.contrib.auth import get_user_model
@@ -229,7 +286,7 @@ class GymClass(TimestampedModel):
         now = now or timezone.now()
         changed = False
 
-        if self.status not in {self.Status.CANCELLED, self.Status.COMPLETED_EARLY, self.Status.COMPLETED}:
+        if self.status not in {self.Status.CANCELLED, self.Status.COMPLETED_EARLY, self.Status.COMPLETED, self.Status.SUSPENDED}:
             if now >= self.end_datetime:
                 self.status = self.Status.COMPLETED
                 self.is_active = False
@@ -271,6 +328,10 @@ class Enrollment(TimestampedModel):
         related_name='enrollments',
     )
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active')
+    is_trial = models.BooleanField(
+        default=False,
+        help_text='Esta inscripción se generó mediante una clase de prueba.',
+    )
 
     class Meta:
         ordering = ['created_at']
@@ -306,6 +367,11 @@ class Attendance(TimestampedModel):
     )
     marked_at = models.DateTimeField(default=timezone.now)
     checked_at = models.DateTimeField(default=timezone.now)
+    trial_followup_sent_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text='Cuándo se envió el email de seguimiento de la clase de prueba.',
+    )
 
     class Meta:
         ordering = ['-marked_at', 'id']
@@ -375,6 +441,22 @@ class StudentPlan(TimestampedModel):
     classes_used = models.IntegerField(default=0)
     discount_percentage = models.FloatField(default=0)
     final_price = models.FloatField(null=True, blank=True)
+    enrollment_fee = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=0,
+        help_text='Matrícula individual del alumno para este plan (0 = sin matrícula).',
+    )
+    enrollment_fee_paid_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text='Cuándo pagó la matrícula. Vacío = pendiente.',
+    )
+    enrollment_fee_due_at = models.DateField(
+        null=True,
+        blank=True,
+        help_text='Fecha de vencimiento de la matrícula. Por defecto un año desde la creación.',
+    )
     is_active = models.BooleanField(default=True)
 
     class Meta:
@@ -382,6 +464,21 @@ class StudentPlan(TimestampedModel):
 
     def __str__(self):
         return f'{self.user} - {self.plan}'
+
+    def save(self, *args, **kwargs):
+        # created_at (auto_now_add) es NULL hasta DESPUÉS del INSERT: por eso el
+        # vencimiento por defecto se calcula tras super().save(), no antes.
+        is_new = self._state.adding
+        super().save(*args, **kwargs)
+        if (
+            is_new
+            and self.enrollment_fee
+            and self.enrollment_fee > 0
+            and self.enrollment_fee_due_at is None
+            and self.created_at is not None
+        ):
+            self.enrollment_fee_due_at = (self.created_at + timedelta(days=365)).date()
+            super().save(update_fields=['enrollment_fee_due_at', 'updated_at'])
 
 
 class ConsumptionLog(TimestampedModel):
@@ -405,10 +502,15 @@ class TeacherPaymentRule(TimestampedModel):
         PER_HOUR = 'per_hour', 'Por hora'
         REVENUE_SHARE = 'revenue_share', 'Porcentaje de ingreso'
         MONTHLY_FIXED = 'monthly_fixed', 'Sueldo mensual fijo'
+        PER_PLAN_PRICE = 'per_plan_price', 'Porcentaje del precio del plan del alumno'
 
     class CalculationBase(models.TextChoices):
         ATTENDANCE = 'attendance', 'Asistencia'
         ENROLLMENT = 'enrollment', 'Inscripcion'
+
+    class PerPlanPriceBase(models.TextChoices):
+        ACTIVE_ENROLLMENTS = 'active_enrollments', 'Todos los alumnos inscritos'
+        PRESENT_ATTENDEES = 'present_attendees', 'Solo alumnos presentes'
 
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='payment_rules')
     teacher = models.ForeignKey('accounts.CustomUser', on_delete=models.CASCADE, related_name='payment_rules', null=True, blank=True)
@@ -419,6 +521,12 @@ class TeacherPaymentRule(TimestampedModel):
     payment_type = models.CharField(max_length=30, choices=PaymentType.choices, default=PaymentType.FIXED_PER_CLASS)
     amount = models.FloatField(default=0)
     calculation_base = models.CharField(max_length=20, choices=CalculationBase.choices, null=True, blank=True)
+    per_plan_price_base = models.CharField(
+        max_length=20,
+        choices=PerPlanPriceBase.choices,
+        default=PerPlanPriceBase.ACTIVE_ENROLLMENTS,
+        help_text='Solo para per_plan_price: ¿sobre quién se calcula el porcentaje?',
+    )
     is_active = models.BooleanField(default=True)
 
     class Meta:
@@ -441,6 +549,17 @@ class TeacherPaymentRule(TimestampedModel):
         if self.payment_type == self.PaymentType.REVENUE_SHARE:
             if self.calculation_base not in {self.CalculationBase.ATTENDANCE, self.CalculationBase.ENROLLMENT}:
                 raise ValidationError({'calculation_base': 'Debes elegir la base de calculo para revenue_share.'})
+            if self.amount < 0 or self.amount > 100:
+                raise ValidationError({'amount': 'El porcentaje debe estar entre 0 y 100.'})
+        elif self.payment_type == self.PaymentType.PER_PLAN_PRICE:
+            # Usa per_plan_price_base (no calculation_base) para elegir la base.
+            if self.calculation_base:
+                raise ValidationError({'calculation_base': 'per_plan_price usa per_plan_price_base, no calculation_base.'})
+            if self.per_plan_price_base not in {
+                self.PerPlanPriceBase.ACTIVE_ENROLLMENTS,
+                self.PerPlanPriceBase.PRESENT_ATTENDEES,
+            }:
+                raise ValidationError({'per_plan_price_base': 'Elige la base de cálculo para per_plan_price.'})
             if self.amount < 0 or self.amount > 100:
                 raise ValidationError({'amount': 'El porcentaje debe estar entre 0 y 100.'})
         elif self.payment_type == self.PaymentType.PER_STUDENT:

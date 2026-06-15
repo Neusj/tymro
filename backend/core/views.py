@@ -774,6 +774,7 @@ class PublicTrialBookView(APIView):
                     student=locked_user,
                     gym_class=gym_class,
                     require_plan=False,
+                    is_trial=True,
                 )
             except ReservationRuleError as exc:
                 return Response({'detail': exc.message}, status=status.HTTP_400_BAD_REQUEST)
@@ -1670,6 +1671,8 @@ class GymClassViewSet(ModelViewSet):
         if _is_student(user):
             mine_param = str(self.request.query_params.get('mine', '')).lower()
             queryset = self.queryset.filter(organization_id=user.organization_id) if user.organization_id else self.queryset.none()
+            # Una clase suspendida no es visible ni reservable para alumnos.
+            queryset = queryset.exclude(status=GymClass.Status.SUSPENDED)
             if mine_param in {'1', 'true', 'yes'}:
                 queryset = queryset.filter(enrollments__student_id=user.id, enrollments__status='active').distinct()
             queryset = apply_common_filters(queryset)
@@ -1932,6 +1935,101 @@ class GymClassViewSet(ModelViewSet):
         _register_teacher_payment_for_class(gym_class)
 
         return Response(self.get_serializer(gym_class).data)
+
+    @action(detail=True, methods=['post'], url_path='suspend')
+    def suspend(self, request, pk=None):
+        gym_class = self.get_object()
+        user = request.user
+
+        if not _can_close_or_cancel(user, gym_class):
+            raise PermissionDenied('No tienes permisos para suspender esta clase.')
+        if gym_class.status not in [GymClass.Status.SCHEDULED, GymClass.Status.IN_PROGRESS]:
+            return Response(
+                {'detail': 'Solo puedes suspender clases programadas o en progreso.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        reason = str(request.data.get('suspend_reason', '')).strip()
+        reactivation_date = request.data.get('reactivation_expected_date') or None
+
+        gym_class.status = GymClass.Status.SUSPENDED
+        gym_class.suspend_reason = reason
+        gym_class.suspended_at = timezone.now()
+        gym_class.suspended_by = user
+        gym_class.reactivation_expected_date = reactivation_date
+        gym_class.is_active = False
+        gym_class.save(update_fields=[
+            'status', 'suspend_reason', 'suspended_at', 'suspended_by',
+            'reactivation_expected_date', 'is_active', 'updated_at',
+        ])
+
+        self._notify_suspension(gym_class)
+        return Response(self.get_serializer(gym_class).data)
+
+    @action(detail=True, methods=['post'], url_path='reactivate')
+    def reactivate(self, request, pk=None):
+        gym_class = self.get_object()
+        user = request.user
+
+        if not _can_close_or_cancel(user, gym_class):
+            raise PermissionDenied('No tienes permisos para reactivar esta clase.')
+        if gym_class.status != GymClass.Status.SUSPENDED:
+            return Response(
+                {'detail': 'Solo puedes reactivar clases suspendidas.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        now = timezone.now()
+        if now >= gym_class.end_datetime:
+            return Response(
+                {'detail': 'La clase ya terminó: no se puede reactivar. Usa completar anticipadamente o cancelar.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        new_status = GymClass.Status.IN_PROGRESS if now >= gym_class.start_datetime else GymClass.Status.SCHEDULED
+
+        gym_class.status = new_status
+        gym_class.suspend_reason = ''
+        gym_class.suspended_at = None
+        gym_class.suspended_by = None
+        gym_class.reactivation_expected_date = None
+        gym_class.is_active = True
+        gym_class.save(update_fields=[
+            'status', 'suspend_reason', 'suspended_at', 'suspended_by',
+            'reactivation_expected_date', 'is_active', 'updated_at',
+        ])
+
+        return Response(self.get_serializer(gym_class).data)
+
+    def _notify_suspension(self, gym_class):
+        """Avisa por email a los alumnos con inscripción activa. No bloquea la
+        suspensión si el envío falla (fail_silently)."""
+        recipients = [
+            enrollment.student.email
+            for enrollment in gym_class.enrollments.filter(status='active').select_related('student')
+            if enrollment.student and enrollment.student.email
+        ]
+        if not recipients:
+            return
+        when = timezone.localtime(gym_class.start_datetime).strftime('%d/%m %H:%M')
+        reactivation = (
+            gym_class.reactivation_expected_date.isoformat()
+            if gym_class.reactivation_expected_date else 'una fecha por confirmar'
+        )
+        body = (
+            f'Hola,\n\n'
+            f'Tu clase de {gym_class.name} del {when} fue suspendida.\n'
+            f'Motivo: {gym_class.suspend_reason or "sin detalle"}.\n'
+            f'Fecha estimada de reactivación: {reactivation}.\n\n'
+            f'Gracias por tu paciencia.\n— Equipo TYMRO'
+        )
+        for email in recipients:
+            send_mail(
+                subject='Tu clase fue suspendida',
+                message=body,
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[email],
+                fail_silently=True,
+            )
 
     @action(detail=False, methods=['post'], url_path='bulk-close')
     def bulk_close(self, request):
@@ -2718,6 +2816,7 @@ class TeacherPaymentRuleViewSet(ModelViewSet):
                 'payment_type',
                 'amount',
                 'calculation_base',
+                'per_plan_price_base',
             ]
             changed_locked = any(field in requested and requested[field] != getattr(instance, field) for field in locked_fields)
             if changed_locked:

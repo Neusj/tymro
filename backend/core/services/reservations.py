@@ -38,6 +38,11 @@ def validate_student_plan_for_reservation(student, on_date=None):
         raise ReservationRuleError('No tienes clases disponibles o plan activo', code='plan_unavailable')
     if not student_plan.unlimited_classes and student_plan.classes_used >= student_plan.total_classes:
         raise ReservationRuleError('No tienes clases disponibles o plan activo', code='plan_unavailable')
+    if student_plan.enrollment_fee and student_plan.enrollment_fee > 0 and not student_plan.enrollment_fee_paid_at:
+        raise ReservationRuleError(
+            'Debes pagar la matrícula de tu plan antes de reservar.',
+            code='enrollment_fee_unpaid',
+        )
     return student_plan
 
 
@@ -110,6 +115,8 @@ def _validate_reservation_rules(*, student, gym_class, existing=None, require_pl
         raise ReservationRuleError('No puedes inscribir alumnos de otra organización.', code='wrong_organization')
     if gym_class.status == GymClass.Status.CANCELLED:
         raise ReservationRuleError('No puedes reservar una clase cancelada.', code='class_cancelled')
+    if gym_class.status == GymClass.Status.SUSPENDED:
+        raise ReservationRuleError('No puedes reservar una clase suspendida.', code='class_suspended')
     if gym_class.start_datetime <= timezone.now():
         raise ReservationRuleError('No puedes reservar clases pasadas o ya iniciadas.', code='class_started')
     if gym_class.status in TERMINAL_CLASS_STATUSES:
@@ -143,7 +150,7 @@ def _validate_reservation_rules(*, student, gym_class, existing=None, require_pl
 
 
 @transaction.atomic
-def reserve_student_in_class(*, student, gym_class, recurring_enrollment=None, require_plan=True):
+def reserve_student_in_class(*, student, gym_class, recurring_enrollment=None, require_plan=True, is_trial=False):
     existing = Enrollment.objects.filter(gym_class=gym_class, student=student).first()
     student_plan = _validate_reservation_rules(
         student=student,
@@ -155,7 +162,11 @@ def reserve_student_in_class(*, student, gym_class, recurring_enrollment=None, r
     if existing:
         existing.status = 'active'
         existing.recurring_enrollment = recurring_enrollment or existing.recurring_enrollment
-        existing.save(update_fields=['status', 'recurring_enrollment', 'updated_at'])
+        update_fields = ['status', 'recurring_enrollment', 'updated_at']
+        if is_trial and not existing.is_trial:
+            existing.is_trial = True
+            update_fields.append('is_trial')
+        existing.save(update_fields=update_fields)
         enrollment = existing
     else:
         enrollment = Enrollment.objects.create(
@@ -163,6 +174,7 @@ def reserve_student_in_class(*, student, gym_class, recurring_enrollment=None, r
             student=student,
             recurring_enrollment=recurring_enrollment,
             status='active',
+            is_trial=is_trial,
         )
 
     if student_plan:

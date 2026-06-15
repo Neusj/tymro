@@ -204,11 +204,22 @@ def test_validate_reports_spanish_errors_with_row_and_column(api_client, admin_a
 
 
 def test_validate_missing_column_is_file_error(api_client, admin_a):
+    # Falta una columna OBLIGATORIA ('Nombre') -> error de archivo. Las columnas
+    # opcionales ausentes sí se toleran (ver test_validate_optional_column_can_be_absent).
+    login(api_client, 'admin_a')
+    upload = build_xlsx([['Una descripción', 'Sí']], headers=['Descripción', 'Activa'])
+    resp = validate_file(api_client, upload)
+    assert resp.status_code == 400
+    assert "Falta la columna 'Nombre'" in resp.json()['detail']
+
+
+def test_validate_optional_column_can_be_absent(api_client, admin_a):
+    # 'Descripción' es opcional: un archivo sin esa columna se valida igual.
     login(api_client, 'admin_a')
     upload = build_xlsx([['Yoga', 'Sí']], headers=['Nombre', 'Activa'])
     resp = validate_file(api_client, upload)
-    assert resp.status_code == 400
-    assert "Falta la columna 'Descripción'" in resp.json()['detail']
+    assert resp.status_code == 200, resp.content
+    assert resp.json()['can_commit'] is True
 
 
 def test_validate_rejects_non_xlsx_and_garbage(api_client, admin_a):
@@ -1076,6 +1087,79 @@ def test_memberships_duplicate_student_in_file_first_wins(api_client, admin_a, m
     assert resp.json()['created'] == 1
     membership = StudentPlan.objects.get(user=membership_setup['student'])
     assert membership.plan_id == membership_setup['plan'].id  # la primera fila gana
+
+
+# ----------------------------------------- Saldo flexible (utilizadas/restantes) + matrícula
+
+MEMBERSHIP_FLEX_HEADERS = MEMBERSHIP_HEADERS + ['Clases utilizadas', 'Matrícula']
+
+
+def _flex_validate(api_client, rows):
+    upload = build_xlsx(rows, headers=MEMBERSHIP_FLEX_HEADERS)
+    return api_client.post('/api/imports/memberships/validate/', {'file': upload}, format='multipart')
+
+
+def test_memberships_import_used_only_computes_remaining(api_client, admin_a, membership_setup):
+    from core.models import StudentPlan
+
+    login(api_client, 'admin_a')
+    # Solo 'Clases utilizadas' = 3 (restantes vacío) en un plan de 8.
+    rows = [['maria@gym.cl', '', 'Plan 8 clases', '2026-06-01', '', '', 3, '']]
+    resp = import_entity(api_client, 'memberships', rows, MEMBERSHIP_FLEX_HEADERS)
+    assert resp.status_code == 201, resp.content
+    membership = StudentPlan.objects.get(user=membership_setup['student'])
+    assert membership.classes_used == 3
+    assert membership.total_classes == 8
+
+
+def test_memberships_import_both_consistent_ok(api_client, admin_a, membership_setup):
+    from core.models import StudentPlan
+
+    login(api_client, 'admin_a')
+    rows = [['maria@gym.cl', '', 'Plan 8 clases', '2026-06-01', '', 5, 3, '']]  # 3 + 5 = 8
+    resp = import_entity(api_client, 'memberships', rows, MEMBERSHIP_FLEX_HEADERS)
+    assert resp.status_code == 201, resp.content
+    membership = StudentPlan.objects.get(user=membership_setup['student'])
+    assert membership.classes_used == 3
+
+
+def test_memberships_import_both_inconsistent_rejected(api_client, admin_a, membership_setup):
+    login(api_client, 'admin_a')
+    rows = [['maria@gym.cl', '', 'Plan 8 clases', '2026-06-01', '', 5, 4, '']]  # 4 + 5 = 9 != 8
+    body = _flex_validate(api_client, rows).json()
+    assert body['can_commit'] is False
+    assert 'No cuadra' in body['rows'][0]['errors'][0]['message']
+
+
+def test_memberships_import_neither_balance_rejected(api_client, admin_a, membership_setup):
+    login(api_client, 'admin_a')
+    rows = [['maria@gym.cl', '', 'Plan 8 clases', '2026-06-01', '', '', '', '']]
+    body = _flex_validate(api_client, rows).json()
+    assert body['can_commit'] is False
+    message = body['rows'][0]['errors'][0]['message']
+    assert "'Clases restantes' o las 'Clases utilizadas'" in message
+
+
+def test_memberships_import_used_out_of_range_rejected(api_client, admin_a, membership_setup):
+    login(api_client, 'admin_a')
+    rows = [['maria@gym.cl', '', 'Plan 8 clases', '2026-06-01', '', '', 10, '']]  # > 8
+    body = _flex_validate(api_client, rows).json()
+    assert body['can_commit'] is False
+    assert 'entre 0 y 8' in body['rows'][0]['errors'][0]['message']
+
+
+def test_memberships_import_sets_enrollment_fee(api_client, admin_a, membership_setup):
+    from decimal import Decimal
+
+    from core.models import StudentPlan
+
+    login(api_client, 'admin_a')
+    rows = [['maria@gym.cl', '', 'Plan 8 clases', '2026-06-01', '', 5, '', 50000]]
+    resp = import_entity(api_client, 'memberships', rows, MEMBERSHIP_FLEX_HEADERS)
+    assert resp.status_code == 201, resp.content
+    membership = StudentPlan.objects.get(user=membership_setup['student'])
+    assert membership.enrollment_fee == Decimal('50000')
+    assert membership.enrollment_fee_due_at is not None  # vencimiento autocalculado
 
 
 # ---------------------------------------------------------------- F5: Horario recurrente

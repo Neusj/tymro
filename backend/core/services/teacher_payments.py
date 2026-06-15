@@ -36,6 +36,10 @@ def _count_students_for_rule(class_instance, rule):
         return Enrollment.objects.filter(gym_class=class_instance, status='active').count()
     if rule.payment_type == TeacherPaymentRule.PaymentType.PER_HOUR:
         return Attendance.objects.filter(gym_class=class_instance, status=Attendance.Status.PRESENT).count()
+    if rule.payment_type == TeacherPaymentRule.PaymentType.PER_PLAN_PRICE:
+        if rule.per_plan_price_base == TeacherPaymentRule.PerPlanPriceBase.PRESENT_ATTENDEES:
+            return Attendance.objects.filter(gym_class=class_instance, status=Attendance.Status.PRESENT).count()
+        return Enrollment.objects.filter(gym_class=class_instance, status='active').count()
     if rule.calculation_base == TeacherPaymentRule.CalculationBase.ENROLLMENT:
         return Enrollment.objects.filter(gym_class=class_instance, status='active').count()
     return Attendance.objects.filter(gym_class=class_instance, status=Attendance.Status.PRESENT).count()
@@ -65,6 +69,53 @@ def _calculate_revenue_for_class(class_instance):
         # Hasta cerrar la política en el módulo de pagos a profesores, los consumos de
         # planes ilimitados se EXCLUYEN de la base de ingreso automática (no aportan).
         if student_plan.unlimited_classes:
+            continue
+        final_price = float(student_plan.final_price or 0)
+        total_classes = int(student_plan.total_classes or 0)
+        divisor = total_classes if total_classes > 0 else 1
+        total_revenue += final_price / float(divisor)
+    return total_revenue
+
+
+def _calculate_plan_price_revenue_for_class(class_instance, base):
+    """Suma del 'precio por clase' (final_price / total_classes) de los planes de
+    los alumnos de la base elegida, excluyendo planes ilimitados.
+
+    base == PRESENT_ATTENDEES -> solo alumnos marcados presentes.
+    base == ACTIVE_ENROLLMENTS -> todos los alumnos con inscripción activa.
+
+    Misma política de 'precio por clase' que revenue_share; la diferencia es el
+    CONJUNTO de alumnos que aporta (inscritos vs presentes). El plan de cada
+    alumno se resuelve por el ConsumptionLog real de ESTA clase.
+    """
+    if base == TeacherPaymentRule.PerPlanPriceBase.PRESENT_ATTENDEES:
+        student_ids = set(
+            Attendance.objects.filter(
+                gym_class=class_instance, status=Attendance.Status.PRESENT
+            ).values_list('student_id', flat=True)
+        )
+    else:
+        student_ids = set(
+            Enrollment.objects.filter(
+                gym_class=class_instance, status='active'
+            ).values_list('student_id', flat=True)
+        )
+    if not student_ids:
+        return 0.0
+
+    logs = (
+        ConsumptionLog.objects.select_related('student_plan')
+        .filter(class_instance=class_instance, user_id__in=student_ids)
+        .order_by('user_id', '-consumed_at', '-id')
+    )
+    total_revenue = 0.0
+    seen_users = set()
+    for log in logs:
+        if log.user_id in seen_users:
+            continue
+        seen_users.add(log.user_id)
+        student_plan = getattr(log, 'student_plan', None)
+        if not student_plan or student_plan.unlimited_classes:
             continue
         final_price = float(student_plan.final_price or 0)
         total_classes = int(student_plan.total_classes or 0)
@@ -106,6 +157,9 @@ def calculate_teacher_payment(class_instance):
         total_amount = float(total_students) * float(rule.amount)
     elif rule.payment_type == TeacherPaymentRule.PaymentType.PER_HOUR:
         total_amount = _class_hours(class_instance) * float(rule.amount)
+    elif rule.payment_type == TeacherPaymentRule.PaymentType.PER_PLAN_PRICE:
+        revenue = _calculate_plan_price_revenue_for_class(class_instance, rule.per_plan_price_base)
+        total_amount = float(revenue) * (float(rule.amount) / 100.0)
     else:
         revenue = _calculate_revenue_for_class(class_instance)
         total_amount = float(revenue) * (float(rule.amount) / 100.0)

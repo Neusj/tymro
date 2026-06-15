@@ -118,12 +118,16 @@ def parse_workbook(spec, file_bytes):
     column_map = {}
     for field in spec.fields:
         normalized = _normalize_header(field.label)
-        if normalized not in header_index:
+        if normalized in header_index:
+            column_map[field.attr] = header_index[normalized]
+        elif field.required:
             raise ImportFileError(
                 f"Falta la columna '{field.label}'. Usa la plantilla descargada "
                 'sin modificar los encabezados.'
             )
-        column_map[field.attr] = header_index[normalized]
+        # Columna OPCIONAL ausente: se trata como celdas vacías (cada fila la
+        # recibe como None). Así agregar un campo opcional no rompe las
+        # plantillas ya distribuidas (importador flexible).
 
     parsed = []
     physical_rows = 0

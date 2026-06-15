@@ -16,6 +16,7 @@ from .models import (
     StudentPlan,
     TeacherPaymentRecord,
     TeacherPaymentRule,
+    TrialFollowupConfiguration,
 )
 
 admin.site.register(Organization)
@@ -34,3 +35,11 @@ admin.site.register(StudentPlan)
 admin.site.register(ConsumptionLog)
 admin.site.register(TeacherPaymentRule)
 admin.site.register(TeacherPaymentRecord)
+
+
+@admin.register(TrialFollowupConfiguration)
+class TrialFollowupConfigurationAdmin(admin.ModelAdmin):
+    list_display = ('organization', 'is_active', 'minutes_after_class_end')
+    list_filter = ('is_active',)
+    search_fields = ('organization__name',)
+    readonly_fields = ('created_at', 'updated_at')

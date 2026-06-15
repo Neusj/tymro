@@ -450,9 +450,10 @@ class EnrollmentSerializer(serializers.ModelSerializer):
             'cancel_block_reason',
             'cancel_policy_message',
             'attendance_status',
+            'is_trial',
             'created_at',
         ]
-        read_only_fields = ['created_at', 'recurring_enrollment']
+        read_only_fields = ['created_at', 'recurring_enrollment', 'is_trial']
         extra_kwargs = {
             'student': {'required': False},
         }
@@ -595,6 +596,9 @@ class GymClassSerializer(serializers.ModelSerializer):
     enrollments_count = serializers.SerializerMethodField()
     attendances_count = serializers.SerializerMethodField()
     present_attendances_count = serializers.SerializerMethodField()
+    is_suspended = serializers.SerializerMethodField()
+    can_suspend = serializers.SerializerMethodField()
+    can_reactivate = serializers.SerializerMethodField()
 
     class Meta:
         model = GymClass
@@ -621,6 +625,13 @@ class GymClassSerializer(serializers.ModelSerializer):
             'closed_by',
             'closed_at',
             'closure_comment',
+            'suspended_at',
+            'suspend_reason',
+            'suspended_by',
+            'reactivation_expected_date',
+            'is_suspended',
+            'can_suspend',
+            'can_reactivate',
             'is_active',
             'enrollments_count',
             'attendances_count',
@@ -632,6 +643,10 @@ class GymClassSerializer(serializers.ModelSerializer):
             'closed_by': {'read_only': True},
             'closed_at': {'read_only': True},
             'closure_comment': {'read_only': True},
+            'suspended_at': {'read_only': True},
+            'suspend_reason': {'read_only': True},
+            'suspended_by': {'read_only': True},
+            'reactivation_expected_date': {'read_only': True},
         }
 
     def get_teacher_name(self, obj):
@@ -648,6 +663,15 @@ class GymClassSerializer(serializers.ModelSerializer):
 
     def get_present_attendances_count(self, obj):
         return obj.attendances.filter(status=Attendance.Status.PRESENT).count()
+
+    def get_is_suspended(self, obj):
+        return obj.status == GymClass.Status.SUSPENDED
+
+    def get_can_suspend(self, obj):
+        return obj.status in {GymClass.Status.SCHEDULED, GymClass.Status.IN_PROGRESS}
+
+    def get_can_reactivate(self, obj):
+        return obj.status == GymClass.Status.SUSPENDED
 
     def validate(self, attrs):
         instance = getattr(self, 'instance', None)
@@ -718,6 +742,8 @@ class GymClassSerializer(serializers.ModelSerializer):
         incoming_status = attrs.get('status')
         if incoming_status in TERMINAL_CLASS_STATUSES:
             raise serializers.ValidationError({'status': 'Usa las acciones de cierre/cancelación para cambiar a un estado terminal.'})
+        if incoming_status == GymClass.Status.SUSPENDED:
+            raise serializers.ValidationError({'status': 'Usa la acción de suspender para suspender una clase.'})
 
         return attrs
 
@@ -741,7 +767,9 @@ class AttendanceSerializer(serializers.ModelSerializer):
             'marked_by_username',
             'marked_at',
             'checked_at',
+            'trial_followup_sent_at',
         ]
+        read_only_fields = ['trial_followup_sent_at']
 
     def get_student_name(self, obj):
         full_name = f'{obj.student.first_name} {obj.student.last_name}'.strip()
@@ -1102,6 +1130,7 @@ class StudentPlanSerializer(serializers.ModelSerializer):
     days_to_expiry = serializers.SerializerMethodField()
     expiry_alert_level = serializers.SerializerMethodField()
     expiry_alert_message = serializers.SerializerMethodField()
+    enrollment_fee_status = serializers.SerializerMethodField()
 
     class Meta:
         model = StudentPlan
@@ -1125,6 +1154,10 @@ class StudentPlanSerializer(serializers.ModelSerializer):
             'expiry_alert_message',
             'discount_percentage',
             'final_price',
+            'enrollment_fee',
+            'enrollment_fee_paid_at',
+            'enrollment_fee_due_at',
+            'enrollment_fee_status',
             'is_active',
         ]
         read_only_fields = [
@@ -1132,12 +1165,26 @@ class StudentPlanSerializer(serializers.ModelSerializer):
             'classes_used',
             'remaining_classes',
             'final_price',
+            'enrollment_fee',
+            'enrollment_fee_paid_at',
+            'enrollment_fee_due_at',
         ]
 
     def get_remaining_classes(self, obj):
         if getattr(obj, 'unlimited_classes', False):
             return None
         return max((obj.total_classes or 0) - (obj.classes_used or 0), 0)
+
+    def get_enrollment_fee_status(self, obj):
+        fee = obj.enrollment_fee or 0
+        if fee <= 0:
+            return {'status': 'waived'}
+        if obj.enrollment_fee_paid_at:
+            return {'status': 'paid', 'paid_at': obj.enrollment_fee_paid_at.isoformat()}
+        due = obj.enrollment_fee_due_at
+        if due and timezone.localdate() > due:
+            return {'status': 'overdue', 'due_at': due.isoformat()}
+        return {'status': 'pending', 'due_at': due.isoformat() if due else None}
 
     def get_user_name(self, obj):
         if not obj.user:
@@ -1237,6 +1284,7 @@ class TeacherPaymentRuleSerializer(serializers.ModelSerializer):
             'payment_type',
             'amount',
             'calculation_base',
+            'per_plan_price_base',
             'is_active',
             'usage_count',
             'is_used',
@@ -1269,6 +1317,7 @@ class TeacherPaymentRuleSerializer(serializers.ModelSerializer):
         payment_type = attrs.get('payment_type', getattr(instance, 'payment_type', None))
         amount = attrs.get('amount', getattr(instance, 'amount', None))
         calculation_base = attrs.get('calculation_base', getattr(instance, 'calculation_base', None))
+        per_plan_price_base = attrs.get('per_plan_price_base', getattr(instance, 'per_plan_price_base', None))
 
         if user and user.is_authenticated and user.role == User.Role.GYM_ADMIN:
             organization = user.organization
@@ -1297,6 +1346,17 @@ class TeacherPaymentRuleSerializer(serializers.ModelSerializer):
                 TeacherPaymentRule.CalculationBase.ENROLLMENT,
             }:
                 raise serializers.ValidationError({'calculation_base': 'Selecciona attendance o enrollment.'})
+            if amount is None or float(amount) < 0 or float(amount) > 100:
+                raise serializers.ValidationError({'amount': 'El porcentaje debe estar entre 0 y 100.'})
+        elif payment_type == TeacherPaymentRule.PaymentType.PER_PLAN_PRICE:
+            attrs['calculation_base'] = None
+            if per_plan_price_base not in {
+                TeacherPaymentRule.PerPlanPriceBase.ACTIVE_ENROLLMENTS,
+                TeacherPaymentRule.PerPlanPriceBase.PRESENT_ATTENDEES,
+            }:
+                raise serializers.ValidationError(
+                    {'per_plan_price_base': 'Selecciona inscritos o presentes.'}
+                )
             if amount is None or float(amount) < 0 or float(amount) > 100:
                 raise serializers.ValidationError({'amount': 'El porcentaje debe estar entre 0 y 100.'})
         else:

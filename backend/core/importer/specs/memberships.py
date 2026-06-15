@@ -23,30 +23,58 @@ from ..registry import register
 from ..spec import EntityImportSpec, FieldSpec, FKSpec, RowError
 
 REMAINING_LABEL = 'Clases restantes'
+USED_LABEL = 'Clases utilizadas'
+FEE_LABEL = 'Matrícula'
 END_LABEL = 'Fecha de término'
 
 
 def _membership_rules(values, organization):
+    """Saldo flexible: para planes LIMITADOS basta indicar 'Clases restantes' O
+    'Clases utilizadas' (el motor calcula la otra). Si vienen ambas, deben cuadrar
+    con el total del plan. Para planes ILIMITADOS el saldo se ignora."""
     errors = []
     plan = values.get('plan')
     remaining = values.get('remaining_classes')
+    used = values.get('classes_used')
     if plan is not None and not plan.unlimited_classes:
-        if remaining is None:
+        total = plan.total_classes
+        if remaining is None and used is None:
             errors.append(RowError(
                 row=0, column=REMAINING_LABEL,
                 message=(
-                    f"Indica las '{REMAINING_LABEL}' (entre 0 y {plan.total_classes}, "
-                    f"el total del plan '{plan.name}')."
+                    f"Indica las '{REMAINING_LABEL}' o las '{USED_LABEL}' "
+                    f"(el total del plan '{plan.name}' es {total})."
                 ),
             ))
-        elif not (0 <= remaining <= plan.total_classes):
-            errors.append(RowError(
-                row=0, column=REMAINING_LABEL,
-                message=(
-                    f"Las clases restantes deben estar entre 0 y {plan.total_classes} "
-                    f"(el total del plan '{plan.name}')."
-                ),
-            ))
+        else:
+            if remaining is not None and not (0 <= remaining <= total):
+                errors.append(RowError(
+                    row=0, column=REMAINING_LABEL,
+                    message=(
+                        f"Las clases restantes deben estar entre 0 y {total} "
+                        f"(el total del plan '{plan.name}')."
+                    ),
+                ))
+            if used is not None and not (0 <= used <= total):
+                errors.append(RowError(
+                    row=0, column=USED_LABEL,
+                    message=(
+                        f"Las clases utilizadas deben estar entre 0 y {total} "
+                        f"(el total del plan '{plan.name}')."
+                    ),
+                ))
+            if (
+                remaining is not None and used is not None
+                and 0 <= remaining <= total and 0 <= used <= total
+                and used + remaining != total
+            ):
+                errors.append(RowError(
+                    row=0, column=USED_LABEL,
+                    message=(
+                        f"No cuadra: utilizadas ({used}) + restantes ({remaining}) debe ser "
+                        f"igual al total del plan '{plan.name}' ({total})."
+                    ),
+                ))
     start = values.get('start_date')
     end = values.get('end_date')
     if start is not None and end is not None and end < start:
@@ -89,7 +117,13 @@ def _build_membership(values, organization):
         total, used, unlimited = 0, 0, True
     else:
         total = plan.total_classes
-        used = total - values['remaining_classes']
+        # 'Clases utilizadas' explícita manda; si no, se deriva de las restantes.
+        if values.get('classes_used') is not None:
+            used = values['classes_used']
+        elif values.get('remaining_classes') is not None:
+            used = total - values['remaining_classes']
+        else:
+            used = 0
         unlimited = False
     return StudentPlan(
         user=values['user'],
@@ -101,6 +135,7 @@ def _build_membership(values, organization):
         classes_used=used,
         discount_percentage=discount,
         final_price=max(float(plan.price) * (1 - (discount / 100)), 0),
+        enrollment_fee=values.get('enrollment_fee') or 0,
         is_active=True,
     )
 
@@ -158,7 +193,23 @@ MEMBERSHIPS = register(EntityImportSpec(
         FieldSpec(
             attr='remaining_classes', label=REMAINING_LABEL, kind='int',
             example='5',
-            help_text='Cuántas clases le quedan HOY al alumno. Déjala vacía solo si el plan es ilimitado.',
+            help_text=(
+                'Cuántas clases le quedan HOY al alumno. Alternativa a '
+                "'Clases utilizadas': indica una u otra. Déjala vacía si el plan es ilimitado."
+            ),
+        ),
+        FieldSpec(
+            attr='classes_used', label=USED_LABEL, kind='int',
+            example='3',
+            help_text=(
+                "Cuántas clases YA usó el alumno. Alternativa a 'Clases restantes'. "
+                'Si indicas ambas, deben sumar el total del plan.'
+            ),
+        ),
+        FieldSpec(
+            attr='enrollment_fee', label=FEE_LABEL, kind='decimal',
+            example='50000',
+            help_text='Matrícula del alumno para este plan. Déjala vacía o en 0 si no cobra matrícula.',
         ),
     ),
     natural_key=('user',),
@@ -177,6 +228,10 @@ MEMBERSHIPS = register(EntityImportSpec(
         'nunca modifica membresías existentes.',
         "En '" + REMAINING_LABEL + "' escribe las clases que le quedan HOY (se arrastra "
         'el saldo del sistema anterior). Para planes ilimitados déjala vacía.',
+        "También puedes usar '" + USED_LABEL + "' (clases ya consumidas) en vez de las "
+        'restantes: indica una u otra. Si pones ambas, deben sumar el total del plan.',
+        "'" + FEE_LABEL + "' es opcional: si la dejas vacía o en 0, el alumno no paga matrícula. "
+        'Si es mayor a 0, el alumno deberá pagarla antes de poder reservar.',
         'Las fechas van en formato AAAA-MM-DD (ej. 2026-06-01). Si no indicas término, '
         'se calcula automáticamente con la duración del plan.',
         "Si tienes dos planes con el mismo nombre, usa 'Tipo de plan' para distinguirlos.",
