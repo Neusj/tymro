@@ -1,6 +1,7 @@
 ﻿import { Navigate, Route, Routes } from 'react-router-dom'
 import { useAuth } from './auth/AuthContext'
 import AppLayout from './components/layout/AppLayout'
+import OfflineBanner from './components/OfflineBanner'
 import GymAdminClassCreatePage from './pages/GymAdminClassCreatePage'
 import GymAdminClassDetailPage from './pages/GymAdminClassDetailPage'
 import GymAdminClassEditPage from './pages/GymAdminClassEditPage'
@@ -64,7 +65,9 @@ function ShellRoute({ children }) {
 
 export default function App() {
   return (
-    <Routes>
+    <>
+      <OfflineBanner />
+      <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
       <Route path="/reset-password" element={<ResetPasswordPage />} />
@@ -536,7 +539,8 @@ export default function App() {
       />
 
       <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+      </Routes>
+    </>
   )
 }
 
