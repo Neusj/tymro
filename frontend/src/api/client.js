@@ -368,6 +368,19 @@ export const holidaysApi = {
   },
 }
 
+// Configuración del email de seguimiento de clases de prueba (panel gym_admin).
+// Contrato: is_enabled, delay_minutes, email_subject, email_body.
+export const trialFollowupConfigApi = {
+  get: async (orgId) => {
+    const { data } = await api.get(`/organizations/${orgId}/trial-followup-config/`)
+    return data
+  },
+  update: async (orgId, payload) => {
+    const { data } = await api.put(`/organizations/${orgId}/trial-followup-config/`, payload)
+    return data
+  },
+}
+
 export const recurringEnrollmentsApi = {
   list: async (params = {}) => {
     const { data } = await api.get('/recurring-enrollments/', { params })

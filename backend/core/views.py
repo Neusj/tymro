@@ -17,7 +17,7 @@ from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from rest_framework import status
 from rest_framework.authtoken.models import Token
 from rest_framework.decorators import action, api_view, permission_classes
-from rest_framework.exceptions import MethodNotAllowed, PermissionDenied, ValidationError
+from rest_framework.exceptions import MethodNotAllowed, NotFound, PermissionDenied, ValidationError
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
@@ -45,6 +45,7 @@ from .models import (
     TeacherPaymentRecord,
     TeacherPaymentRule,
     TeacherPayout,
+    TrialFollowupConfiguration,
 )
 from .permissions import (
     FinancialResourcePermission,
@@ -77,6 +78,7 @@ from .serializers import (
     TeacherPaymentRuleAssignmentsUpdateSerializer,
     TeacherPaymentRecordSerializer,
     TeacherPaymentRuleSerializer,
+    TrialFollowupConfigurationSerializer,
 )
 from .services.recurrence import (
     activate_template,
@@ -1215,6 +1217,31 @@ class OrganizationViewSet(ModelViewSet):
         organization.public_registration_enabled = _parse_bool(request.data.get('enabled'), default=True)
         organization.save(update_fields=['public_registration_enabled', 'updated_at'])
         return Response(self.get_serializer(organization).data)
+
+    @action(detail=True, methods=['get', 'put'], url_path='trial-followup-config')
+    def trial_followup_config(self, request, pk=None):
+        """Config del email de seguimiento de clases de prueba de la organización.
+
+        GET devuelve la config (la crea con defaults si aún no existe); PUT la
+        actualiza. Solo superadmin (cualquier org) o el gym_admin de ESA org.
+        """
+        # Buscamos sin pasar por get_queryset() (que filtra a la org del actor)
+        # para distinguir 404 (org inexistente) de 403 (org ajena).
+        organization = Organization.objects.filter(pk=pk).first()
+        if organization is None:
+            raise NotFound('Organización no encontrada.')
+        if not _can_manage_org_resource(request.user, organization.id):
+            raise PermissionDenied('No tienes permisos para gestionar esta configuración.')
+
+        config, _ = TrialFollowupConfiguration.objects.get_or_create(organization=organization)
+
+        if request.method == 'GET':
+            return Response(TrialFollowupConfigurationSerializer(config).data)
+
+        serializer = TrialFollowupConfigurationSerializer(config, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
 
 
 class BranchViewSet(ModelViewSet):

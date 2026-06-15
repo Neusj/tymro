@@ -187,3 +187,122 @@ def test_command_is_multitenant_scoped(setup, mailoutbox, make_organization, mak
 
     recipients = [r for m in mailoutbox for r in m.to]
     assert recipients == ['maria@gym.cl']  # solo la org pedida, sin fuga cross-tenant
+
+
+# ---- F2C: endpoints GET/PUT de configuración (panel gym_admin) ----
+#
+# Contrato externo: is_enabled / delay_minutes / email_subject / email_body.
+# El modelo guarda is_active / minutes_after_class_end (mapeo vía serializer source).
+
+def _config_url(org):
+    return f'/api/organizations/{org.id}/trial-followup-config/'
+
+
+def test_get_config_autocreates_with_defaults(api_client, make_organization, make_user):
+    org = make_organization('Gym A')
+    make_user('admin_a', organization=org, role='gym_admin')
+    _login(api_client, 'admin_a')
+
+    resp = api_client.get(_config_url(org))
+
+    assert resp.status_code == 200, resp.content
+    data = resp.json()
+    assert data['is_enabled'] is True
+    assert data['delay_minutes'] == 30
+    assert data['email_subject'] == TrialFollowupConfiguration.DEFAULT_SUBJECT
+    assert data['email_body'] == TrialFollowupConfiguration.DEFAULT_BODY
+    # GET sin config previa la crea con los defaults del modelo.
+    assert TrialFollowupConfiguration.objects.filter(organization=org).count() == 1
+
+
+def test_gym_admin_updates_own_config(api_client, make_organization, make_user):
+    org = make_organization('Gym A')
+    make_user('admin_a', organization=org, role='gym_admin')
+    _login(api_client, 'admin_a')
+
+    payload = {
+        'is_enabled': False,
+        'delay_minutes': 90,
+        'email_subject': 'Asunto {org_name}',
+        'email_body': 'Hola {student_name}, gracias por {class_name}.',
+    }
+    resp = api_client.put(_config_url(org), payload, format='json')
+
+    assert resp.status_code == 200, resp.content
+    data = resp.json()
+    assert data['is_enabled'] is False
+    assert data['delay_minutes'] == 90
+
+    config = TrialFollowupConfiguration.objects.get(organization=org)
+    assert config.is_active is False
+    assert config.minutes_after_class_end == 90
+    assert config.email_subject == 'Asunto {org_name}'
+    assert config.email_body == 'Hola {student_name}, gracias por {class_name}.'
+
+
+def test_gym_admin_cannot_access_other_org_config(api_client, make_organization, make_user):
+    org_a = make_organization('Gym A')
+    org_b = make_organization('Gym B')
+    make_user('admin_a', organization=org_a, role='gym_admin')
+    _login(api_client, 'admin_a')
+
+    resp_get = api_client.get(_config_url(org_b))
+    resp_put = api_client.put(_config_url(org_b), {'delay_minutes': 5}, format='json')
+
+    assert resp_get.status_code == 403, resp_get.content
+    assert resp_put.status_code == 403, resp_put.content
+    # El rechazo ocurre antes del get_or_create: no se crea config para la org ajena.
+    assert not TrialFollowupConfiguration.objects.filter(organization=org_b).exists()
+
+
+def test_superadmin_can_manage_any_org_config(api_client, make_organization, make_user):
+    org = make_organization('Gym A')
+    make_user('root', organization=None, role='superadmin')
+    _login(api_client, 'root')
+
+    resp_get = api_client.get(_config_url(org))
+    resp_put = api_client.put(_config_url(org), {'delay_minutes': 45}, format='json')
+
+    assert resp_get.status_code == 200, resp_get.content
+    assert resp_put.status_code == 200, resp_put.content
+    assert TrialFollowupConfiguration.objects.get(organization=org).minutes_after_class_end == 45
+
+
+def test_unauthenticated_cannot_access_config(api_client, make_organization):
+    org = make_organization('Gym A')
+
+    resp = api_client.get(_config_url(org))
+
+    assert resp.status_code == 401, resp.content
+
+
+def test_invalid_config_payload_is_rejected(api_client, make_organization, make_user):
+    org = make_organization('Gym A')
+    make_user('admin_a', organization=org, role='gym_admin')
+    _login(api_client, 'admin_a')
+    url = _config_url(org)
+
+    resp_negative = api_client.put(url, {'delay_minutes': -5}, format='json')
+    resp_empty_subject = api_client.put(url, {'email_subject': ''}, format='json')
+
+    assert resp_negative.status_code == 400, resp_negative.content
+    assert 'delay_minutes' in resp_negative.json()
+    assert resp_empty_subject.status_code == 400, resp_empty_subject.content
+    assert 'email_subject' in resp_empty_subject.json()
+
+
+@pytest.mark.parametrize('role', ['manager', 'monitor', 'teacher', 'student'])
+def test_non_admin_org_roles_cannot_access_config(role, api_client, make_organization, make_user):
+    # Blinda la matriz de roles: solo superadmin/gym_admin gestionan la config de
+    # organización. Si alguien cambiara el check a uno que admita manager, esto falla.
+    org = make_organization('Gym A')
+    make_user('member', organization=org, role=role)
+    _login(api_client, 'member')
+    url = _config_url(org)
+
+    resp_get = api_client.get(url)
+    resp_put = api_client.put(url, {'delay_minutes': 5}, format='json')
+
+    assert resp_get.status_code == 403, resp_get.content
+    assert resp_put.status_code == 403, resp_put.content
+    assert not TrialFollowupConfiguration.objects.filter(organization=org).exists()

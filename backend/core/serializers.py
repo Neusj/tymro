@@ -26,6 +26,7 @@ from .models import (
     StudentPlan,
     TeacherPaymentRecord,
     TeacherPaymentRule,
+    TrialFollowupConfiguration,
 )
 from .services.recurrence import create_enrollments_for_recurring_subscription
 
@@ -301,6 +302,40 @@ class ClassTypeSerializer(serializers.ModelSerializer):
         attrs['name'] = normalized_name
 
         return attrs
+
+
+class TrialFollowupConfigurationSerializer(serializers.ModelSerializer):
+    """Config del email de seguimiento de clases de prueba (una por organización).
+
+    El modelo persiste los campos como ``is_active`` y ``minutes_after_class_end``.
+    Exponemos los nombres externos ``is_enabled`` y ``delay_minutes`` vía ``source``
+    para respetar el contrato pedido sin tocar el modelo ni su migración (el comando
+    ``send_trial_followups`` sigue leyendo los nombres internos).
+    """
+
+    is_enabled = serializers.BooleanField(source='is_active', required=False)
+    delay_minutes = serializers.IntegerField(
+        source='minutes_after_class_end', required=False, min_value=0,
+    )
+
+    class Meta:
+        model = TrialFollowupConfiguration
+        fields = ['id', 'is_enabled', 'delay_minutes', 'email_subject', 'email_body', 'updated_at']
+        read_only_fields = ['id', 'updated_at']
+        extra_kwargs = {
+            'email_subject': {'required': False},
+            'email_body': {'required': False},
+        }
+
+    def validate_email_subject(self, value):
+        if not str(value).strip():
+            raise serializers.ValidationError('El asunto no puede quedar vacío.')
+        return value
+
+    def validate_email_body(self, value):
+        if not str(value).strip():
+            raise serializers.ValidationError('El cuerpo no puede quedar vacío.')
+        return value
 
 
 class DisciplineSerializer(serializers.ModelSerializer):
