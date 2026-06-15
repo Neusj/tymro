@@ -2012,7 +2012,7 @@ class GymClassViewSet(ModelViewSet):
             return
         when = timezone.localtime(gym_class.start_datetime).strftime('%d/%m %H:%M')
         reactivation = (
-            gym_class.reactivation_expected_date.isoformat()
+            gym_class.reactivation_expected_date.isoformat() if hasattr(gym_class.reactivation_expected_date, 'isoformat') else 'próximamente'
             if gym_class.reactivation_expected_date else 'una fecha por confirmar'
         )
         body = (
