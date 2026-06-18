@@ -20,6 +20,8 @@ const extractApiErrorMessage = (apiError, fallbackMessage) => {
 
 const STATUS_STYLES = {
   ok: 'border-success-line bg-success-soft text-success',
+  actualizado: 'border-amber-400/60 bg-amber-400/15 text-amber-200',
+  sin_cambios: 'border-brand-line bg-black/30 text-brand-muted',
   duplicado_archivo: 'border-amber-400/40 bg-amber-400/10 text-amber-200',
   duplicado_existente: 'border-amber-400/40 bg-amber-400/10 text-amber-200',
   error: 'border-brand-red/50 bg-brand-red/10 text-red-200',
@@ -27,6 +29,8 @@ const STATUS_STYLES = {
 
 const STATUS_LABELS = {
   ok: 'Se creará',
+  actualizado: 'Se actualizará',
+  sin_cambios: 'Sin cambios',
   duplicado_archivo: 'Repetida en el archivo',
   duplicado_existente: 'Ya existe',
   error: 'Con errores',
@@ -37,6 +41,34 @@ function StatusBadge({ status }) {
     <span className={`inline-flex whitespace-nowrap rounded-full border px-2 py-0.5 text-xs font-semibold ${STATUS_STYLES[status] || ''}`}>
       {STATUS_LABELS[status] || status}
     </span>
+  )
+}
+
+function DiffCell({ diff }) {
+  const [open, setOpen] = useState(false)
+  const entries = Object.entries(diff || {})
+  if (entries.length === 0) {
+    return null
+  }
+  return (
+    <div className="text-xs">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className="font-semibold text-amber-200 underline-offset-2 hover:underline"
+      >
+        {open ? 'Ocultar' : `Ver ${entries.length} cambio${entries.length > 1 ? 's' : ''}`}
+      </button>
+      {open ? (
+        <ul className="mt-1 space-y-0.5 text-amber-100">
+          {entries.map(([field, change]) => (
+            <li key={field}>
+              <span className="text-brand-muted">{field}:</span> {String(change?.from)} → {String(change?.to)}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
   )
 }
 
@@ -214,19 +246,24 @@ export default function GymAdminImportPage() {
         key: 'detail',
         label: 'Detalle',
         sortable: false,
-        render: (row) =>
-          row.errors && row.errors.length > 0 ? (
-            <ul className="space-y-0.5 text-xs text-red-200">
-              {row.errors.map((rowError, index) => (
-                <li key={index}>
-                  {rowError.column ? `${rowError.column}: ` : ''}
-                  {rowError.message}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <span className="text-xs text-brand-muted">{row.note}</span>
-          ),
+        render: (row) => {
+          if (row.errors && row.errors.length > 0) {
+            return (
+              <ul className="space-y-0.5 text-xs text-red-200">
+                {row.errors.map((rowError, index) => (
+                  <li key={index}>
+                    {rowError.column ? `${rowError.column}: ` : ''}
+                    {rowError.message}
+                  </li>
+                ))}
+              </ul>
+            )
+          }
+          if (row.status === 'actualizado') {
+            return <DiffCell diff={row.diff} />
+          }
+          return <span className="text-xs text-brand-muted">{row.note}</span>
+        },
       },
     ]
   }, [entity])
@@ -355,9 +392,10 @@ export default function GymAdminImportPage() {
       {commitResult ? (
         <section className="card-surface space-y-2 p-5">
           <p className="rounded-lg border border-success-line bg-success-soft px-3 py-2 text-sm text-success">
-            Importación completada: se crearon {commitResult.created} registros
-            {commitResult.skipped_duplicates > 0
-              ? ` y se omitieron ${commitResult.skipped_duplicates} que ya existían o venían repetidos`
+            Importación completada: se crearon {commitResult.created} y se actualizaron{' '}
+            {commitResult.updated || 0} registros
+            {commitResult.skipped_duplicates + (commitResult.unchanged || 0) > 0
+              ? ` (se omitieron ${commitResult.skipped_duplicates + (commitResult.unchanged || 0)} sin cambios o repetidos)`
               : ''}
             .
           </p>
@@ -370,7 +408,7 @@ export default function GymAdminImportPage() {
           <h2 className="text-sm font-semibold uppercase tracking-wide text-brand-muted">3 · Revisa y confirma</h2>
 
           {validation ? (
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
               <SummaryCard
                 label="Filas en el archivo"
                 value={validation.summary.total_rows}
@@ -382,8 +420,17 @@ export default function GymAdminImportPage() {
                 tone="border-success-line bg-success-soft text-success"
               />
               <SummaryCard
-                label="Se omitirán (ya existen o repetidas)"
-                value={validation.summary.duplicates_in_file + validation.summary.duplicates_in_db}
+                label="Se actualizarán"
+                value={validation.summary.updated}
+                tone="border-amber-400/60 bg-amber-400/15 text-amber-200"
+              />
+              <SummaryCard
+                label="Se omitirán (sin cambios o repetidas)"
+                value={
+                  validation.summary.duplicates_in_file +
+                  validation.summary.duplicates_in_db +
+                  validation.summary.unchanged
+                }
                 tone="border-amber-400/40 bg-amber-400/10 text-amber-200"
               />
               <SummaryCard
@@ -415,7 +462,11 @@ export default function GymAdminImportPage() {
               <button
                 type="button"
                 onClick={() => setConfirmOpen(true)}
-                disabled={!validation.can_commit || committing || validation.summary.will_create === 0}
+                disabled={
+                  !validation.can_commit ||
+                  committing ||
+                  validation.summary.will_create + validation.summary.updated === 0
+                }
                 className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
               >
                 {committing ? 'Importando…' : 'Confirmar importación'}
@@ -436,7 +487,7 @@ export default function GymAdminImportPage() {
       <ConfirmDialog
         open={confirmOpen}
         title="Confirmar importación"
-        description={`Se crearán ${validation?.summary?.will_create || 0} registros de ${entity?.label?.toLowerCase() || ''} en tu organización. Esta acción no se puede deshacer.`}
+        description={`Se crearán ${validation?.summary?.will_create || 0} y se actualizarán ${validation?.summary?.updated || 0} registros de ${entity?.label?.toLowerCase() || ''} en tu organización. Esta acción no se puede deshacer.`}
         confirmLabel="Importar"
         onCancel={() => setConfirmOpen(false)}
         onConfirm={runCommit}
