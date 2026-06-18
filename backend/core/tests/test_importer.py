@@ -1490,3 +1490,74 @@ def test_spec_upsert_contract():
     assert report.summary()['unchanged'] == 1
     assert report.can_commit is True  # updated/unchanged no son errores
     assert report.rows[1].diff == {'Clases utilizadas': {'from': 3, 'to': 5}}
+
+
+def test_engine_existing_keys_returns_pk_map(org_a):
+    from core.importer.engine import _existing_keys
+    from core.importer.spec import EntityImportSpec, FieldSpec
+    d = Discipline.objects.create(organization=org_a, name='Yoga')
+    spec = EntityImportSpec(slug='d', label='D', description='', model='core.Discipline',
+                            fields=(FieldSpec(attr='name', label='Nombre'),), natural_key=('name',))
+    keys = _existing_keys(spec, org_a)
+    assert keys == {('yoga',): d.pk}  # casefold + pk
+
+
+def test_engine_diff_only_whitelist_and_changed(org_a):
+    from core.importer.engine import _diff_updatable
+    from core.importer.spec import EntityImportSpec, FieldSpec
+    spec = EntityImportSpec(
+        slug='d2', label='D2', description='', model='core.Discipline',
+        fields=(FieldSpec(attr='name', label='Nombre'),
+                FieldSpec(attr='description', label='Descripción', updatable=True)),
+        natural_key=('name',),
+    )
+    existing = Discipline(name='Yoga', description='vieja')
+    candidate = Discipline(name='Yoga-IGNORADO', description='nueva')  # name NO es updatable → no aparece
+    diff = _diff_updatable(spec, existing, candidate)
+    assert diff == {'Descripción': {'from': 'vieja', 'to': 'nueva'}}
+
+
+def test_engine_validate_marks_updated_unchanged_and_first_wins(org_a):
+    from core.importer import engine
+    from core.importer.spec import (EntityImportSpec, FieldSpec,
+                                     STATUS_UPDATED, STATUS_UNCHANGED, STATUS_DUP_FILE)
+    spec = EntityImportSpec(
+        slug='d3', label='D3', description='', model='core.Discipline',
+        fields=(FieldSpec(attr='name', label='Nombre', required=True),
+                FieldSpec(attr='description', label='Descripción', updatable=True)),
+        natural_key=('name',),
+    )
+    Discipline.objects.create(organization=org_a, name='Yoga', description='vieja')
+    Discipline.objects.create(organization=org_a, name='Pilates', description='igual')
+    parsed = [
+        (2, {'name': 'Yoga', 'description': 'nueva'}),     # UPDATED
+        (3, {'name': 'Pilates', 'description': 'igual'}),  # UNCHANGED
+        (4, {'name': 'Yoga', 'description': 'otra'}),      # repetida → DUP_FILE (primera gana)
+    ]
+    report = engine.validate_rows(spec, org_a, parsed)
+    by_row = {r.row: r for r in report.rows}
+    assert by_row[2].status == STATUS_UPDATED
+    assert by_row[2].diff == {'Descripción': {'from': 'vieja', 'to': 'nueva'}}
+    assert by_row[3].status == STATUS_UNCHANGED
+    assert by_row[4].status == STATUS_DUP_FILE
+
+
+def test_engine_commit_applies_only_whitelist(org_a):
+    from core.importer import engine
+    from core.importer.spec import EntityImportSpec, FieldSpec
+    spec = EntityImportSpec(
+        slug='d4', label='D4', description='', model='core.Discipline',
+        fields=(FieldSpec(attr='name', label='Nombre', required=True),
+                FieldSpec(attr='description', label='Descripción', updatable=True),
+                FieldSpec(attr='is_active', label='Activa', kind='bool')),  # NO updatable
+        natural_key=('name',),
+    )
+    d = Discipline.objects.create(organization=org_a, name='Yoga', description='vieja', is_active=True)
+    rows = [['Yoga', 'nueva', 'No']]  # description cambia (updatable), is_active intenta cambiar (NO)
+    file_bytes = build_xlsx_bytes(rows, headers=['Nombre', 'Descripción', 'Activa'])
+    token = engine.issue_token(spec, org_a, file_bytes)
+    report, created, updated = engine.run_commit(spec, org_a, as_upload(file_bytes), token)
+    assert (created, updated) == (0, 1)
+    d.refresh_from_db()
+    assert d.description == 'nueva'   # whitelist aplicado
+    assert d.is_active is True        # NO whitelist → intacto

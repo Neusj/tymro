@@ -24,6 +24,8 @@ from .spec import (
     STATUS_DUP_FILE,
     STATUS_ERROR,
     STATUS_OK,
+    STATUS_UNCHANGED,
+    STATUS_UPDATED,
     ImportReport,
     RowError,
     RowResult,
@@ -273,7 +275,11 @@ def _natural_key_from_cleaned(spec, cleaned):
 
 
 def _existing_keys(spec, organization):
-    """Claves naturales ya existentes en la BD de ESTA organización."""
+    """{clave_natural: pk} ya existentes en la BD de ESTA organización.
+
+    La clave excluye el pk; el pk se usa en upsert para traer el objeto a
+    actualizar. Para specs skip, solo se consulta la pertenencia (``key in ...``).
+    """
     from django.apps import apps
 
     model = apps.get_model(spec.model)
@@ -281,16 +287,58 @@ def _existing_keys(spec, organization):
     for attr in spec.natural_key:
         field = spec.field_by_attr(attr)
         columns.append(f'{attr}_id' if field.kind == 'fk' else attr)
-    existing = set()
+    existing = {}
     queryset = model.objects.filter(**{spec.org_field: organization})
     if spec.dedup_filters:
         queryset = queryset.filter(**spec.dedup_filters)
-    for values in queryset.values_list(*columns):
-        existing.add(tuple(
+    for values in queryset.values_list(*columns, 'pk'):
+        *key_values, pk = values
+        key = tuple(
             value.strip().casefold() if isinstance(value, str) else value
-            for value in values
-        ))
+            for value in key_values
+        )
+        existing[key] = pk
     return existing
+
+
+def _build_candidate(spec, organization, kwargs):
+    """Instancia (sin guardar) que representa lo que el archivo quiere persistir.
+
+    Usa el ``build_instance`` del spec si existe; si no, construye el modelo
+    fijando la organización del actor (mismo camino que el create del commit).
+    En validate corre fuera de transacción: los specs con guardas que usen
+    ``select_for_update`` deben gatearlas en ``connection.in_atomic_block``.
+    """
+    from django.apps import apps
+
+    if spec.build_instance:
+        return spec.build_instance(kwargs, organization)
+    model = apps.get_model(spec.model)
+    return model(**{spec.org_field: organization}, **kwargs)
+
+
+def _updatable_attrs(spec):
+    """Whitelist de atributos del modelo que el upsert compara y aplica."""
+    return tuple(f.attr for f in spec.fields if f.updatable) + tuple(spec.updatable_fields)
+
+
+def _diff_updatable(spec, existing, candidate):
+    """{label_es: {'from','to'}} de atributos whitelisted que existen en el
+    candidato y difieren del objeto en BD. Atributos no presentes en el
+    candidato (ej. 'remaining_classes', que no es campo del modelo) se ignoran."""
+    diff = {}
+    for attr in _updatable_attrs(spec):
+        if not hasattr(candidate, attr):
+            continue
+        new_value = getattr(candidate, attr)
+        old_value = getattr(existing, attr, None)
+        if old_value != new_value:
+            try:
+                label = spec.field_by_attr(attr).label
+            except KeyError:
+                label = attr  # derivado sin columna (ej. 'is_active')
+            diff[label] = {'from': old_value, 'to': new_value}
+    return diff
 
 
 def validate_rows(spec, organization, parsed):
@@ -363,19 +411,22 @@ def validate_rows(spec, organization, parsed):
             ))
             continue
 
-        # Dedup ANTES de las reglas de fila: una fila que se va a omitir no se
-        # valida (si no, re-importar el mismo archivo marcaría como conflicto
-        # contra BD lo que es su propio duplicado, rompiendo la idempotencia).
-        # OJO: la clave natural no puede depender de valores de derive.
+        # Dedup ANTES de las reglas de fila para el caso skip: una fila que se va
+        # a omitir no se valida (si no, re-importar el mismo archivo marcaría como
+        # conflicto contra BD lo que es su propio duplicado, rompiendo la
+        # idempotencia). OJO: la clave natural no puede depender de valores de derive.
+        # En upsert (spec.is_upsert) una fila existente NO se omite: se evalúa para
+        # actualizar, así que sí pasa por reglas y derive.
         key = _natural_key_from_cleaned(spec, cleaned)
         key_labels = ' / '.join(display.get(spec.field_by_attr(a).label, '') for a in spec.natural_key)
-        if key in seen_keys:
+        if key in seen_keys:  # primera fila gana (OK / UPDATED / UNCHANGED)
             report.rows.append(RowResult(
                 row=row_number, status=STATUS_DUP_FILE, values=display,
                 note=f'Repetida dentro del archivo (igual que la fila {seen_keys[key]}): se omitirá.',
             ))
             continue
-        if key in existing_keys:
+        in_db = key in existing_keys
+        if in_db and not spec.is_upsert:  # skip clásico: no se toca lo existente
             report.rows.append(RowResult(
                 row=row_number, status=STATUS_DUP_DB, values=display,
                 note=f"Ya existe '{key_labels}' en tu organización: se omitirá.",
@@ -403,6 +454,25 @@ def validate_rows(spec, organization, parsed):
                 except KeyError:
                     continue
                 display[derived_field.label] = _display_value(derived_field, value)
+
+        if in_db:  # spec.is_upsert garantizado: comparar contra el objeto existente
+            from django.apps import apps
+
+            existing = apps.get_model(spec.model).objects.get(pk=existing_keys[key])
+            candidate = _build_candidate(spec, organization, dict(cleaned))
+            diff = _diff_updatable(spec, existing, candidate)
+            seen_keys[key] = row_number
+            if diff:
+                report.rows.append(RowResult(
+                    row=row_number, status=STATUS_UPDATED, values=display,
+                    cleaned=cleaned, diff=diff, note='Se actualizará.',
+                ))
+            else:
+                report.rows.append(RowResult(
+                    row=row_number, status=STATUS_UNCHANGED, values=display,
+                    note='Sin cambios: se omitirá.',
+                ))
+            continue
 
         seen_keys[key] = row_number
         report.rows.append(RowResult(
@@ -465,6 +535,18 @@ def _instance_org_id(instance, org_field):
     return getattr(obj, f'{last}_id', None)
 
 
+def _field_name_for_attr(model, attr):
+    """Nombre de campo para save(update_fields=...) a partir de un attr.
+
+    Maneja FKs: 'plan_id' (attname) → 'plan' (name). Devuelve None si el attr
+    no corresponde a un campo concreto del modelo.
+    """
+    for f in model._meta.concrete_fields:
+        if attr in (f.attname, f.name):
+            return f.name
+    return None
+
+
 def _model_validation_errors(spec, row_number, exc):
     """Convierte un ValidationError de full_clean() en RowErrors con label español."""
     error_dict = getattr(exc, 'message_dict', None) or {'__all__': exc.messages}
@@ -480,7 +562,7 @@ def _model_validation_errors(spec, row_number, exc):
 
 
 def run_commit(spec, organization, uploaded_file, token, actor=None):
-    """Re-valida de cero y persiste atómicamente. Devuelve (report, created)."""
+    """Re-valida de cero y persiste atómicamente. Devuelve (report, created, updated)."""
     from django.apps import apps
 
     file_bytes = read_upload(uploaded_file)
@@ -493,10 +575,13 @@ def run_commit(spec, organization, uploaded_file, token, actor=None):
             report = validate_rows(spec, organization, parsed)
             if not report.can_commit:
                 raise ImportCommitError(report)
+            # Mapa clave→pk para las filas a actualizar (mismo dict que usó validate).
+            existing_keys_commit = _existing_keys(spec, organization) if spec.is_upsert else {}
             created = 0
+            updated = 0
             created_instances = []
             for row in report.rows:
-                if row.status != STATUS_OK:
+                if row.status not in (STATUS_OK, STATUS_UPDATED):
                     continue
                 # derive ya fue aplicado por validate_rows sobre row.cleaned.
                 kwargs = dict(row.cleaned)
@@ -504,6 +589,35 @@ def run_commit(spec, organization, uploaded_file, token, actor=None):
                     raise RuntimeError(
                         f'El spec "{spec.slug}" intentó fijar {spec.org_field} (multitenancy regla #1)'
                     )
+
+                if row.status == STATUS_UPDATED:
+                    key = _natural_key_from_cleaned(spec, row.cleaned)
+                    existing = model.objects.select_for_update().get(pk=existing_keys_commit[key])
+                    # Red de seguridad multitenant: jamás actualizar fuera de la org del actor.
+                    if _instance_org_id(existing, spec.org_field) != organization.pk:
+                        raise RuntimeError(f'update de "{spec.slug}" cruzaría organización')
+                    # Candidato en atomic: el spec corre aquí su guarda/lock (in_atomic_block).
+                    candidate = _build_candidate(spec, organization, kwargs)
+                    update_fields = []
+                    for attr in _updatable_attrs(spec):
+                        if not hasattr(candidate, attr):
+                            continue
+                        setattr(existing, attr, getattr(candidate, attr))
+                        field_name = _field_name_for_attr(model, attr)
+                        if field_name:
+                            update_fields.append(field_name)
+                    try:
+                        existing.full_clean()
+                    except DjangoValidationError as exc:
+                        row.errors = _model_validation_errors(spec, row.row, exc)
+                        row.status = STATUS_ERROR
+                        raise ImportCommitError(report) from None
+                    if hasattr(existing, 'updated_at'):
+                        update_fields.append('updated_at')
+                    existing.save(update_fields=update_fields)
+                    updated += 1
+                    continue
+
                 if spec.build_instance:
                     instance = spec.build_instance(kwargs, organization)
                     # Red de seguridad multitenant: un spec jamás puede crear
@@ -526,6 +640,7 @@ def run_commit(spec, organization, uploaded_file, token, actor=None):
                 instance.save()
                 created_instances.append(instance)
                 created += 1
+            # post_commit SOLO para creadas (las actualizaciones no lo disparan).
             if spec.post_commit and created_instances:
                 spec.post_commit(created_instances, organization, actor)
     except IntegrityError:
@@ -533,4 +648,4 @@ def run_commit(spec, organization, uploaded_file, token, actor=None):
             'Otro proceso modificó los datos mientras importabas. '
             'Vuelve a validar el archivo e inténtalo de nuevo.'
         ) from None
-    return report, created
+    return report, created, updated

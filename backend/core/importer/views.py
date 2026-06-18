@@ -148,7 +148,7 @@ class ImporterViewSet(viewsets.ViewSet):
         uploaded = request.FILES.get('file')
         token = request.data.get('token')
         try:
-            report, created = run_commit(spec, organization, uploaded, token, actor=request.user)
+            report, created, updated = run_commit(spec, organization, uploaded, token, actor=request.user)
         except ImportFileError as exc:
             return Response({'detail': exc.message}, status=status.HTTP_400_BAD_REQUEST)
         except ImportCommitError as exc:
