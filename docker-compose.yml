@@ -19,6 +19,11 @@ services:
       # Base para armar los links públicos (registro de prueba) y los emails (verificación / reset).
       FRONTEND_URL: ${FRONTEND_URL:-https://tymroapp.com}
       TOKEN_TTL_HOURS: ${TOKEN_TTL_HOURS:-12}
+      # EMAIL_BACKEND lo decide settings.py según DJANGO_DEBUG: consola en dev,
+      # smtp en producción (DEBUG=False). NO lo fijes acá: este compose también
+      # corre en QA/prod y un default a consola filtraría los tokens de
+      # reset/verificación a los logs del contenedor. Configura SMTP vía las
+      # variables EMAIL_HOST/USER/PASSWORD de abajo.
       EMAIL_HOST: ${EMAIL_HOST:-}
       EMAIL_PORT: ${EMAIL_PORT:-587}
       EMAIL_HOST_USER: ${EMAIL_HOST_USER:-}
