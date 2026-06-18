@@ -55,7 +55,8 @@ export default function AppLayout({ user, onLogout, children }) {
       ) : null}
 
       <div className="relative z-10 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <header className="sticky top-0 z-20 flex h-16 shrink-0 items-center justify-between border-b border-brand-line bg-brand-black/80 px-4 backdrop-blur-md md:px-6">
+        <header className="pt-safe-top sticky top-0 z-20 shrink-0 border-b border-brand-line bg-brand-black/80 backdrop-blur-md">
+          <div className="flex h-16 items-center justify-between px-4 md:px-6">
           <div className="flex min-w-0 items-center gap-3">
             <button
               type="button"
@@ -84,6 +85,7 @@ export default function AppLayout({ user, onLogout, children }) {
               <span className="sm:hidden" aria-hidden="true">⏻</span>
               <span className="sr-only sm:hidden">Cerrar sesión</span>
             </button>
+          </div>
           </div>
         </header>
 

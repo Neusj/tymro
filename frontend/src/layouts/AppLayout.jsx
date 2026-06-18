@@ -1,7 +1,7 @@
 export default function AppLayout({ children }) {
   return (
     <div className="min-h-screen bg-brand-black text-brand-white">
-      <header className="sticky top-0 z-20 border-b border-brand-line bg-brand-black/85 backdrop-blur">
+      <header className="pt-safe-top sticky top-0 z-20 border-b border-brand-line bg-brand-black/85 backdrop-blur">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4 md:px-6">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.3em] text-brand-orange">TYMRO</p>

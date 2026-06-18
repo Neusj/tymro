@@ -136,6 +136,13 @@ textarea {
 }
 
 @layer utilities {
+  /* Safe-area: deja libre la zona de la barra de estado / notch en la parte
+     superior del chrome (header y drawer). Vale 0 en desktop y en iOS con
+     status-bar 'black'; protege el caso Android edge-to-edge y notch en landscape. */
+  .pt-safe-top {
+    padding-top: env(safe-area-inset-top);
+  }
+
   /* Fluid type — scales smoothly across phone → TV without media queries */
   .text-fluid-3xl {
     font-size: clamp(1.6rem, 1.1rem + 2vw, 2.6rem);

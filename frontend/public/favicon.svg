@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="TYMRO">
-  <rect width="512" height="512" rx="112" fill="#101013"/>
-  <rect x="3" y="3" width="506" height="506" rx="110" fill="none" stroke="#dc2626" stroke-width="6"/>
+  <rect width="512" height="512" rx="112" fill="#09090b"/>
+  <rect x="3" y="3" width="506" height="506" rx="110" fill="none" stroke="#f97316" stroke-width="6"/>
   <rect x="225" y="123" width="62" height="266" rx="11" fill="#fafafa"/>
-  <rect x="123" y="123" width="266" height="59" rx="17" fill="#dc2626"/>
+  <rect x="123" y="123" width="266" height="59" rx="17" fill="#f97316"/>
 </svg>

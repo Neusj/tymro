@@ -13,7 +13,10 @@
          estos meta + el apple-touch-icon habilitan "Agregar a pantalla de inicio". -->
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <!-- 'black' (no translúcida): iOS reserva el alto de la barra de estado y el
+         contenido arranca debajo, sin que la hora/notch pisen el menú. Funciona
+         en teléfonos y tablets, con o sin notch. -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
     <meta name="apple-mobile-web-app-title" content="TYMRO" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
 
