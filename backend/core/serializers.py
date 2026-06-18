@@ -137,6 +137,13 @@ class BranchSerializer(serializers.ModelSerializer):
         extra_kwargs = {
             'organization': {'required': False},
         }
+        # Desactivamos el UniqueTogetherValidator que DRF auto-genera a partir de
+        # `unique_together = ('organization', 'name')`: ese validador exige
+        # `organization` en el payload al crear y corre ANTES de `validate()`,
+        # impidiendo que un gym_admin cree sucursales (la organización se asigna
+        # en `validate()` desde el usuario). La unicidad se valida abajo,
+        # case-insensitive y por organización.
+        validators = []
 
     def validate(self, attrs):
         request = self.context.get('request')
