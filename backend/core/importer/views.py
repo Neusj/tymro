@@ -160,7 +160,9 @@ class ImporterViewSet(viewsets.ViewSet):
         return Response({
             'entity': spec.slug,
             'created': created,
+            'updated': updated,
             'skipped_duplicates': report.duplicates_in_file + report.duplicates_in_db,
+            'unchanged': report.unchanged,
             'total_rows': report.total_rows,
             'summary': report.summary(),
         }, status=status.HTTP_201_CREATED)
