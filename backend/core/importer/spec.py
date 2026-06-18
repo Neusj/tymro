@@ -44,6 +44,7 @@ class FieldSpec:
     fk: FKSpec | None = None            # solo si kind == 'fk'
     default: object = None              # se aplica si la celda viene vacía y no es required
     help_text: str = ''                 # descripción para Instrucciones y catálogo
+    updatable: bool = False             # upsert: si existe el registro, este campo se actualiza
 
 
 @dataclass(frozen=True)
@@ -59,6 +60,10 @@ class EntityImportSpec:
     # StudentPlan); en ese caso el spec DEBE usar build_instance.
     org_field: str = 'organization'
     dedup_filters: dict = field(default_factory=dict)  # filtro extra del dedup contra BD (ej. {'is_active': True})
+    # Upsert: atributos del MODELO actualizables que no son columna declarada
+    # (ej. derivados como 'is_active', 'total_classes'). Junto con los FieldSpec
+    # marcados updatable=True forman el whitelist que el motor compara y aplica.
+    updatable_fields: tuple = ()
     dependencies: tuple = ()            # slugs que conviene importar antes (informativo en UI)
     instructions: tuple = ()            # bullets en español (hoja Instrucciones y UI)
     max_rows: int = 1000
@@ -76,6 +81,11 @@ class EntityImportSpec:
                 return f
         raise KeyError(attr)
 
+    @property
+    def is_upsert(self):
+        """True si la entidad activa upsert (algún campo updatable o updatable_fields)."""
+        return any(f.updatable for f in self.fields) or bool(self.updatable_fields)
+
 
 @dataclass
 class RowError:
@@ -91,6 +101,8 @@ STATUS_OK = 'ok'
 STATUS_DUP_FILE = 'duplicado_archivo'
 STATUS_DUP_DB = 'duplicado_existente'
 STATUS_ERROR = 'error'
+STATUS_UPDATED = 'actualizado'      # upsert: existe y hay cambios en campos del whitelist
+STATUS_UNCHANGED = 'sin_cambios'    # upsert: existe pero ningún campo del whitelist cambió
 
 
 @dataclass
@@ -101,6 +113,7 @@ class RowResult:
     errors: list = field(default_factory=list)
     note: str = ''
     cleaned: dict = field(default_factory=dict)   # {attr: valor coercionado} (uso interno del motor)
+    diff: dict = field(default_factory=dict)      # upsert: {label_es: {'from': v, 'to': v}} en STATUS_UPDATED
 
 
 @dataclass
@@ -127,6 +140,14 @@ class ImportReport:
         return self._count(STATUS_DUP_DB)
 
     @property
+    def updated(self):
+        return self._count(STATUS_UPDATED)
+
+    @property
+    def unchanged(self):
+        return self._count(STATUS_UNCHANGED)
+
+    @property
     def error_count(self):
         return self._count(STATUS_ERROR)
 
@@ -142,6 +163,8 @@ class ImportReport:
             'duplicates_in_db': self.duplicates_in_db,
             'errors': self.error_count,
             'will_create': self.valid,
+            'updated': self.updated,
+            'unchanged': self.unchanged,
         }
 
     def rows_payload(self, only_errors=False):
@@ -153,6 +176,7 @@ class ImportReport:
                 'values': r.values,
                 'errors': [{'row': e.row, 'column': e.column, 'message': e.message} for e in r.errors],
                 'note': r.note,
+                'diff': r.diff,
             }
             for r in rows
         ]

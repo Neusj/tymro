@@ -175,6 +175,7 @@ def test_validate_ok_returns_token_and_persists_nothing(api_client, admin_a):
     assert body['summary'] == {
         'total_rows': 3, 'valid': 3, 'duplicates_in_file': 0,
         'duplicates_in_db': 0, 'errors': 0, 'will_create': 3,
+        'updated': 0, 'unchanged': 0,
     }
     assert Discipline.objects.count() == 0
 
@@ -1448,3 +1449,44 @@ def test_resolve_fk_scoped_to_organization(org_a, org_b):
     assert 'más de un tipo de clase' in exc.value.message
 
     assert reference_values(fk, org_b) == ['Funcional']
+
+
+# ---------------------------------------------------------------- F6: Upsert (motor)
+
+def test_spec_upsert_contract():
+    from core.importer.spec import (
+        EntityImportSpec, FieldSpec, RowResult, ImportReport,
+        STATUS_UPDATED, STATUS_UNCHANGED, STATUS_OK,
+    )
+    assert STATUS_UPDATED == 'actualizado'
+    assert STATUS_UNCHANGED == 'sin_cambios'
+
+    # FieldSpec.updatable default False, opt-in True
+    assert FieldSpec(attr='a', label='A').updatable is False
+    assert FieldSpec(attr='a', label='A', updatable=True).updatable is True
+
+    # is_upsert: True si hay algún campo updatable o updatable_fields
+    skip_spec = EntityImportSpec(slug='s', label='S', description='', model='core.Discipline',
+                                 fields=(FieldSpec(attr='name', label='Nombre'),), natural_key=('name',))
+    assert skip_spec.is_upsert is False
+    up_spec = EntityImportSpec(slug='u', label='U', description='', model='core.Discipline',
+                               fields=(FieldSpec(attr='name', label='Nombre', updatable=True),),
+                               natural_key=('name',))
+    assert up_spec.is_upsert is True
+    up_spec2 = EntityImportSpec(slug='u2', label='U2', description='', model='core.Discipline',
+                                fields=(FieldSpec(attr='name', label='Nombre'),),
+                                natural_key=('name',), updatable_fields=('x',))
+    assert up_spec2.is_upsert is True
+
+    # RowResult.diff y conteos en el report
+    report = ImportReport(rows=[
+        RowResult(row=2, status=STATUS_OK, values={}),
+        RowResult(row=3, status=STATUS_UPDATED, values={}, diff={'Clases utilizadas': {'from': 3, 'to': 5}}),
+        RowResult(row=4, status=STATUS_UNCHANGED, values={}),
+    ])
+    assert report.updated == 1
+    assert report.unchanged == 1
+    assert report.summary()['updated'] == 1
+    assert report.summary()['unchanged'] == 1
+    assert report.can_commit is True  # updated/unchanged no son errores
+    assert report.rows[1].diff == {'Clases utilizadas': {'from': 3, 'to': 5}}
