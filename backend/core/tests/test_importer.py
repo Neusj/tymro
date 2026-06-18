@@ -908,10 +908,13 @@ def membership_setup(make_user, org_a):
 def test_memberships_full_cycle_carries_remaining_classes(api_client, admin_a, org_a, membership_setup):
     import datetime
 
+    from django.utils import timezone
     from core.models import StudentPlan
 
     login(api_client, 'admin_a')
-    rows = [['maria@gym.cl', '', 'Plan 8 clases', '2026-06-01', '', 5]]
+    # Fecha relativa a hoy: la membresía queda vigente (is_active derivado).
+    start = timezone.localdate()
+    rows = [['maria@gym.cl', '', 'Plan 8 clases', start.isoformat(), '', 5]]
     resp = import_entity(api_client, 'memberships', rows, MEMBERSHIP_HEADERS)
     assert resp.status_code == 201, resp.content
     assert resp.json()['created'] == 1
@@ -921,15 +924,17 @@ def test_memberships_full_cycle_carries_remaining_classes(api_client, admin_a, o
     assert membership.total_classes == 8          # derivado del plan
     assert membership.classes_used == 3           # 8 totales - 5 restantes
     assert membership.unlimited_classes is False
-    assert membership.is_active is True
+    assert membership.is_active is True           # end_date >= hoy → vigente
     # end_date = inicio + (duración - 1), espejo del flujo Asignar plan
-    assert membership.end_date == datetime.date(2026, 6, 30)
+    assert membership.end_date == start + datetime.timedelta(days=29)
     assert membership.final_price == 45000.0
 
-    # Idempotente: el alumno ya tiene membresía activa → se omite, no se toca.
+    # Idempotente (upsert): re-importar idéntico no cambia nada → "sin cambios".
     resp = import_entity(api_client, 'memberships', rows, MEMBERSHIP_HEADERS)
     assert resp.json()['created'] == 0
-    assert resp.json()['skipped_duplicates'] == 1
+    assert resp.json()['updated'] == 0
+    assert resp.json()['summary']['unchanged'] == 1
+    assert StudentPlan.objects.filter(user=membership_setup['student']).count() == 1
     assert StudentPlan.objects.filter(user=membership_setup['student']).count() == 1
 
 
@@ -1161,6 +1166,96 @@ def test_memberships_import_sets_enrollment_fee(api_client, admin_a, membership_
     membership = StudentPlan.objects.get(user=membership_setup['student'])
     assert membership.enrollment_fee == Decimal('50000')
     assert membership.enrollment_fee_due_at is not None  # vencimiento autocalculado
+
+
+# ----------------------------------------- F6: Upsert de membresías (fechas relativas a hoy)
+
+def test_memberships_upsert_updates_classes_used(api_client, admin_a, org_a, membership_setup):
+    from django.utils import timezone
+    from core.models import StudentPlan
+
+    login(api_client, 'admin_a')
+    start = timezone.localdate().isoformat()  # membresía vigente
+    import_entity(api_client, 'memberships',
+                  [['maria@gym.cl', '', 'Plan 8 clases', start, '', 5]], MEMBERSHIP_HEADERS)
+    resp = import_entity(api_client, 'memberships',
+                         [['maria@gym.cl', '', 'Plan 8 clases', start, '', 2]], MEMBERSHIP_HEADERS)
+    assert resp.json()['created'] == 0
+    assert resp.json()['updated'] == 1
+    m = StudentPlan.objects.get(user=membership_setup['student'])
+    assert m.classes_used == 6  # 8 - 2
+    assert StudentPlan.objects.filter(user=membership_setup['student']).count() == 1  # no duplica
+
+
+def test_memberships_upsert_unchanged_is_skipped(api_client, admin_a, membership_setup):
+    from django.utils import timezone
+
+    login(api_client, 'admin_a')
+    start = timezone.localdate().isoformat()
+    rows = [['maria@gym.cl', '', 'Plan 8 clases', start, '', 5]]
+    import_entity(api_client, 'memberships', rows, MEMBERSHIP_HEADERS)
+    resp = import_entity(api_client, 'memberships', rows, MEMBERSHIP_HEADERS)  # idéntica
+    assert resp.json()['created'] == 0
+    assert resp.json()['updated'] == 0
+    assert resp.json()['summary']['unchanged'] == 1
+
+
+def test_memberships_upsert_diff_in_preview(api_client, admin_a, membership_setup):
+    from django.utils import timezone
+
+    login(api_client, 'admin_a')
+    start = timezone.localdate().isoformat()
+    import_entity(api_client, 'memberships',
+                  [['maria@gym.cl', '', 'Plan 8 clases', start, '', 5]], MEMBERSHIP_HEADERS)
+    upload = build_xlsx([['maria@gym.cl', '', 'Plan 8 clases', start, '', 2]], headers=MEMBERSHIP_HEADERS)
+    body = api_client.post('/api/imports/memberships/validate/', {'file': upload}, format='multipart').json()
+    row = body['rows'][0]
+    assert row['status'] == 'actualizado'
+    assert row['diff']['Clases utilizadas'] == {'from': 3, 'to': 6}
+
+
+def test_memberships_historical_inactive_then_active(api_client, admin_a, org_a, membership_setup):
+    """Histórico vencido (inactivo) + vigente (activa) en el MISMO archivo, distinto start."""
+    import datetime
+
+    from django.utils import timezone
+    from core.models import StudentPlan
+
+    login(api_client, 'admin_a')
+    today = timezone.localdate()
+    past = (today - datetime.timedelta(days=400)).isoformat()
+    past_end = (today - datetime.timedelta(days=370)).isoformat()
+    now = today.isoformat()
+    rows = [
+        ['maria@gym.cl', '', 'Plan 8 clases', past, past_end, 0],   # vencida → inactiva
+        ['maria@gym.cl', '', 'Plan 8 clases', now, '', 5],          # vigente → activa
+    ]
+    resp = import_entity(api_client, 'memberships', rows, MEMBERSHIP_HEADERS)
+    assert resp.json()['created'] == 2
+    plans = StudentPlan.objects.filter(user=membership_setup['student'])
+    assert plans.filter(is_active=True).count() == 1
+    assert plans.filter(is_active=False).count() == 1
+
+
+def test_memberships_guard_blocks_second_active(api_client, admin_a, membership_setup):
+    """Ya hay activa en BD + fila que también quedaría activa (otro start) → error amigable."""
+    import datetime
+
+    from django.utils import timezone
+    from core.models import StudentPlan
+
+    login(api_client, 'admin_a')
+    today = timezone.localdate()
+    StudentPlan.objects.create(
+        user=membership_setup['student'], plan=membership_setup['plan'],
+        start_date=today, end_date=today + datetime.timedelta(days=29),
+        total_classes=8, classes_used=0, is_active=True,
+    )
+    other_start = (today + datetime.timedelta(days=1)).isoformat()  # distinta clave natural
+    upload = build_xlsx([['maria@gym.cl', '', 'Plan 8 clases', other_start, '', 5]], headers=MEMBERSHIP_HEADERS)
+    body = api_client.post('/api/imports/memberships/validate/', {'file': upload}, format='multipart').json()
+    assert body['can_commit'] is False
+    assert 'ya tiene una membresía activa' in body['rows'][0]['errors'][0]['message']
 
 
 # ---------------------------------------------------------------- F5: Horario recurrente

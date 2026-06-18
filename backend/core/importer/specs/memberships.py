@@ -19,6 +19,8 @@ eso está la pantalla "Asignar plan".
 """
 import datetime
 
+from django.utils import timezone
+
 from ..registry import register
 from ..spec import EntityImportSpec, FieldSpec, FKSpec, RowError
 
@@ -82,6 +84,37 @@ def _membership_rules(values, organization):
             row=0, column=END_LABEL,
             message='La fecha de término no puede ser anterior a la fecha de inicio.',
         ))
+
+    # ¿Esta fila quedaría como membresía vigente? (mismo cálculo que _build_membership)
+    if plan is not None and start is not None:
+        effective_end = end or start + datetime.timedelta(days=max(plan.duration_days - 1, 0))
+        would_be_active = effective_end >= timezone.localdate()
+        # Plan inactivo solo se permite en membresías históricas (ya vencidas).
+        if would_be_active and not plan.is_active:
+            errors.append(RowError(
+                row=0, column='Nombre del plan',
+                message=(
+                    f"El plan '{plan.name}' está inactivo: solo puedes usarlo en "
+                    'membresías históricas (con fecha de término ya pasada).'
+                ),
+            ))
+        # Doble activa: el alumno ya tiene otra membresía vigente (no esta misma fila).
+        if would_be_active:
+            from accounts.models import CustomUser
+            from core.models import StudentPlan
+
+            user = values.get('user')
+            if isinstance(user, CustomUser) and (
+                StudentPlan.objects.filter(user=user, is_active=True)
+                .exclude(start_date=start).exists()
+            ):
+                errors.append(RowError(
+                    row=0, column='Email del alumno',
+                    message=(
+                        'El alumno ya tiene una membresía activa; el importador no la '
+                        'modifica. Usa "Asignar plan" para cambiar la membresía vigente.'
+                    ),
+                ))
     return errors
 
 
@@ -96,22 +129,30 @@ def _derive_end_date(values, organization):
 
 
 def _build_membership(values, organization):
-    from django.db import IntegrityError
+    from django.db import IntegrityError, connection
 
     from accounts.models import CustomUser
     from core.models import StudentPlan
 
-    # Lock del alumno + re-chequeo dentro de la transacción del commit: si otro
-    # proceso (otro import o "Asignar plan") le creó una membresía activa entre
-    # el dedup y este punto, abortamos con rollback limpio (400 "vuelve a
-    # validar") en vez de dejar dos membresías activas.
-    CustomUser.objects.select_for_update().get(pk=values['user'].pk)
-    if StudentPlan.objects.filter(user=values['user'], is_active=True).exists():
-        raise IntegrityError('el alumno recibió una membresía activa en paralelo')
-
     plan = values['plan']
     start = values['start_date']
     end = values.get('end_date') or start + datetime.timedelta(days=max(plan.duration_days - 1, 0))
+    # Vigente solo si su fecha de término no pasó: las históricas quedan inactivas
+    # y NO las toca el flujo de reservas (que exige is_active + ventana de fechas).
+    is_active = end >= timezone.localdate()
+
+    # Guarda anti-doble-activa: SOLO en commit (transacción) y solo si esta fila
+    # quedaría activa. Lock del alumno + re-chequeo: si otro proceso (otro import o
+    # "Asignar plan") le dejó otra activa en paralelo, abortamos con rollback limpio
+    # (400 "vuelve a validar") en vez de dejar dos vigentes. Excluye la propia
+    # membresía (misma clave natural user+start) para no bloquear su actualización.
+    # En validate (sin transacción) no corre: select_for_update exige atomic.
+    if connection.in_atomic_block and is_active:
+        CustomUser.objects.select_for_update().get(pk=values['user'].pk)
+        if (StudentPlan.objects.filter(user=values['user'], is_active=True)
+                .exclude(start_date=start).exists()):
+            raise IntegrityError('el alumno recibió otra membresía activa en paralelo')
+
     discount = plan.discount_percentage or 0
     if plan.unlimited_classes:
         total, used, unlimited = 0, 0, True
@@ -136,7 +177,7 @@ def _build_membership(values, organization):
         discount_percentage=discount,
         final_price=max(float(plan.price) * (1 - (discount / 100)), 0),
         enrollment_fee=values.get('enrollment_fee') or 0,
-        is_active=True,
+        is_active=is_active,
     )
 
 
@@ -172,7 +213,9 @@ MEMBERSHIPS = register(EntityImportSpec(
             attr='plan', label='Nombre del plan', kind='fk', required=True,
             fk=FKSpec(
                 model='core.Plan', lookup_field='name',
-                filters={'is_active': True},
+                # Sin filtro is_active: las membresías históricas pueden apuntar a
+                # planes ya dados de baja. _membership_rules exige plan activo solo
+                # cuando la membresía quedaría vigente.
                 reference_label='el plan',
                 disambiguators=(('plan_type', 'plan_type'),),
                 ambiguity_hint="Completa la columna 'Tipo de plan' para distinguirlo.",
@@ -191,7 +234,7 @@ MEMBERSHIPS = register(EntityImportSpec(
             help_text='Hasta cuándo vale. Si la dejas vacía se calcula con la duración del plan.',
         ),
         FieldSpec(
-            attr='remaining_classes', label=REMAINING_LABEL, kind='int',
+            attr='remaining_classes', label=REMAINING_LABEL, kind='int', updatable=True,
             example='5',
             help_text=(
                 'Cuántas clases le quedan HOY al alumno. Alternativa a '
@@ -199,7 +242,7 @@ MEMBERSHIPS = register(EntityImportSpec(
             ),
         ),
         FieldSpec(
-            attr='classes_used', label=USED_LABEL, kind='int',
+            attr='classes_used', label=USED_LABEL, kind='int', updatable=True,
             example='3',
             help_text=(
                 "Cuántas clases YA usó el alumno. Alternativa a 'Clases restantes'. "
@@ -207,14 +250,18 @@ MEMBERSHIPS = register(EntityImportSpec(
             ),
         ),
         FieldSpec(
-            attr='enrollment_fee', label=FEE_LABEL, kind='decimal',
+            attr='enrollment_fee', label=FEE_LABEL, kind='decimal', updatable=True,
             example='50000',
             help_text='Matrícula del alumno para este plan. Déjala vacía o en 0 si no cobra matrícula.',
         ),
     ),
-    natural_key=('user',),
+    natural_key=('user', 'start_date'),
     org_field='user__organization',
-    dedup_filters={'is_active': True},
+    # Upsert: una membresía existente (mismo alumno + misma fecha de inicio) se
+    # actualiza en vez de omitirse. Sin filtro is_active en el dedup: el histórico
+    # inactivo también cuenta como existente (idempotencia al re-importar).
+    dedup_filters={},
+    updatable_fields=('plan_id', 'total_classes', 'unlimited_classes', 'final_price', 'is_active'),
     dependencies=('students', 'plans'),
     row_validators=(_membership_rules,),
     derive=_derive_end_date,
