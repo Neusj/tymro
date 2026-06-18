@@ -1,6 +1,37 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="TYMRO">
-  <rect width="512" height="512" rx="112" fill="#09090b"/>
-  <rect x="3" y="3" width="506" height="506" rx="110" fill="none" stroke="#f97316" stroke-width="6"/>
-  <rect x="225" y="123" width="62" height="266" rx="11" fill="#fafafa"/>
-  <rect x="123" y="123" width="266" height="59" rx="17" fill="#f97316"/>
+  <defs>
+    <!-- Gradiente de marca (mismo de los botones y el hero del login): rojo → naranja → azul -->
+    <linearGradient id="brand" x1="40" y1="40" x2="472" y2="472" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#dc2626"/>
+      <stop offset=".5" stop-color="#f97316"/>
+      <stop offset="1" stop-color="#2563eb"/>
+    </linearGradient>
+    <!-- Relleno de la T: naranja con profundidad (claro arriba → naranja → naranja intenso) -->
+    <linearGradient id="tfill" x1="256" y1="126" x2="256" y2="392" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fdba74"/>
+      <stop offset=".55" stop-color="#f97316"/>
+      <stop offset="1" stop-color="#ea580c"/>
+    </linearGradient>
+    <!-- Glows del hero del login: rojo arriba-izq, azul abajo-der, naranja abajo-izq -->
+    <radialGradient id="gr" cx="78" cy="74" r="300" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#dc2626" stop-opacity=".30"/><stop offset="1" stop-color="#dc2626" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="gb" cx="446" cy="452" r="320" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2563eb" stop-opacity=".28"/><stop offset="1" stop-color="#2563eb" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="go" cx="92" cy="446" r="250" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f97316" stop-opacity=".22"/><stop offset="1" stop-color="#f97316" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="512" height="512" rx="116" fill="#09090b"/>
+  <rect width="512" height="512" rx="116" fill="url(#gr)"/>
+  <rect width="512" height="512" rx="116" fill="url(#gb)"/>
+  <rect width="512" height="512" rx="116" fill="url(#go)"/>
+  <!-- Borde degradado a lo largo del contorno -->
+  <rect x="8" y="8" width="496" height="496" rx="108" fill="none" stroke="url(#brand)" stroke-width="12"/>
+  <!-- T (estética grotesca bold, terminaciones planas) -->
+  <g fill="url(#tfill)">
+    <rect x="112" y="132" width="288" height="56" rx="10"/>
+    <rect x="228" y="132" width="56" height="252" rx="10"/>
+  </g>
 </svg>
