@@ -37,7 +37,7 @@ export default function AppLayout({ user, onLogout, children }) {
 
   return (
     <div
-      className="relative flex h-screen overflow-hidden bg-brand-black text-brand-white"
+      className="relative flex h-screen-dvh overflow-hidden bg-brand-black text-brand-white"
       style={{
         '--dynamic-primary': primary,
         '--dynamic-secondary': secondary,
@@ -89,7 +89,7 @@ export default function AppLayout({ user, onLogout, children }) {
           </div>
         </header>
 
-        <main ref={mainRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6 sm:py-7 lg:px-8 lg:py-9 3xl:px-12">
+        <main ref={mainRef} className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain px-4 py-5 sm:px-6 sm:py-7 lg:px-8 lg:py-9 3xl:px-12">
           <div className="app-container animate-fade-rise">{children}</div>
         </main>
       </div>

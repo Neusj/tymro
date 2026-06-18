@@ -143,6 +143,15 @@ textarea {
     padding-top: env(safe-area-inset-top);
   }
 
+  /* Alto = viewport VISIBLE real (no 100vh). En móvil 100vh incluye la zona
+     detrás de la barra del navegador, lo que hace que el body haga scroll y el
+     header se mueva. Con 100dvh el shell calza exacto con lo visible: el body no
+     desborda y solo scrollea <main>, así el header queda fijo. vh = fallback. */
+  .h-screen-dvh {
+    height: 100vh;
+    height: 100dvh;
+  }
+
   /* Fluid type — scales smoothly across phone → TV without media queries */
   .text-fluid-3xl {
     font-size: clamp(1.6rem, 1.1rem + 2vw, 2.6rem);

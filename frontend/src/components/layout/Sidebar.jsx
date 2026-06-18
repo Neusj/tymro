@@ -257,7 +257,7 @@ export default function Sidebar({ isOpen, isMobile, user, onNavigate, onRequestO
   return (
     <aside
       className={[
-        'pt-safe-top z-40 flex h-screen flex-col border-r border-brand-line bg-brand-black transition-all duration-300 ease-out',
+        'pt-safe-top z-40 flex h-screen-dvh flex-col border-r border-brand-line bg-brand-black transition-all duration-300 ease-out',
         isMobile ? 'fixed left-0 top-0 w-60' : displayExpanded ? 'w-60 shrink-0' : 'w-[70px] shrink-0',
         isMobile && !isOpen ? '-translate-x-full' : 'translate-x-0',
       ].join(' ')}
