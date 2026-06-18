@@ -1211,10 +1211,61 @@ def test_class_templates_full_cycle(api_client, admin_a, org_a, schedule_setup):
     assert plain.capacity == 20  # default del spec
     assert plain.is_trial_eligible is False
 
-    # Idempotente por (sucursal, día, hora de inicio).
+    # Idempotente por (sucursal, día, hora de inicio, profesor).
     resp = import_entity(api_client, 'class-templates', rows, TEMPLATE_HEADERS)
     assert resp.json()['created'] == 0
     assert resp.json()['skipped_duplicates'] == 2
+
+
+def test_class_templates_same_slot_different_teacher_both_import(
+    api_client, admin_a, org_a, make_user, schedule_setup,
+):
+    import datetime
+
+    from core.models import ClassTemplate
+
+    coach2 = make_user('coach2', organization=org_a, role='teacher', email='coach2@gym.cl')
+    login(api_client, 'admin_a')
+    # Mismo branch / día / hora de inicio, profesores DISTINTOS → no se deduplican
+    # (la clave natural incluye al profesor) y profesores distintos no se cruzan
+    # entre sí → ambas se importan.
+    rows = [
+        ['Sede Centro', 'Lunes', '07:00', '08:00', 'Kick Boxing', 'coach@gym.cl',
+         '', '', '', '2026-06-15', '', ''],
+        ['Sede Centro', 'Lunes', '07:00', '08:00', 'Boxeo', 'coach2@gym.cl',
+         '', '', '', '2026-06-15', '', ''],
+    ]
+    resp = import_entity(api_client, 'class-templates', rows, TEMPLATE_HEADERS)
+    assert resp.status_code == 201, resp.content
+    assert resp.json()['created'] == 2
+    assert resp.json()['skipped_duplicates'] == 0
+    slot = dict(organization=org_a, branch=schedule_setup['branch'],
+                weekday=0, start_time=datetime.time(7, 0))
+    assert ClassTemplate.objects.filter(teacher=schedule_setup['teacher'], **slot).count() == 1
+    assert ClassTemplate.objects.filter(teacher=coach2, **slot).count() == 1
+
+
+def test_class_templates_same_slot_same_teacher_dedups(api_client, admin_a, org_a, schedule_setup):
+    import datetime
+
+    from core.models import ClassTemplate
+
+    login(api_client, 'admin_a')
+    # Mismo branch / día / hora de inicio y MISMO profesor → la segunda es duplicada
+    # dentro del archivo y se omite.
+    rows = [
+        ['Sede Centro', 'Lunes', '07:00', '08:00', 'Kick Boxing', 'coach@gym.cl',
+         '', '', '', '2026-06-15', '', ''],
+        ['Sede Centro', 'Lunes', '07:00', '08:00', 'Repetida', 'coach@gym.cl',
+         '', '', '', '2026-06-15', '', ''],
+    ]
+    resp = import_entity(api_client, 'class-templates', rows, TEMPLATE_HEADERS)
+    assert resp.status_code == 201, resp.content
+    assert resp.json()['created'] == 1
+    assert resp.json()['skipped_duplicates'] == 1
+    assert ClassTemplate.objects.filter(
+        organization=org_a, weekday=0, start_time=datetime.time(7, 0),
+    ).count() == 1
 
 
 def test_class_templates_row_rules(api_client, admin_a, schedule_setup):

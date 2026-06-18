@@ -195,7 +195,7 @@ CLASS_TEMPLATES = register(EntityImportSpec(
             help_text="'Sí' si los prospectos pueden agendar su clase de prueba gratis aquí. Vacío = 'No'.",
         ),
     ),
-    natural_key=('branch', 'weekday', 'start_time'),
+    natural_key=('branch', 'weekday', 'start_time', 'teacher'),
     dependencies=('branches',),
     row_validators=(_template_rules,),
     post_commit=_generate_calendar,
@@ -210,8 +210,9 @@ CLASS_TEMPLATES = register(EntityImportSpec(
         "En 'Vigente desde' indica desde qué fecha se generan las clases (AAAA-MM-DD).",
         'Un profesor no puede tener dos clases que se crucen el mismo día: esas filas '
         'saldrán con error.',
-        'Si ya existe una clase en la misma sucursal, día y hora de inicio, esa fila '
-        'se omite (no se duplica).',
+        'Si ya existe una clase en la misma sucursal, día, hora de inicio y profesor, '
+        'esa fila se omite (no se duplica). Dos clases en el mismo horario con '
+        'profesores distintos sí se cargan ambas.',
         'Al confirmar, las clases del calendario se generan automáticamente desde la '
         'fecha de vigencia (saltando los festivos configurados).',
     ),

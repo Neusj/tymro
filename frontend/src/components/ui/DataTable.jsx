@@ -113,6 +113,7 @@ export default function DataTable({
   rowIdKey = 'id',
   defaultSort = null,
   selectAllScope = 'page',
+  maxBodyHeight,            // ej: '28rem' | '480px' | '60vh'; undefined = comportamiento actual
 }) {
   const [query, setQuery] = useState('')
   const [debouncedQuery, setDebouncedQuery] = useState('')
@@ -300,6 +301,7 @@ export default function DataTable({
   const startItem = sortedData.length === 0 ? 0 : (safePage - 1) * effectivePageSize + 1
   const endItem = sortedData.length === 0 ? 0 : Math.min(safePage * effectivePageSize, sortedData.length)
   const selectedDetailRowId = selectedDetailRow ? getRowId(selectedDetailRow, rowIdKey) : null
+  const scrollStyle = maxBodyHeight ? { maxHeight: maxBodyHeight } : undefined
 
   return (
     <div className="overflow-hidden rounded-2xl border border-brand-line bg-brand-soft/40 p-3 sm:p-4">
@@ -314,7 +316,10 @@ export default function DataTable({
       ) : (
         <>
           {/* ---------- Desktop / TV: full table (lg and up) ---------- */}
-          <div className="hidden overflow-x-auto lg:block">
+          <div
+            className={`hidden overflow-x-auto lg:block ${maxBodyHeight ? 'overflow-y-auto' : ''}`}
+            style={scrollStyle}
+          >
             <table className="min-w-full border-separate border-spacing-0">
               <thead>
                 <tr>
@@ -382,7 +387,10 @@ export default function DataTable({
           </div>
 
           {/* ---------- Phone / Tablet: relevant cards (below lg) ---------- */}
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:hidden">
+          <div
+            className={`grid grid-cols-1 gap-3 sm:grid-cols-2 lg:hidden ${maxBodyHeight ? 'overflow-y-auto' : ''}`}
+            style={scrollStyle}
+          >
             {paginatedData.length === 0 ? <p className="rounded-xl border border-brand-line bg-black/20 p-4 text-center text-sm text-brand-muted sm:col-span-2">No hay datos</p> : null}
 
             {paginatedData.map((row, index) => {

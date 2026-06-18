@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { importsApi } from '../api/client'
 import ConfirmDialog from '../components/ConfirmDialog'
 import DashboardHeader from '../components/DashboardHeader'
+import DataTable from '../components/ui/DataTable'
 
 const extractApiErrorMessage = (apiError, fallbackMessage) => {
   const detail = apiError?.response?.data
@@ -185,7 +186,50 @@ export default function GymAdminImportPage() {
     return onlyErrors ? rows.filter((row) => row.status === 'error') : rows
   }, [validation, commitErrorRows, onlyErrors])
 
-  const fieldLabels = entity ? entity.fields.map((field) => field.label) : []
+  // Columnas del preview: reproducen las celdas del listado anterior, pero
+  // ahora servidas por DataTable (buscador + paginación + scroll interno).
+  const previewColumns = useMemo(() => {
+    const labels = entity ? entity.fields.map((field) => field.label) : []
+    return [
+      {
+        key: 'row',
+        label: 'Fila',
+        sortable: true,
+        render: (row) => <span className="text-brand-muted">{row.row}</span>,
+      },
+      {
+        key: 'status',
+        label: 'Resultado',
+        sortable: true,
+        render: (row) => <StatusBadge status={row.status} />,
+      },
+      ...labels.map((label) => ({
+        key: `field:${label}`,
+        label,
+        sortable: false,
+        mobile: 'secondary',
+        render: (row) => row.values?.[label] ?? '',
+      })),
+      {
+        key: 'detail',
+        label: 'Detalle',
+        sortable: false,
+        render: (row) =>
+          row.errors && row.errors.length > 0 ? (
+            <ul className="space-y-0.5 text-xs text-red-200">
+              {row.errors.map((rowError, index) => (
+                <li key={index}>
+                  {rowError.column ? `${rowError.column}: ` : ''}
+                  {rowError.message}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <span className="text-xs text-brand-muted">{row.note}</span>
+          ),
+      },
+    ]
+  }, [entity])
 
   return (
     <div className="space-y-6">
@@ -379,55 +423,13 @@ export default function GymAdminImportPage() {
             ) : null}
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[640px] text-left text-sm">
-              <thead>
-                <tr className="border-b border-brand-line text-xs uppercase tracking-wide text-brand-muted">
-                  <th className="py-2 pr-3">Fila</th>
-                  <th className="py-2 pr-3">Resultado</th>
-                  {fieldLabels.map((label) => (
-                    <th key={label} className="py-2 pr-3">{label}</th>
-                  ))}
-                  <th className="py-2">Detalle</th>
-                </tr>
-              </thead>
-              <tbody>
-                {previewRows.map((row) => (
-                  <tr
-                    key={row.row}
-                    className={`border-b border-brand-line/40 ${row.status === 'error' ? 'bg-brand-red/5' : ''}`}
-                  >
-                    <td className="py-2 pr-3 text-brand-muted">{row.row}</td>
-                    <td className="py-2 pr-3"><StatusBadge status={row.status} /></td>
-                    {fieldLabels.map((label) => (
-                      <td key={label} className="py-2 pr-3 text-brand-white">{row.values[label]}</td>
-                    ))}
-                    <td className="py-2 text-xs">
-                      {row.errors.length > 0 ? (
-                        <ul className="space-y-0.5 text-red-200">
-                          {row.errors.map((rowError, index) => (
-                            <li key={index}>
-                              {rowError.column ? `${rowError.column}: ` : ''}
-                              {rowError.message}
-                            </li>
-                          ))}
-                        </ul>
-                      ) : (
-                        <span className="text-brand-muted">{row.note}</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-                {previewRows.length === 0 ? (
-                  <tr>
-                    <td colSpan={fieldLabels.length + 3} className="py-4 text-center text-sm text-brand-muted">
-                      No hay filas para mostrar.
-                    </td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
-          </div>
+          <DataTable
+            columns={previewColumns}
+            data={previewRows}
+            rowIdKey="row"
+            defaultSort={{ key: 'row', direction: 'asc' }}
+            maxBodyHeight="28rem"
+          />
         </section>
       ) : null}
 
