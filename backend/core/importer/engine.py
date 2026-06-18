@@ -6,8 +6,14 @@ multitenancy); el archivo no puede aportarla ni cambiarla.
 
 Flujo validate → commit: ``validate`` no persiste nada y emite un token firmado
 (entidad + organización + sha256 del archivo). ``commit`` exige el mismo archivo
-más el token, re-valida TODO de cero y persiste dentro de ``transaction.atomic()``:
-cualquier error implica rollback total (sin datos fantasma).
+más el token y re-valida TODO de cero dentro de ``transaction.atomic()``.
+
+Import PARCIAL (best-effort): cada fila válida se persiste en su propio savepoint;
+las filas con error de validación se omiten, y una fila que falle al GUARDAR
+(full_clean / IntegrityError) también se omite y se reporta, sin tumbar al resto.
+Solo si NO se importa nada y hubo errores hay rollback total (400). Las
+violaciones de multitenancy se levantan como ``RuntimeError`` y abortan todo:
+nunca se omiten en silencio.
 """
 import datetime
 import hashlib
@@ -50,7 +56,9 @@ class ImportFileError(Exception):
 
 
 class ImportCommitError(Exception):
-    """El commit re-validó y encontró errores: rollback total."""
+    """El commit no pudo importar NADA (cero filas válidas, o todas fallaron al
+    guardar) y hubo errores: rollback total + 400. Un import parcial exitoso
+    (al menos una fila cargada) NO la levanta, aunque haya filas omitidas."""
 
     def __init__(self, report):
         self.report = report
@@ -564,8 +572,69 @@ def _model_validation_errors(spec, row_number, exc):
     return errors
 
 
+def _commit_row_errors(spec, row_number, exc):
+    """RowErrors para una fila que falló al GUARDAR (import parcial: se omite)."""
+    if isinstance(exc, DjangoValidationError):
+        return _model_validation_errors(spec, row_number, exc)
+    # IntegrityError u otro conflicto de BD (incluye guardas del spec, ej.
+    # doble membresía activa): mensaje genérico, no técnico.
+    return [RowError(
+        row=row_number, column='',
+        message='No se pudo guardar esta fila por un conflicto de datos. Revísala y vuelve a subirla.',
+    )]
+
+
+def _commit_create(spec, model, organization, kwargs, actor):
+    """Crea (sin omitir) una instancia. full_clean lanza DjangoValidationError."""
+    if spec.build_instance:
+        instance = spec.build_instance(kwargs, organization)
+        # Red de seguridad multitenant: un spec jamás puede crear instancias
+        # fuera de la organización del actor. Es un error de programación → aborta.
+        if _instance_org_id(instance, spec.org_field) != organization.pk:
+            raise RuntimeError(f'build_instance de "{spec.slug}" no asignó la organización del actor')
+    else:
+        instance = model(**{spec.org_field: organization}, **kwargs)
+    if actor is not None and hasattr(instance, 'created_by_id') and instance.created_by_id is None:
+        instance.created_by = actor
+    instance.full_clean()
+    instance.save()
+    return instance
+
+
+def _commit_update(spec, model, organization, kwargs, existing_keys_commit, row):
+    """Aplica el whitelist de upsert sobre el objeto existente. full_clean lanza."""
+    key = _natural_key_from_cleaned(spec, row.cleaned)
+    existing = model.objects.select_for_update().get(pk=existing_keys_commit[key])
+    # Red de seguridad multitenant: jamás actualizar fuera de la org del actor (aborta).
+    if _instance_org_id(existing, spec.org_field) != organization.pk:
+        raise RuntimeError(f'update de "{spec.slug}" cruzaría organización')
+    # Candidato en atomic: el spec corre aquí su guarda/lock (in_atomic_block).
+    candidate = _build_candidate(spec, organization, kwargs)
+    update_fields = []
+    for attr in _updatable_attrs(spec):
+        if not hasattr(candidate, attr):
+            continue
+        setattr(existing, attr, getattr(candidate, attr))
+        field_name = _field_name_for_attr(model, attr)
+        if field_name:
+            update_fields.append(field_name)
+    existing.full_clean()
+    if hasattr(existing, 'updated_at'):
+        update_fields.append('updated_at')
+    existing.save(update_fields=update_fields)
+    return existing
+
+
 def run_commit(spec, organization, uploaded_file, token, actor=None):
-    """Re-valida de cero y persiste atómicamente. Devuelve (report, created, updated)."""
+    """Re-valida de cero e importa las filas válidas. Devuelve (report, created, updated).
+
+    Import PARCIAL: cada fila válida (OK/UPDATED) se persiste en su propio
+    savepoint; las filas con error de validación se omiten, y una fila que falle
+    al guardar (full_clean / IntegrityError) también se omite y se reporta, sin
+    tumbar al resto. Si NO se importa nada (cero válidas o todas fallan), rollback
+    total y ImportCommitError (400 con los errores). Las violaciones de
+    multitenancy (RuntimeError) abortan todo: nunca se omiten en silencio.
+    """
     from django.apps import apps
 
     file_bytes = read_upload(uploaded_file)
@@ -576,8 +645,6 @@ def run_commit(spec, organization, uploaded_file, token, actor=None):
     try:
         with transaction.atomic():
             report = validate_rows(spec, organization, parsed)
-            if not report.can_commit:
-                raise ImportCommitError(report)
             # Mapa clave→pk para las filas a actualizar (mismo dict que usó validate).
             existing_keys_commit = _existing_keys(spec, organization) if spec.is_upsert else {}
             created = 0
@@ -585,64 +652,40 @@ def run_commit(spec, organization, uploaded_file, token, actor=None):
             created_instances = []
             for row in report.rows:
                 if row.status not in (STATUS_OK, STATUS_UPDATED):
-                    continue
+                    continue  # filas con error de validación: se omiten
                 # derive ya fue aplicado por validate_rows sobre row.cleaned.
                 kwargs = dict(row.cleaned)
                 if spec.org_field in kwargs:
                     raise RuntimeError(
                         f'El spec "{spec.slug}" intentó fijar {spec.org_field} (multitenancy regla #1)'
                     )
-
-                if row.status == STATUS_UPDATED:
-                    key = _natural_key_from_cleaned(spec, row.cleaned)
-                    existing = model.objects.select_for_update().get(pk=existing_keys_commit[key])
-                    # Red de seguridad multitenant: jamás actualizar fuera de la org del actor.
-                    if _instance_org_id(existing, spec.org_field) != organization.pk:
-                        raise RuntimeError(f'update de "{spec.slug}" cruzaría organización')
-                    # Candidato en atomic: el spec corre aquí su guarda/lock (in_atomic_block).
-                    candidate = _build_candidate(spec, organization, kwargs)
-                    update_fields = []
-                    for attr in _updatable_attrs(spec):
-                        if not hasattr(candidate, attr):
-                            continue
-                        setattr(existing, attr, getattr(candidate, attr))
-                        field_name = _field_name_for_attr(model, attr)
-                        if field_name:
-                            update_fields.append(field_name)
-                    try:
-                        existing.full_clean()
-                    except DjangoValidationError as exc:
-                        row.errors = _model_validation_errors(spec, row.row, exc)
-                        row.status = STATUS_ERROR
-                        raise ImportCommitError(report) from None
-                    if hasattr(existing, 'updated_at'):
-                        update_fields.append('updated_at')
-                    existing.save(update_fields=update_fields)
-                    updated += 1
-                    continue
-
-                if spec.build_instance:
-                    instance = spec.build_instance(kwargs, organization)
-                    # Red de seguridad multitenant: un spec jamás puede crear
-                    # instancias fuera de la organización del actor.
-                    if _instance_org_id(instance, spec.org_field) != organization.pk:
-                        raise RuntimeError(
-                            f'build_instance de "{spec.slug}" no asignó la organización del actor'
-                        )
-                else:
-                    instance = model(**{spec.org_field: organization}, **kwargs)
-                # Trazabilidad: si el modelo registra autor, dejar al actor real.
-                if actor is not None and hasattr(instance, 'created_by_id') and instance.created_by_id is None:
-                    instance.created_by = actor
+                is_update = row.status == STATUS_UPDATED
                 try:
-                    instance.full_clean()
-                except DjangoValidationError as exc:
-                    row.errors = _model_validation_errors(spec, row.row, exc)
+                    with transaction.atomic():  # savepoint por fila: aislar fallos
+                        if is_update:
+                            new_instance = None
+                            _commit_update(spec, model, organization, kwargs, existing_keys_commit, row)
+                        else:
+                            new_instance = _commit_create(spec, model, organization, kwargs, actor)
+                except (DjangoValidationError, IntegrityError) as exc:
+                    # Solo errores de datos/integridad omiten la fila (no tumban el
+                    # lote). Errores de infraestructura (deadlock, conexión) y las
+                    # violaciones de multitenancy (RuntimeError) NO se capturan aquí:
+                    # se propagan y abortan todo (rollback + 500), nunca se omiten.
+                    row.errors = _commit_row_errors(spec, row.row, exc)
                     row.status = STATUS_ERROR
-                    raise ImportCommitError(report) from None
-                instance.save()
-                created_instances.append(instance)
-                created += 1
+                    continue
+                # Solo se cuenta tras el commit exitoso del savepoint de la fila.
+                if is_update:
+                    updated += 1
+                else:
+                    created_instances.append(new_instance)
+                    created += 1
+            # Nada cargable Y había errores (cero válidas, o todas fallaron al
+            # guardar): 400 + rollback. Si no se importó nada pero tampoco hubo
+            # errores (todo duplicado / sin cambios), es un 201 idempotente válido.
+            if created == 0 and updated == 0 and report.error_count > 0:
+                raise ImportCommitError(report)
             # post_commit SOLO para creadas (las actualizaciones no lo disparan).
             if spec.post_commit and created_instances:
                 spec.post_commit(created_instances, organization, actor)

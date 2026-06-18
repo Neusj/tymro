@@ -302,10 +302,31 @@ def test_commit_creates_rows_and_is_idempotent(api_client, admin_a, org_a):
     assert Discipline.objects.filter(organization=org_a).count() == 2
 
 
-def test_commit_atomic_rollback_on_any_error(api_client, admin_a):
+def test_commit_partial_imports_valid_and_skips_errored(api_client, admin_a, org_a):
+    # Import parcial: las filas válidas se cargan; la fila con error se omite y
+    # se reporta. No es todo-o-nada.
     login(api_client, 'admin_a')
     rows = [['Yoga', '', 'Sí'], ['Pilates', '', 'Sí'], ['Boxeo', '', 'Sí'],
             ['Spinning', '', 'Sí'], ['', 'sin nombre', 'Sí']]
+    file_bytes = build_xlsx_bytes(rows)
+    token = validate_file(api_client, as_upload(file_bytes)).json()['token']
+    resp = commit_file(api_client, as_upload(file_bytes), token)
+    assert resp.status_code == 201, resp.content
+    body = resp.json()
+    assert body['created'] == 4
+    assert body['errors'] == 1
+    assert Discipline.objects.filter(organization=org_a).count() == 4
+    assert not Discipline.objects.filter(name='').exists()
+    # La fila omitida viaja en la respuesta para mostrarla en el preview post-commit.
+    error_rows = [r for r in body['rows'] if r['status'] == 'error']
+    assert len(error_rows) == 1
+    assert error_rows[0]['errors'][0]['column'] == 'Nombre'
+
+
+def test_commit_all_errors_returns_400_nothing_imported(api_client, admin_a):
+    # Si NO hay ninguna fila cargable, sigue siendo 400 con rollback total.
+    login(api_client, 'admin_a')
+    rows = [['', 'sin nombre', 'Sí'], ['', 'otra sin nombre', 'No']]
     file_bytes = build_xlsx_bytes(rows)
     token = validate_file(api_client, as_upload(file_bytes)).json()['token']
     resp = commit_file(api_client, as_upload(file_bytes), token)
@@ -1422,14 +1443,14 @@ def test_class_templates_teacher_overlap_against_db(api_client, admin_a, org_a, 
     assert 'se cruza con ese horario' in error['message']
 
 
-def test_class_templates_teacher_overlap_within_file_rolls_back(api_client, admin_a, org_a,
-                                                                schedule_setup):
+def test_class_templates_teacher_overlap_within_file_skips_only_conflicting(api_client, admin_a, org_a,
+                                                                            schedule_setup):
     from core.models import ClassTemplate
 
     login(api_client, 'admin_a')
     # Dos filas del MISMO archivo se cruzan para el mismo profesor: el validate
-    # no lo ve (no hay nada en BD), pero el commit lo atrapa con full_clean y
-    # hace rollback total.
+    # no lo ve (no hay nada en BD). En el commit, la primera se carga y la segunda
+    # falla full_clean: con import parcial se omite SOLO la segunda (no tumba la primera).
     rows = [
         ['Sede Centro', 'Lunes', '18:00', '19:00', '', 'coach@gym.cl', '', '', '', '2026-06-15', '', ''],
         ['Sede Centro', 'Lunes', '18:30', '19:30', '', 'coach@gym.cl', '', '', '', '2026-06-15', '', ''],
@@ -1443,11 +1464,12 @@ def test_class_templates_teacher_overlap_within_file_rolls_back(api_client, admi
     resp = api_client.post('/api/imports/class-templates/commit/',
                            {'file': as_upload(file_bytes), 'token': body['token']},
                            format='multipart')
-    assert resp.status_code == 400
-    assert 'No se importó ningún dato' in resp.json()['detail']
+    assert resp.status_code == 201, resp.content
+    assert resp.json()['created'] == 1
+    assert resp.json()['errors'] == 1
     error = resp.json()['rows'][0]['errors'][0]
     assert error['column'] == 'Email del profesor'
-    assert ClassTemplate.objects.count() == 0  # rollback total
+    assert ClassTemplate.objects.count() == 1  # solo la primera se cargó
 
 
 def test_class_templates_foreign_org_fks_not_found(api_client, admin_a, org_b, make_user,

@@ -163,6 +163,10 @@ class ImporterViewSet(viewsets.ViewSet):
             'updated': updated,
             'skipped_duplicates': report.duplicates_in_file + report.duplicates_in_db,
             'unchanged': report.unchanged,
+            # Import parcial: las filas con error se omiten y viajan aquí para
+            # mostrarlas tras el commit (el resto sí se importó).
+            'errors': report.error_count,
             'total_rows': report.total_rows,
             'summary': report.summary(),
+            'rows': report.rows_payload(only_errors=True),
         }, status=status.HTTP_201_CREATED)

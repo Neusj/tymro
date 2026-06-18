@@ -105,7 +105,8 @@ def build_template(spec, organization):
         'Las columnas con lista desplegable solo aceptan los valores de la hoja "Referencias".',
         'Cuando termines, guarda el archivo y súbelo en TYMRO: primero se valida y te '
         'mostraremos un resumen; nada se guarda hasta que confirmes.',
-        'Si alguna fila tiene errores no se importará NADA: corrige y vuelve a subir.',
+        'Las filas con errores se omiten: al confirmar se importan solo las filas válidas. '
+        'Corrige las omitidas y vuelve a subirlas.',
     )
     for text in general_steps + tuple(spec.instructions):
         info_sheet.cell(row=row, column=1, value=f'• {text}')

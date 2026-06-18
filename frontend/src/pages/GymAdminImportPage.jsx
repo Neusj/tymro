@@ -197,6 +197,11 @@ export default function GymAdminImportPage() {
     try {
       const data = await importsApi.commit(entity.slug, file, validation.token)
       setCommitResult(data)
+      // Import parcial: el commit puede traer las filas omitidas por error para
+      // que el usuario las vea (y las corrija) tras importar las válidas.
+      if (Array.isArray(data?.rows) && data.rows.length > 0) {
+        setCommitErrorRows(data.rows)
+      }
       setValidation(null)
       setFile(null)
       if (fileInputRef.current) {
@@ -399,6 +404,12 @@ export default function GymAdminImportPage() {
               : ''}
             .
           </p>
+          {commitResult.errors > 0 ? (
+            <p className="rounded-lg border border-amber-400/50 bg-amber-400/10 px-3 py-2 text-sm text-amber-200">
+              {commitResult.errors} fila(s) tenían errores y NO se importaron. Revísalas abajo,
+              corrígelas en tu archivo y vuelve a subirlas.
+            </p>
+          ) : null}
         </section>
       ) : null}
 
@@ -441,11 +452,19 @@ export default function GymAdminImportPage() {
             </div>
           ) : null}
 
-          {validation && !validation.can_commit ? (
-            <p className="rounded-lg border border-brand-red/50 bg-brand-red/10 px-3 py-2 text-sm text-red-200">
-              Hay filas con errores: corrígelas en tu archivo Excel y vuelve a validarlo.
-              No se importará nada hasta que todas las filas estén correctas.
-            </p>
+          {validation && validation.summary.errors > 0 ? (
+            validation.summary.will_create + validation.summary.updated > 0 ? (
+              <p className="rounded-lg border border-amber-400/50 bg-amber-400/10 px-3 py-2 text-sm text-amber-200">
+                {validation.summary.errors} fila(s) tienen errores y se omitirán. Al confirmar se
+                importarán solo las {validation.summary.will_create + validation.summary.updated} fila(s)
+                válidas; corrige las omitidas y vuelve a subirlas.
+              </p>
+            ) : (
+              <p className="rounded-lg border border-brand-red/50 bg-brand-red/10 px-3 py-2 text-sm text-red-200">
+                Todas las filas tienen errores: no hay nada que importar. Corrígelas en tu archivo
+                Excel y vuelve a validarlo.
+              </p>
+            )
           ) : null}
 
           <div className="flex items-center justify-between gap-3">
@@ -463,7 +482,6 @@ export default function GymAdminImportPage() {
                 type="button"
                 onClick={() => setConfirmOpen(true)}
                 disabled={
-                  !validation.can_commit ||
                   committing ||
                   validation.summary.will_create + validation.summary.updated === 0
                 }
@@ -487,7 +505,11 @@ export default function GymAdminImportPage() {
       <ConfirmDialog
         open={confirmOpen}
         title="Confirmar importación"
-        description={`Se crearán ${validation?.summary?.will_create || 0} y se actualizarán ${validation?.summary?.updated || 0} registros de ${entity?.label?.toLowerCase() || ''} en tu organización. Esta acción no se puede deshacer.`}
+        description={`Se crearán ${validation?.summary?.will_create || 0} y se actualizarán ${validation?.summary?.updated || 0} registros de ${entity?.label?.toLowerCase() || ''} en tu organización.${
+          validation?.summary?.errors > 0
+            ? ` Las ${validation.summary.errors} fila(s) con errores se omitirán.`
+            : ''
+        } Esta acción no se puede deshacer.`}
         confirmLabel="Importar"
         onCancel={() => setConfirmOpen(false)}
         onConfirm={runCommit}

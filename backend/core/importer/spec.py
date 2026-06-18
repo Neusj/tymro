@@ -153,6 +153,11 @@ class ImportReport:
 
     @property
     def can_commit(self):
+        """True si NINGUNA fila tiene errores de validación. OJO: con import
+        parcial NO es el gate de "se puede importar" — un archivo con errores
+        igual importa sus filas válidas. El gate real es ``valid + updated > 0``
+        (en el front: ``will_create + updated``). Esta señal indica "archivo
+        completamente limpio"."""
         return self.error_count == 0
 
     def summary(self):
