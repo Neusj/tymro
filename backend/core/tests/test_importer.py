@@ -407,6 +407,17 @@ def test_validate_rejects_too_many_physical_rows_even_if_empty(api_client, admin
     assert 'demasiadas filas' in resp.json()['detail']
 
 
+def test_display_value_formats_dates_as_dd_mm_yyyy():
+    import datetime
+
+    from core.importer.engine import _display_value
+    from core.importer.spec import FieldSpec
+
+    field = FieldSpec(attr='start_date', label='Fecha de inicio', kind='date')
+    assert _display_value(field, datetime.date(2026, 6, 1)) == '01-06-2026'
+    assert _display_value(field, None) == ''
+
+
 def test_coerce_email_kind_validates_format():
     from core.importer.engine import _coerce
     from core.importer.spec import FieldSpec
@@ -1076,8 +1087,10 @@ def test_memberships_preview_shows_derived_end_date(api_client, admin_a, members
                         headers=MEMBERSHIP_HEADERS)
     resp = api_client.post('/api/imports/memberships/validate/', {'file': upload}, format='multipart')
     body = resp.json()
-    # Fecha de término vacía: el preview muestra la fecha calculada (inicio + 29).
-    assert body['rows'][0]['values']['Fecha de término'] == '2026-06-30'
+    # El preview muestra las fechas en formato chileno dd-mm-yyyy (no ISO).
+    # Fecha de inicio escrita y Fecha de término calculada (inicio + 29).
+    assert body['rows'][0]['values']['Fecha de inicio'] == '01-06-2026'
+    assert body['rows'][0]['values']['Fecha de término'] == '30-06-2026'
 
 
 def test_memberships_duplicate_student_in_file_first_wins(api_client, admin_a, membership_setup):

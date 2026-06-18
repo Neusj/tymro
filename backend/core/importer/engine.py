@@ -249,6 +249,9 @@ def _coerce(field, raw):
 def _display_value(field, raw):
     if raw is None:
         return ''
+    if field.kind == 'date' and isinstance(raw, datetime.date):
+        # Preview en formato chileno dd-mm-yyyy (la entrada sigue siendo AAAA-MM-DD).
+        return raw.strftime('%d-%m-%Y')
     if field.kind == 'bool' and isinstance(raw, bool):
         return 'Sí' if raw else 'No'
     if field.kind == 'choice':
