@@ -1,4 +1,5 @@
-from datetime import timedelta
+import json
+from datetime import time, timedelta
 
 from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand
@@ -7,6 +8,7 @@ from django.utils import timezone
 from core.models import (
     Attendance,
     Branch,
+    ClassTemplate,
     ClassType,
     Discipline,
     Enrollment,
@@ -22,11 +24,20 @@ User = get_user_model()
 class Command(BaseCommand):
     help = 'Puebla datos demo para autenticación, multi-organización y el loop de asistencia.'
 
+    def add_arguments(self, parser):
+        parser.add_argument(
+            '--org',
+            dest='org_slug',
+            default='tymro-demo',
+            help='Slug de la organización primaria a poblar (default: tymro-demo).',
+        )
+
     def handle(self, *args, **options):
+        slug = options.get('org_slug') or 'tymro-demo'
         org, _ = Organization.objects.get_or_create(
-            slug='tymro-demo',
+            slug=slug,
             defaults={
-                'name': 'TYMRO Demo Gym',
+                'name': 'R2B Fight Club QA' if slug == 'r2b-qa' else 'TYMRO Demo Gym',
                 'country': 'Chile',
                 'city': 'Santiago',
                 'primary_color': '#dc2626',
@@ -113,8 +124,9 @@ class Command(BaseCommand):
                 branch=branch,
             )
 
-        self._seed_attendance_flow(org, branch_central, branch_norte, gym_admin, teachers, students)
+        fixtures = self._seed_attendance_flow(org, branch_central, branch_norte, gym_admin, teachers, students)
 
+        self._print_e2e_fixtures(org, gym_admin, fixtures)
         self.stdout.write(self.style.SUCCESS('Datos demo creados/actualizados correctamente.'))
 
     def _seed_attendance_flow(self, org, branch_central, branch_norte, gym_admin, teachers, students):
@@ -239,6 +251,215 @@ class Command(BaseCommand):
             'Flujo de asistencia poblado: 1 clase en curso marcable ahora, '
             '2 completadas con asistencias y 4 futuras.'
         )
+
+        return self._seed_e2e_fixtures(
+            org=org,
+            branch=branch_central,
+            teacher=teacher_central,
+            branch_alt=branch_norte,
+            teacher_alt=teacher_norte,
+            class_type=class_types['Grupal'],
+            discipline=disciplines['Funcional'],
+            discipline_alt=disciplines['Yoga'],
+            plan=plan,
+            students=students,
+            live_class=live_class,
+            now=now,
+            today=today,
+        )
+
+    def _seed_e2e_fixtures(self, *, org, branch, teacher, branch_alt, teacher_alt,
+                           class_type, discipline, discipline_alt, plan,
+                           students, live_class, now, today):
+        """Crea fixtures DETERMINISTAS para la suite E2E (Playwright): clases con
+        nombre único reservables/llenas/solapadas, una serie con plantilla para
+        recurrencia, alumnos en estados de rechazo y una organización foránea para
+        el test de aislamiento multitenancy. Devuelve un dict con ids/nombres que el
+        comando imprime como línea machine-readable (``TYMRO_E2E_FIXTURES=...``)."""
+        student2 = students['student2']
+
+        def future(days_ahead, hour, minute=0):
+            return (now + timedelta(days=days_ahead)).replace(
+                hour=hour, minute=minute, second=0, microsecond=0
+            )
+
+        # Clases reservables (capacidad amplia, sin inscripciones previas del alumno).
+        reservable_a = self._create_class(
+            org, branch, teacher, class_type, discipline,
+            name='E2E Reservable A', start=future(10, 7), duration_minutes=60,
+            status=GymClass.Status.SCHEDULED,
+        )
+        reservable_b = self._create_class(
+            org, branch, teacher, class_type, discipline,
+            name='E2E Reservable B', start=future(11, 7), duration_minutes=60,
+            status=GymClass.Status.SCHEDULED,
+        )
+
+        # Clase de OTRA disciplina y OTRO profesor/sucursal: da variedad para que
+        # los filtros (disciplina / profesor) discriminen de forma significativa.
+        yoga_class = self._create_class(
+            org, branch_alt, teacher_alt, class_type, discipline_alt,
+            name='E2E Yoga Norte', start=future(9, 18), duration_minutes=60,
+            status=GymClass.Status.SCHEDULED,
+        )
+
+        # Clase a tope de cupo (capacity=1, ya ocupada por otro alumno).
+        full_class = self._create_class(
+            org, branch, teacher, class_type, discipline,
+            name='E2E Cupo Lleno', start=future(12, 7), duration_minutes=60,
+            status=GymClass.Status.SCHEDULED,
+        )
+        full_class.capacity = 1
+        full_class.save(update_fields=['capacity', 'updated_at'])
+        self._enroll(full_class, [student2])
+
+        # Dos clases en el MISMO horario para forzar solape al reservar ambas.
+        overlap_start = future(13, 13)
+        overlap_1 = self._create_class(
+            org, branch, teacher, class_type, discipline,
+            name='E2E Solape 1', start=overlap_start, duration_minutes=60,
+            status=GymClass.Status.SCHEDULED,
+        )
+        overlap_2 = self._create_class(
+            org, branch, teacher, class_type, discipline,
+            name='E2E Solape 2', start=overlap_start, duration_minutes=60,
+            status=GymClass.Status.SCHEDULED,
+        )
+
+        # Serie con plantilla, para el flujo de recurrencia (inscribir/pausar/...).
+        # Limpiamos plantillas previas del org (cascada borra RecurringEnrollment),
+        # así re-suscribirse siempre funciona y no se acumula basura entre corridas.
+        ClassTemplate.objects.filter(organization=org).delete()
+        series_start = future(14, 8)
+        template = ClassTemplate.objects.create(
+            organization=org,
+            branch=branch,
+            teacher=teacher,
+            class_type=class_type,
+            discipline=discipline,
+            name='E2E Serie Semanal',
+            weekday=series_start.weekday(),
+            start_time=time(series_start.hour, 0),
+            end_time=time(series_start.hour + 1, 0),
+            capacity=20,
+            start_date=today,
+            is_active=True,
+        )
+        series_class = self._create_class(
+            org, branch, teacher, class_type, discipline,
+            name='E2E Serie Semanal', start=series_start, duration_minutes=60,
+            status=GymClass.Status.SCHEDULED,
+        )
+        series_class.class_template = template
+        series_class.save(update_fields=['class_template', 'updated_at'])
+
+        # Alumnos en estados de rechazo (mismo org). Password común: student123.
+        bad_students = self._seed_rejection_students(org, branch, plan, today)
+
+        # Organización FORÁNEA con una clase, para el test de aislamiento.
+        foreign = self._seed_foreign_org(org, now)
+
+        return {
+            'live_class_id': live_class.id,
+            'live_class_name': live_class.name,
+            'filters': {
+                'discipline_main': discipline.name,
+                'discipline_alt': discipline_alt.name,
+                'teacher_main': teacher.get_full_name() or teacher.username,
+                'teacher_alt': teacher_alt.get_full_name() or teacher_alt.username,
+            },
+            'reservable_a': {'id': reservable_a.id, 'name': reservable_a.name},
+            'reservable_b': {'id': reservable_b.id, 'name': reservable_b.name},
+            'yoga_class': {'id': yoga_class.id, 'name': yoga_class.name},
+            'full_class': {'id': full_class.id, 'name': full_class.name},
+            'overlap_1': {'id': overlap_1.id, 'name': overlap_1.name},
+            'overlap_2': {'id': overlap_2.id, 'name': overlap_2.name},
+            'series': {
+                'template_id': template.id,
+                'class_id': series_class.id,
+                'name': series_class.name,
+            },
+            'rejection_students': bad_students,
+            'foreign': foreign,
+        }
+
+    def _seed_rejection_students(self, org, branch, plan, today):
+        """Tres alumnos para los rechazos críticos. Idempotente: limpia sus planes."""
+        result = {}
+
+        no_plan = self._create_or_update_user(
+            username='e2e_noplan', password='student123', role=User.Role.STUDENT,
+            email='e2e_noplan@tymro.local', first_name='Sin', last_name='Plan',
+            organization=org, branch=branch,
+        )
+        StudentPlan.objects.filter(user=no_plan).delete()
+        result['no_plan'] = no_plan.username
+
+        no_balance = self._create_or_update_user(
+            username='e2e_nobalance', password='student123', role=User.Role.STUDENT,
+            email='e2e_nobalance@tymro.local', first_name='Sin', last_name='Saldo',
+            organization=org, branch=branch,
+        )
+        StudentPlan.objects.filter(user=no_balance).delete()
+        StudentPlan.objects.create(
+            user=no_balance, plan=plan,
+            start_date=today - timedelta(days=5), end_date=today + timedelta(days=25),
+            total_classes=5, classes_used=5, is_active=True,
+        )
+        result['no_balance'] = no_balance.username
+
+        unpaid = self._create_or_update_user(
+            username='e2e_unpaid', password='student123', role=User.Role.STUDENT,
+            email='e2e_unpaid@tymro.local', first_name='Matricula', last_name='Impaga',
+            organization=org, branch=branch,
+        )
+        StudentPlan.objects.filter(user=unpaid).delete()
+        StudentPlan.objects.create(
+            user=unpaid, plan=plan,
+            start_date=today - timedelta(days=5), end_date=today + timedelta(days=25),
+            total_classes=12, classes_used=0, is_active=True,
+            enrollment_fee=25000, enrollment_fee_paid_at=None,
+        )
+        result['unpaid'] = unpaid.username
+
+        return result
+
+    def _seed_foreign_org(self, primary_org, now):
+        """Org distinta + 1 clase, para verificar que un alumno de la org primaria
+        NO puede acceder a recursos ajenos (espera 404)."""
+        foreign_org, _ = Organization.objects.get_or_create(
+            slug=f'{primary_org.slug}-foreign',
+            defaults={'name': 'Org Foránea QA', 'country': 'Chile', 'city': 'Santiago'},
+        )
+        foreign_branch, _ = Branch.objects.get_or_create(
+            organization=foreign_org, name='Sucursal Foránea',
+            defaults={'code': 'FOR', 'address': 'Otra ciudad 1'},
+        )
+        GymClass.objects.filter(organization=foreign_org).delete()
+        foreign_class = GymClass.objects.create(
+            organization=foreign_org, branch=foreign_branch, name='E2E Foránea',
+            start_datetime=now + timedelta(days=10),
+            end_datetime=now + timedelta(days=10, hours=1),
+            capacity=20, status=GymClass.Status.SCHEDULED,
+        )
+        return {
+            'org_id': foreign_org.id,
+            'org_slug': foreign_org.slug,
+            'class_id': foreign_class.id,
+            'class_name': foreign_class.name,
+        }
+
+    def _print_e2e_fixtures(self, org, gym_admin, fixtures):
+        """Imprime una línea parseable que global-setup.js captura para los tests."""
+        payload = {
+            'org_slug': org.slug,
+            'org_id': org.id,
+            'attendance_screen_code': org.attendance_screen_code,
+            'gym_admin': {'username': gym_admin.username, 'password': 'gymadmin123'},
+            'student': {'username': 'student1', 'password': 'student123'},
+            **fixtures,
+        }
+        self.stdout.write('TYMRO_E2E_FIXTURES=' + json.dumps(payload, ensure_ascii=False))
 
     def _create_class(self, org, branch, teacher, class_type, discipline, *, name, start,
                       duration_minutes, status, is_trial_eligible=False, created_by=None):

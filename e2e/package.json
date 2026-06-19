@@ -1,0 +1,18 @@
+{
+  "name": "tymro-e2e",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Suite E2E (Playwright) del flujo de estudiante en TYMRO contra QA.",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "report": "playwright show-report reportes",
+    "seed": "node -e \"import('./global-setup.js').then(m=>m.runSeedOnly())\"",
+    "install:browsers": "playwright install chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.1",
+    "dotenv": "^16.4.7"
+  }
+}
