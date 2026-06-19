@@ -270,6 +270,19 @@ class PersonSerializer(serializers.ModelSerializer):
             'role',
             'is_active',
         ]
+        extra_kwargs = {
+            'organization': {'required': False},
+        }
+
+    def validate(self, attrs):
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        # Para no-superadmin la organización la fuerza el ViewSet (perform_create/
+        # update). Ignoramos cualquier 'organization' del payload para evitar
+        # escritura cross-tenant.
+        if user and user.is_authenticated and user.role != User.Role.SUPERADMIN:
+            attrs.pop('organization', None)
+        return attrs
 
 
 class ClassTypeSerializer(serializers.ModelSerializer):

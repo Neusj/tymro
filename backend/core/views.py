@@ -1448,6 +1448,7 @@ class UserViewSet(ModelViewSet):
 class PersonViewSet(ModelViewSet):
     queryset = Person.objects.select_related('organization', 'branch').all()
     serializer_class = PersonSerializer
+    permission_classes = [IsSuperAdminOrGymAdmin]
 
     def get_queryset(self):
         user = self.request.user
@@ -1456,6 +1457,28 @@ class PersonViewSet(ModelViewSet):
         if user.organization_id:
             return self.queryset.filter(organization_id=user.organization_id)
         return self.queryset.none()
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        if _is_superadmin(user):
+            serializer.save()
+        else:
+            serializer.save(organization=user.organization)
+
+    def perform_update(self, serializer):
+        user = self.request.user
+        if not _is_superadmin(user) and serializer.instance.organization_id != user.organization_id:
+            raise PermissionDenied('No puedes editar registros de otra organización.')
+        if _is_superadmin(user):
+            serializer.save()
+        else:
+            serializer.save(organization=user.organization)
+
+    def perform_destroy(self, instance):
+        user = self.request.user
+        if not _is_superadmin(user) and instance.organization_id != user.organization_id:
+            raise PermissionDenied('No puedes eliminar registros de otra organización.')
+        instance.delete()
 
 
 class ClassTypeViewSet(ModelViewSet):
