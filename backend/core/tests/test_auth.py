@@ -29,7 +29,7 @@ def user(make_user):
 # --- Login -----------------------------------------------------------------
 
 def test_login_success_returns_token_and_user_shape(api_client, user):
-    resp = api_client.post(LOGIN_URL, {'username': 'alice', 'password': PASSWORD}, format='json')
+    resp = api_client.post(LOGIN_URL, {'email': 'alice@example.com', 'password': PASSWORD}, format='json')
 
     assert resp.status_code == 200
     body = resp.json()
@@ -41,23 +41,23 @@ def test_login_success_returns_token_and_user_shape(api_client, user):
 
 
 def test_login_invalid_credentials_returns_400(api_client, user):
-    resp = api_client.post(LOGIN_URL, {'username': 'alice', 'password': 'wrong'}, format='json')
+    resp = api_client.post(LOGIN_URL, {'email': 'alice@example.com', 'password': 'wrong'}, format='json')
     assert resp.status_code == 400
 
 
 def test_login_missing_fields_returns_400(api_client):
-    resp = api_client.post(LOGIN_URL, {'username': '', 'password': ''}, format='json')
+    resp = api_client.post(LOGIN_URL, {'email': '', 'password': ''}, format='json')
     assert resp.status_code == 400
 
 
 # --- /me --------------------------------------------------------------------
 
 def test_me_with_fresh_token_returns_200(api_client, user):
-    token = api_client.post(LOGIN_URL, {'username': 'alice', 'password': PASSWORD}, format='json').json()['token']
+    token = api_client.post(LOGIN_URL, {'email': 'alice@example.com', 'password': PASSWORD}, format='json').json()['token']
     api_client.credentials(HTTP_AUTHORIZATION=f'Token {token}')
     resp = api_client.get(ME_URL)
     assert resp.status_code == 200
-    assert resp.json()['username'] == 'alice'
+    assert resp.json()['email'] == 'alice@example.com'
 
 
 def test_me_without_token_returns_401(api_client, user):
@@ -68,8 +68,8 @@ def test_me_without_token_returns_401(api_client, user):
 # --- Rotación y expiración --------------------------------------------------
 
 def test_relogin_rotates_token_and_invalidates_previous(api_client, user):
-    first = api_client.post(LOGIN_URL, {'username': 'alice', 'password': PASSWORD}, format='json').json()['token']
-    second = api_client.post(LOGIN_URL, {'username': 'alice', 'password': PASSWORD}, format='json').json()['token']
+    first = api_client.post(LOGIN_URL, {'email': 'alice@example.com', 'password': PASSWORD}, format='json').json()['token']
+    second = api_client.post(LOGIN_URL, {'email': 'alice@example.com', 'password': PASSWORD}, format='json').json()['token']
 
     assert first != second, 'el token debe rotar en cada login'
 
@@ -83,7 +83,7 @@ def test_relogin_rotates_token_and_invalidates_previous(api_client, user):
 
 
 def test_expired_token_is_rejected(api_client, user, settings):
-    token_key = api_client.post(LOGIN_URL, {'username': 'alice', 'password': PASSWORD}, format='json').json()['token']
+    token_key = api_client.post(LOGIN_URL, {'email': 'alice@example.com', 'password': PASSWORD}, format='json').json()['token']
 
     token = Token.objects.get(key=token_key)
     token.created = timezone.now() - timedelta(hours=settings.TOKEN_TTL_HOURS + 1)
@@ -94,7 +94,7 @@ def test_expired_token_is_rejected(api_client, user, settings):
 
 
 def test_token_within_ttl_still_valid(api_client, user, settings):
-    token_key = api_client.post(LOGIN_URL, {'username': 'alice', 'password': PASSWORD}, format='json').json()['token']
+    token_key = api_client.post(LOGIN_URL, {'email': 'alice@example.com', 'password': PASSWORD}, format='json').json()['token']
 
     token = Token.objects.get(key=token_key)
     token.created = timezone.now() - timedelta(hours=max(settings.TOKEN_TTL_HOURS - 1, 0))
@@ -130,7 +130,7 @@ def test_reset_confirm_sets_new_password(api_client, user):
     user.refresh_from_db()
     assert user.check_password('NuevaClave2026')
     # El login con la nueva clave funciona.
-    assert api_client.post(LOGIN_URL, {'username': 'alice', 'password': 'NuevaClave2026'}, format='json').status_code == 200
+    assert api_client.post(LOGIN_URL, {'email': 'alice@example.com', 'password': 'NuevaClave2026'}, format='json').status_code == 200
 
 
 def test_reset_confirm_rejects_weak_password(api_client, user):
@@ -185,7 +185,7 @@ def test_login_is_throttled_after_limit(api_client, user, settings):
     limit = int(rate.split('/')[0])
 
     codes = [
-        api_client.post(LOGIN_URL, {'username': 'alice', 'password': 'wrong'}, format='json').status_code
+        api_client.post(LOGIN_URL, {'email': 'alice@example.com', 'password': 'wrong'}, format='json').status_code
         for _ in range(limit + 1)
     ]
     assert codes[-1] == 429

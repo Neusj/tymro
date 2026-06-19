@@ -4,6 +4,7 @@ __pycache__/
 .pytest_cache/
 .env
 backend/db.sqlite3
+backend/e2e.sqlite3
 backend/media/
 backend/.venv/
 backend/staticfiles/

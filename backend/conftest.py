@@ -34,6 +34,7 @@ def make_organization(db):
         return Organization.objects.create(
             name=name or f'Org {idx}',
             slug=f'org-{idx}',
+            subdomain=f'org-{idx}',
         )
 
     return _make
@@ -45,6 +46,10 @@ def make_user(db):
         from django.contrib.auth import get_user_model
 
         User = get_user_model()
+        # Email por defecto derivado del username (único, ya que el username lo es):
+        # el login ahora es por email y el serializer lo exige. Los tests que quieran
+        # un email específico lo pasan en **extra.
+        extra.setdefault('email', f'{username}@test.local')
         return User.objects.create_user(
             username=username,
             password=password,

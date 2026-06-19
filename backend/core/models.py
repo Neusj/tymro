@@ -1,10 +1,31 @@
 ﻿from datetime import timedelta
 
 from django.core.exceptions import ValidationError
+from django.core.validators import RegexValidator
 from django.db import models
 from django.utils import timezone
+import re
 import secrets
 import string
+
+
+# Subdominios reservados para la plataforma: ninguna organización puede tomarlos
+# (el apex y estos labels resuelven a contexto plataforma / infra, no a una org).
+RESERVED_SUBDOMAINS = {
+    'admin', 'app', 'www', 'api', 'qa', 'static', 'media', 'localhost', 'mail',
+}
+
+validate_subdomain_format = RegexValidator(
+    regex=r'^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$',
+    message='El subdominio debe ser minúsculas, números y guiones (sin espacios ni mayúsculas).',
+)
+
+
+def validate_subdomain(value):
+    """Valida formato y que no sea un subdominio reservado."""
+    validate_subdomain_format(value)
+    if value in RESERVED_SUBDOMAINS:
+        raise ValidationError(f'"{value}" es un subdominio reservado y no puede usarse.')
 
 
 def generate_attendance_screen_code():
@@ -32,6 +53,16 @@ class TimestampedModel(models.Model):
 class Organization(TimestampedModel):
     name = models.CharField(max_length=150)
     slug = models.SlugField(unique=True)
+    # Subdominio de tenant: el host <subdomain>.<BASE_DOMAIN> resuelve a esta org
+    # (ver core.middleware.OrganizationMiddleware). Único; nullable a nivel de DB
+    # para migraciones seguras, pero requerido al crear vía API.
+    subdomain = models.CharField(
+        max_length=50,
+        unique=True,
+        null=True,
+        blank=True,
+        validators=[validate_subdomain],
+    )
     country = models.CharField(max_length=80, blank=True)
     city = models.CharField(max_length=80, blank=True)
     logo = models.ImageField(upload_to='organizations/logos/', blank=True, null=True)
@@ -59,6 +90,19 @@ class Organization(TimestampedModel):
 
     class Meta:
         ordering = ['name']
+
+    def save(self, *args, **kwargs):
+        # Red de seguridad: ninguna organización debe quedar sin subdominio (sería
+        # inalcanzable por el middleware). La API EXIGE subdomain al crear (serializer),
+        # pero ORM/admin/seed pueden omitirlo; aquí lo derivamos del slug, único.
+        if not self.subdomain and self.slug:
+            base = re.sub(r'[^a-z0-9-]+', '-', self.slug.lower()).strip('-')[:50] or 'org'
+            candidate, n = base, 2
+            while Organization.objects.exclude(pk=self.pk).filter(subdomain=candidate).exists():
+                candidate = f'{base}-{n}'[:50]
+                n += 1
+            self.subdomain = candidate
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return self.name

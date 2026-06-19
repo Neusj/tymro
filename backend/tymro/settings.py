@@ -81,7 +81,12 @@ if not SECRET_KEY:
         )
 ALLOWED_HOSTS = _env_list(
     'ALLOWED_HOSTS',
-    ['localhost', '127.0.0.1', 'backend', 'frontend', 'tymroapp.com', 'qa.tymroapp.com', '.trycloudflare.com'],
+    [
+        'localhost', '127.0.0.1', 'backend', 'frontend',
+        '.localhost',  # subdominios de tenant en dev (r2b-qa.localhost, gym-test.localhost, ...)
+        'tymroapp.com', 'qa.tymroapp.com', '.tymroapp.com',  # apex + subdominios de tenant en prod
+        '.trycloudflare.com',
+    ],
 )
 
 INSTALLED_APPS = [
@@ -110,7 +115,14 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    # Resuelve la organización (tenant) desde el subdominio del Host. Va al final:
+    # necesita acceso a DB y al host ya validado.
+    'core.middleware.OrganizationMiddleware',
 ]
+
+# Dominio base para resolver el subdominio de tenant. dev: 'localhost'
+# (los subdominios *.localhost resuelven a 127.0.0.1 en Chromium); prod: 'tymroapp.com'.
+BASE_DOMAIN = os.getenv('BASE_DOMAIN', 'localhost')
 
 ROOT_URLCONF = 'tymro.urls'
 
@@ -191,14 +203,19 @@ CORS_ALLOWED_ORIGINS = _env_list(
 )
 CORS_ALLOWED_ORIGIN_REGEXES = [
     r'^https://.*\.trycloudflare\.com$',
+    # Subdominios de tenant: dev (*.localhost:5173) y prod (*.tymroapp.com).
+    r'^http://[a-z0-9-]+\.localhost:5173$',
+    r'^https://[a-z0-9-]+\.tymroapp\.com$',
 ]
 CSRF_TRUSTED_ORIGINS = _env_list(
     'CSRF_TRUSTED_ORIGINS',
     [
         'http://localhost:5173',
         'http://127.0.0.1:5173',
+        'http://*.localhost:5173',
         'https://tymroapp.com',
         'https://qa.tymroapp.com',
+        'https://*.tymroapp.com',
         'https://*.trycloudflare.com',
     ],
 )
@@ -224,9 +241,10 @@ REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_RATES': {
         'anon': '60/min',
         'user': '1000/day',
-        'login': '5/min',
-        # Pedir reset envía un email -> acotado para anti-spam.
-        'password_reset': '3/hour',
+        # Override por env para que el E2E local no tope el límite con varios logins.
+        'login': os.getenv('THROTTLE_LOGIN', '5/min'),
+        # Pedir reset envía un email -> acotado para anti-spam (override por env en E2E).
+        'password_reset': os.getenv('THROTTLE_PASSWORD_RESET', '3/hour'),
         # Confirmar permite reintentos (el usuario puede equivocarse al tipear la clave).
         'password_reset_confirm': '10/hour',
         # Registro público: crea cuenta + envía email -> acotado contra bots/spam.

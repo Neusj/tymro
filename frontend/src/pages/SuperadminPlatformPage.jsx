@@ -15,7 +15,6 @@ import { platformRoles, roleLabels } from '../utils/roles'
 const PLATFORM_ROLE = platformRoles[0]
 
 const initialForm = {
-  username: '',
   first_name: '',
   last_name: '',
   email: '',
@@ -66,7 +65,6 @@ export default function SuperadminPlatformPage() {
   const openEdit = (admin) => {
     setEditing(admin)
     setForm({
-      username: admin.username || '',
       first_name: admin.first_name || '',
       last_name: admin.last_name || '',
       email: admin.email || '',
@@ -136,8 +134,8 @@ export default function SuperadminPlatformPage() {
           <div className="flex items-center gap-2">
             <Avatar src={row.profile_image} name={`${row.first_name} ${row.last_name}`} size="sm" />
             <div>
-              <p className="font-semibold">{`${row.first_name || ''} ${row.last_name || ''}`.trim() || row.username}</p>
-              <p className="text-xs text-brand-muted">{row.email || row.username}</p>
+              <p className="font-semibold">{`${row.first_name || ''} ${row.last_name || ''}`.trim() || row.email}</p>
+              <p className="text-xs text-brand-muted">{row.email}</p>
             </div>
           </div>
         ),
@@ -208,17 +206,9 @@ export default function SuperadminPlatformPage() {
             />
           </label>
           <label className="space-y-1 text-sm">
-            <span>Username</span>
-            <input
-              required
-              value={form.username}
-              onChange={(event) => setForm((prev) => ({ ...prev, username: event.target.value }))}
-              className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
-            />
-          </label>
-          <label className="space-y-1 text-sm">
             <span>Email</span>
             <input
+              required
               type="email"
               value={form.email}
               onChange={(event) => setForm((prev) => ({ ...prev, email: event.target.value }))}
@@ -263,7 +253,7 @@ export default function SuperadminPlatformPage() {
       <ConfirmDialog
         open={Boolean(deleting)}
         title={`Eliminar ${roleLabels[PLATFORM_ROLE].toLowerCase()}`}
-        description={`Se eliminará ${deleting?.username || 'este usuario'}.`}
+        description={`Se eliminará ${deleting?.email || `${deleting?.first_name || ''} ${deleting?.last_name || ''}`.trim() || 'este usuario'}.`}
         confirmLabel="Eliminar"
         onCancel={() => setDeleting(null)}
         onConfirm={removeAdmin}

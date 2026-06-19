@@ -22,8 +22,11 @@ CHECKIN_URL = '/api/attendance-qr/check-in/'
 
 
 def _login(api_client, username):
+    from django.contrib.auth import get_user_model
+    user = get_user_model().objects.get(username=username)
+    host = {'HTTP_HOST': f'{user.organization.subdomain}.localhost'} if user.organization_id else {}
     token = api_client.post(
-        '/api/login/', {'username': username, 'password': PASSWORD}, format='json'
+        '/api/login/', {'email': user.email, 'password': PASSWORD}, format='json', **host
     ).json()['token']
     api_client.credentials(HTTP_AUTHORIZATION=f'Token {token}')
 

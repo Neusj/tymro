@@ -83,6 +83,7 @@ def test_create_ignores_flags_and_org_is_born_enabled(api_client, make_user):
         {
             'name': 'Nueva Org',
             'slug': 'nueva-org',
+            'subdomain': 'nueva-org',
             # Intento explícito de nacer rota: debe ser ignorado.
             'is_active': False,
             'public_registration_enabled': False,

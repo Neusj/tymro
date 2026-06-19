@@ -73,6 +73,9 @@ def _student_can_modify_before_class(start_datetime, hours):
 class OrganizationSerializer(serializers.ModelSerializer):
     branches_count = serializers.IntegerField(source='branches.count', read_only=True)
     public_registration_url = serializers.SerializerMethodField()
+    # Subdominio de tenant. Validación (formato + reservados + unicidad) en
+    # validate_subdomain; obligatorio al crear (ver validate()).
+    subdomain = serializers.CharField(max_length=50, required=False, allow_null=True, allow_blank=True)
 
     class Meta:
         model = Organization
@@ -80,6 +83,7 @@ class OrganizationSerializer(serializers.ModelSerializer):
             'id',
             'name',
             'slug',
+            'subdomain',
             'country',
             'city',
             'logo',
@@ -98,6 +102,28 @@ class OrganizationSerializer(serializers.ModelSerializer):
             'attendance_screen_session_code',
             'attendance_screen_session_expires_at',
         ]
+
+    def validate_subdomain(self, value):
+        if value in (None, ''):
+            return None
+        normalized = value.strip().lower()
+        from .models import validate_subdomain as _validate_subdomain
+        try:
+            _validate_subdomain(normalized)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(list(exc.messages))
+        duplicated = Organization.objects.filter(subdomain=normalized)
+        if self.instance:
+            duplicated = duplicated.exclude(pk=self.instance.pk)
+        if duplicated.exists():
+            raise serializers.ValidationError('Ese subdominio ya está en uso.')
+        return normalized
+
+    def validate(self, attrs):
+        # El subdominio es obligatorio al crear (es la clave de acceso de la org).
+        if self.instance is None and not attrs.get('subdomain'):
+            raise serializers.ValidationError({'subdomain': 'El subdominio es obligatorio.'})
+        return attrs
 
     def get_fields(self):
         fields = super().get_fields()
@@ -177,12 +203,14 @@ class CustomUserSerializer(serializers.ModelSerializer):
     organization_detail = OrganizationSerializer(source='organization', read_only=True)
     branch_detail = BranchSerializer(source='branch', read_only=True)
     password = serializers.CharField(write_only=True, required=False, min_length=6)
+    # Email es la clave de login (único por org). 'username' ya NO se expone: es un
+    # identificador interno auto-generado (ver CustomUser.save()).
+    email = serializers.EmailField(required=True)
 
     class Meta:
         model = User
         fields = [
             'id',
-            'username',
             'first_name',
             'last_name',
             'email',
@@ -228,6 +256,26 @@ class CustomUserSerializer(serializers.ModelSerializer):
 
         if branch and organization and branch.organization_id != organization.id:
             raise serializers.ValidationError({'branch': 'La sucursal no pertenece a la organización seleccionada.'})
+
+        # Email único POR organización (case-insensitive). Mensaje 400 limpio en vez
+        # de un IntegrityError 500 de la constraint de DB. La org ya quedó finalizada
+        # arriba (None para roles de plataforma, la del actor/payload para org-roles).
+        email = attrs.get('email', getattr(self.instance, 'email', None))
+        if email:
+            target_org = attrs.get('organization', getattr(self.instance, 'organization', None))
+            duplicated = User.objects.filter(email__iexact=email)
+            duplicated = (
+                duplicated.filter(organization=target_org)
+                if target_org is not None
+                else duplicated.filter(organization__isnull=True)
+            )
+            if self.instance:
+                duplicated = duplicated.exclude(pk=self.instance.pk)
+            if duplicated.exists():
+                scope = 'esta organización' if target_org is not None else 'la plataforma'
+                raise serializers.ValidationError(
+                    {'email': f'Ya existe un usuario con ese email en {scope}.'}
+                )
 
         return attrs
 
@@ -1491,8 +1539,17 @@ class PublicRegistrationSerializer(serializers.Serializer):
     phone = serializers.CharField(max_length=40, required=False, allow_blank=True)
 
     def validate_email(self, value):
+        # Email único POR organización: la org viene del contexto (el slug de la
+        # invitación, fijado server-side en PublicRegisterView).
         normalized = value.strip().lower()
-        if User.objects.filter(email__iexact=normalized).exists() or User.objects.filter(username__iexact=normalized).exists():
+        organization = self.context.get('organization')
+        duplicated = User.objects.filter(email__iexact=normalized)
+        duplicated = (
+            duplicated.filter(organization=organization)
+            if organization is not None
+            else duplicated.filter(organization__isnull=True)
+        )
+        if duplicated.exists():
             raise serializers.ValidationError('Ya existe una cuenta con ese email.')
         return normalized
 

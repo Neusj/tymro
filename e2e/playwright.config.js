@@ -3,17 +3,23 @@ import dotenv from 'dotenv'
 
 dotenv.config()
 
-const baseURL = process.env.QA_BASE_URL || 'https://qa.tymroapp.com'
+// Puerto del Vite local. Los proyectos por org usan subdominios *.localhost
+// (Chromium los resuelve a 127.0.0.1). Los specs de API conectan a 127.0.0.1:8000
+// y mandan X-Forwarded-Host (ver tests/multiorg/_helpers.js).
+const PORT = process.env.QA_WEB_PORT || '5173'
+const sub = (s) => `http://${s}.localhost:${PORT}`
 
 export default defineConfig({
-  testDir: './tests',
-  globalSetup: './global-setup.js',
+  testDir: './tests/multiorg',
+  globalSetup: './global-setup.multiorg.js',
 
-  // Estado compartido (saldo del mismo alumno) → SERIAL obligatorio.
+  // Estado compartido en la BD (creación de usuarios/orgs) → SERIAL.
   fullyParallel: false,
   workers: 1,
   forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 1 : 0,
+  // 1 reintento local para absorber flakes transitorios de infra (p.ej. un connect
+  // ETIMEDOUT puntual al runserver compartiendo puerto con el proxy de Docker).
+  retries: process.env.CI ? 2 : 1,
 
   timeout: 60_000,
   expect: { timeout: 15_000 },
@@ -24,7 +30,6 @@ export default defineConfig({
   ],
 
   use: {
-    baseURL,
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
     video: 'retain-on-failure',
@@ -36,28 +41,23 @@ export default defineConfig({
   },
 
   projects: [
-    // Setups de alumno (00) y profesor (00b): login válido UNA vez y guardan sesión.
-    // (El backend ROTA el token en cada login, así que cada rol se loguea una vez.)
-    { name: 'setup', testMatch: /(00-auth|00b-teacher-auth)\.setup\.js/ },
+    // superadmin (apex): specs de API (10-16) + UI de superadmin (20).
     {
-      name: 'chromium',
-      testIgnore: [/auth\.setup\.js/, /gym-admin/],
-      use: { ...devices['Desktop Chrome'], storageState: 'storageState.student.json' },
-      dependencies: ['setup'],
+      name: 'superadmin',
+      testMatch: /(1[0-6]|20)-.*\.spec\.js$/,
+      use: { ...devices['Desktop Chrome'], baseURL: `http://localhost:${PORT}` },
     },
-
-    // Suite gym_admin (org e2e-gym): aislada, su propio setup y storageState.
-    // Correr con:  npx playwright test --project=gym-admin
-    { name: 'setup-gym', testMatch: /20-gym-admin-auth\.setup\.js/ },
+    // gym-test (subdominio): UI del email compartido como profesor (30).
     {
-      name: 'gym-admin',
-      testMatch: /gym-admin.*\.spec\.js/,
-      use: {
-        ...devices['Desktop Chrome'],
-        storageState: 'storageState.gym.json',
-        screenshot: 'on', // capturar pantalla de cada flujo para el reporte
-      },
-      dependencies: ['setup-gym'],
+      name: 'gym-test',
+      testMatch: /30-.*\.spec\.js$/,
+      use: { ...devices['Desktop Chrome'], baseURL: sub('gym-test') },
+    },
+    // e2e-gym (subdominio): UI del gym_admin de esa org (40).
+    {
+      name: 'e2e-gym',
+      testMatch: /40-.*\.spec\.js$/,
+      use: { ...devices['Desktop Chrome'], baseURL: sub('e2e-gym') },
     },
   ],
 })

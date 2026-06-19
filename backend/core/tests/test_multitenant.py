@@ -55,9 +55,12 @@ def test_gym_admin_cannot_access_other_organization_data(api_client, make_organi
     a = _build_org(make_organization, make_user, 'A')
     b = _build_org(make_organization, make_user, 'B')
 
-    # Autenticamos como admin de la Organización A.
+    # Autenticamos como admin de la Organización A (login por email en su subdominio).
+    from django.contrib.auth import get_user_model
+    admin_a = get_user_model().objects.get(username='admin_A')
     token = api_client.post(
-        '/api/login/', {'username': 'admin_A', 'password': PASSWORD}, format='json'
+        '/api/login/', {'email': admin_a.email, 'password': PASSWORD}, format='json',
+        HTTP_HOST=f'{admin_a.organization.subdomain}.localhost',
     ).json()['token']
     api_client.credentials(HTTP_AUTHORIZATION=f'Token {token}')
 

@@ -11,7 +11,10 @@ URL = '/api/people/'
 
 
 def _login(c, u):
-    t = c.post('/api/login/', {'username': u, 'password': PASSWORD}, format='json').json()['token']
+    from django.contrib.auth import get_user_model
+    user = get_user_model().objects.get(username=u)
+    host = {'HTTP_HOST': f'{user.organization.subdomain}.localhost'} if user.organization_id else {}
+    t = c.post('/api/login/', {'email': user.email, 'password': PASSWORD}, format='json', **host).json()['token']
     c.credentials(HTTP_AUTHORIZATION=f'Token {t}')
 
 

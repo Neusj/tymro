@@ -1,5 +1,9 @@
-﻿from django.contrib.auth.models import AbstractUser
+import uuid
+
+from django.contrib.auth.models import AbstractUser
 from django.db import models
+from django.db.models import Q, UniqueConstraint
+from django.db.models.functions import Lower
 
 
 class CustomUser(AbstractUser):
@@ -32,5 +36,32 @@ class CustomUser(AbstractUser):
     email_verified = models.BooleanField(default=False)
     has_used_trial = models.BooleanField(default=False)
 
+    class Meta:
+        constraints = [
+            # Email único POR organización (case-insensitive). Permite el mismo email
+            # en ORG A y ORG B; lo rechaza dentro de la misma org.
+            UniqueConstraint(
+                Lower('email'),
+                'organization',
+                condition=Q(organization__isnull=False) & ~Q(email=''),
+                name='uniq_email_per_org',
+            ),
+            # Usuarios de plataforma (superadmin, organization NULL): email único GLOBAL
+            # entre ellos. unique_together no validaría con org NULL, por eso va aparte.
+            UniqueConstraint(
+                Lower('email'),
+                condition=Q(organization__isnull=True) & ~Q(email=''),
+                name='uniq_email_platform',
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        # `username` sigue siendo el USERNAME_FIELD de Django (único global), pero
+        # ya no se pide: se auto-genera opaco. uuid4().hex pasa el validador de
+        # username de Django (a diferencia de '{org}:{email}', que tiene ':' inválido).
+        if not self.username:
+            self.username = uuid.uuid4().hex
+        super().save(*args, **kwargs)
+
     def __str__(self):
-        return self.username
+        return self.get_full_name() or self.email or self.username

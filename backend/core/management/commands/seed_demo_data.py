@@ -27,6 +27,20 @@ User = get_user_model()
 # NO reasignar usuarios existentes de un org canónico.
 CANONICAL_SLUGS = {'tymro-demo', 'r2b-qa'}
 
+# Orgs que poblamos con --org=all (cada una con su subdominio de tenant).
+ALL_SLUGS = ['r2b-qa', 'gym-test', 'e2e-gym']
+
+# name + subdomain por slug (el subdominio mapea <subdomain>.<BASE_DOMAIN> -> org).
+ORG_DEFAULTS = {
+    'r2b-qa': {'name': 'R2B Fight Club QA', 'subdomain': 'r2b-qa'},
+    'gym-test': {'name': 'Gym Test QA', 'subdomain': 'gym-test'},
+    'e2e-gym': {'name': 'E2E Gym', 'subdomain': 'e2e-gym'},
+}
+
+# Email compartido a propósito entre dos orgs (caso clave del rediseño): mismo
+# email, distinta org y distinto rol. Login se desambigua por subdominio.
+SHARED_EMAIL = 'juan@demo.local'
+
 
 class Command(BaseCommand):
     help = 'Puebla datos demo para autenticación, multi-organización y el loop de asistencia.'
@@ -36,7 +50,7 @@ class Command(BaseCommand):
             '--org',
             dest='org_slug',
             default='tymro-demo',
-            help='Slug de la organización primaria a poblar (default: tymro-demo).',
+            help="Slug de la organización a poblar, o 'all' para r2b-qa + gym-test + e2e-gym.",
         )
 
     def _u(self, base):
@@ -44,18 +58,67 @@ class Command(BaseCommand):
         return f'{base}{self.user_suffix}'
 
     def handle(self, *args, **options):
-        slug = options.get('org_slug') or 'tymro-demo'
+        requested = options.get('org_slug') or 'tymro-demo'
+        slugs = ALL_SLUGS if requested == 'all' else [requested]
+
+        # Superadmin de plataforma: único, sin organización. Una sola vez.
+        self.user_suffix = ''
+        superadmin = self._create_or_update_user(
+            username='superadmin',
+            password='superadmin123',
+            role=User.Role.SUPERADMIN,
+            email='superadmin@tymro.local',
+            first_name='Super',
+            last_name='Admin',
+            is_staff=True,
+            is_superuser=True,
+            organization=None,
+            branch=None,
+        )
+
+        orgs_summary = {}
+        primary = None
+        for slug in slugs:
+            org, gym_admin, fixtures = self._seed_org(slug)
+            orgs_summary[slug] = {
+                'org_id': org.id,
+                'subdomain': org.subdomain,
+                'student_email': 'student1@tymro.local',
+                'gym_admin_email': 'gymadmin@tymro.local',
+                'teacher_email': 'teacher1@tymro.local',
+            }
+            if primary is None:
+                primary = (org, gym_admin, fixtures)
+
+        shared = self._seed_shared_email(slugs)
+
+        primary_org, primary_gym_admin, primary_fixtures = primary
+        self._print_e2e_fixtures(
+            primary_org, primary_gym_admin, primary_fixtures,
+            orgs_summary=orgs_summary, superadmin_email=superadmin.email, shared=shared,
+        )
+        self.stdout.write(self.style.SUCCESS('Datos demo creados/actualizados correctamente.'))
+
+    def _seed_org(self, slug):
+        """Puebla UNA organización (org + sucursales + usuarios + flujo demo).
+        Devuelve (org, gym_admin, fixtures)."""
         self.user_suffix = '' if slug in CANONICAL_SLUGS else '_' + ''.join(c for c in slug if c.isalnum())
+        defaults = ORG_DEFAULTS.get(slug, {'name': 'TYMRO Demo Gym', 'subdomain': slug})
         org, _ = Organization.objects.get_or_create(
             slug=slug,
             defaults={
-                'name': 'R2B Fight Club QA' if slug == 'r2b-qa' else 'TYMRO Demo Gym',
+                'name': defaults['name'],
                 'country': 'Chile',
                 'city': 'Santiago',
                 'primary_color': '#dc2626',
                 'secondary_color': '#2563eb',
             },
         )
+        # Subdominio de tenant (idempotente): <subdomain>.<BASE_DOMAIN> -> esta org.
+        subdomain = defaults.get('subdomain', slug)
+        if org.subdomain != subdomain:
+            org.subdomain = subdomain
+            org.save(update_fields=['subdomain'])
 
         branch_central, _ = Branch.objects.get_or_create(
             organization=org,
@@ -77,19 +140,6 @@ class Command(BaseCommand):
                 'primary_color': '#2563eb',
                 'secondary_color': '#f97316',
             },
-        )
-
-        self._create_or_update_user(
-            username='superadmin',
-            password='superadmin123',
-            role=User.Role.SUPERADMIN,
-            email='superadmin@tymro.local',
-            first_name='Super',
-            last_name='Admin',
-            is_staff=True,
-            is_superuser=True,
-            organization=None,
-            branch=None,
         )
 
         gym_admin = self._create_or_update_user(
@@ -137,9 +187,29 @@ class Command(BaseCommand):
             )
 
         fixtures = self._seed_attendance_flow(org, branch_central, branch_norte, gym_admin, teachers, students)
+        return org, gym_admin, fixtures
 
-        self._print_e2e_fixtures(org, gym_admin, fixtures)
-        self.stdout.write(self.style.SUCCESS('Datos demo creados/actualizados correctamente.'))
+    def _seed_shared_email(self, slugs):
+        """Crea el MISMO email (SHARED_EMAIL) en r2b-qa (alumno) y gym-test (profesor):
+        distinta org, distinto rol. Demuestra que el email se repite entre orgs."""
+        result = {}
+        if 'r2b-qa' in slugs:
+            org = Organization.objects.get(slug='r2b-qa')
+            self._create_or_update_user(
+                username='juan_shared_r2b', password='student123', role=User.Role.STUDENT,
+                email=SHARED_EMAIL, first_name='Juan', last_name='Compartido',
+                organization=org, branch=Branch.objects.filter(organization=org).first(),
+            )
+            result['r2b-qa'] = {'email': SHARED_EMAIL, 'role': 'student', 'password': 'student123'}
+        if 'gym-test' in slugs:
+            org = Organization.objects.get(slug='gym-test')
+            self._create_or_update_user(
+                username='juan_shared_gymtest', password='teacher123', role=User.Role.TEACHER,
+                email=SHARED_EMAIL, first_name='Juan', last_name='Compartido',
+                organization=org, branch=Branch.objects.filter(organization=org).first(),
+            )
+            result['gym-test'] = {'email': SHARED_EMAIL, 'role': 'teacher', 'password': 'teacher123'}
+        return result
 
     def _seed_attendance_flow(self, org, branch_central, branch_norte, gym_admin, teachers, students):
         """Puebla disciplinas, tipos, planes, clases (incluida una marcable AHORA),
@@ -594,14 +664,31 @@ class Command(BaseCommand):
             'reserva': {'teacher': t_res.username, 'expected': 9000},
         }
 
-    def _print_e2e_fixtures(self, org, gym_admin, fixtures):
-        """Imprime una línea parseable que global-setup.js captura para los tests."""
+    def _print_e2e_fixtures(self, org, gym_admin, fixtures, *, orgs_summary=None,
+                            superadmin_email=None, shared=None):
+        """Imprime una línea parseable que global-setup.js captura para los tests.
+
+        Incluye las claves legacy (org primaria) + las claves multi-org nuevas
+        (orgs/subdominios, superadmin, email compartido). El login es por EMAIL."""
+        primary_suffix = '' if org.slug in CANONICAL_SLUGS else '_' + ''.join(c for c in org.slug if c.isalnum())
         payload = {
             'org_slug': org.slug,
             'org_id': org.id,
+            'subdomain': org.subdomain,
             'attendance_screen_code': org.attendance_screen_code,
-            'gym_admin': {'username': gym_admin.username, 'password': 'gymadmin123'},
-            'student': {'username': self._u('student1'), 'password': 'student123'},
+            'gym_admin': {
+                'username': gym_admin.username,
+                'email': 'gymadmin@tymro.local',
+                'password': 'gymadmin123',
+            },
+            'student': {
+                'username': f'student1{primary_suffix}',
+                'email': 'student1@tymro.local',
+                'password': 'student123',
+            },
+            'orgs': orgs_summary or {},
+            'superadmin': {'email': superadmin_email, 'password': 'superadmin123'},
+            'shared': shared or {},
             **fixtures,
         }
         self.stdout.write('TYMRO_E2E_FIXTURES=' + json.dumps(payload, ensure_ascii=False))

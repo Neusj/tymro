@@ -52,7 +52,10 @@ def build_xlsx(rows, headers=None, sheet_name='Datos', filename='disciplinas.xls
 
 
 def login(api_client, username):
-    resp = api_client.post(LOGIN_URL, {'username': username, 'password': PASSWORD}, format='json')
+    from django.contrib.auth import get_user_model
+    user = get_user_model().objects.get(username=username)
+    host = {'HTTP_HOST': f'{user.organization.subdomain}.localhost'} if user.organization_id else {}
+    resp = api_client.post(LOGIN_URL, {'email': user.email, 'password': PASSWORD}, format='json', **host)
     assert resp.status_code == 200, resp.content
     api_client.credentials(HTTP_AUTHORIZATION=f"Token {resp.json()['token']}")
 

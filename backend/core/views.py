@@ -463,14 +463,27 @@ class LoginView(APIView):
     throttle_scope = 'login'
 
     def post(self, request):
-        username = request.data.get('username', '').strip()
+        # Email es la clave de login. 'identifier' es un alias del payload (mismo valor,
+        # un email). NO se acepta login por username: el username es interno y opaco.
+        identifier = (request.data.get('email') or request.data.get('identifier') or '').strip()
         password = request.data.get('password', '')
 
-        if not username or not password:
-            return Response({'detail': 'username y password son requeridos.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not identifier or not password:
+            return Response({'detail': 'email y password son requeridos.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        user = authenticate(request, username=username, password=password)
-        if not user:
+        # La organización viene del subdominio (OrganizationMiddleware). El login está
+        # ESTRICTAMENTE acotado a ese contexto: en un subdominio sólo entran usuarios de
+        # esa org; en el apex SÓLO cuentas de plataforma (organization NULL = superadmin).
+        # Sin fallbacks cross-org (evita escalada de tenant→plataforma y org→org).
+        organization = getattr(request, 'organization', None)
+        candidates = User.objects.filter(email__iexact=identifier, is_active=True)
+        if organization is not None:
+            candidates = candidates.filter(organization=organization)
+        else:
+            candidates = candidates.filter(organization__isnull=True)
+
+        user = candidates.first()
+        if user is None or not user.check_password(password):
             return Response({'detail': 'Credenciales inválidas.'}, status=status.HTTP_400_BAD_REQUEST)
 
         # Rotación: descartar cualquier token previo y emitir uno nuevo (created fresco).
@@ -519,8 +532,16 @@ class PasswordResetRequestView(APIView):
         serializer.is_valid(raise_exception=True)
         email = serializer.validated_data['email']
 
+        # Email único POR organización: el reset se acota a la org del subdominio
+        # (o a cuentas de plataforma en el apex) para no quedar ambiguo entre orgs.
         User = get_user_model()
-        user = User.objects.filter(email__iexact=email, is_active=True).first()
+        organization = getattr(request, 'organization', None)
+        candidates = User.objects.filter(email__iexact=email, is_active=True)
+        if organization is not None:
+            candidates = candidates.filter(organization=organization)
+        else:
+            candidates = candidates.filter(organization__isnull=True)
+        user = candidates.first()
         if user:
             uid = urlsafe_base64_encode(force_bytes(user.pk))
             token = default_token_generator.make_token(user)
@@ -632,12 +653,15 @@ class PublicRegisterView(APIView):
         if organization is None:
             return Response({'detail': 'Link inválido o desactivado.'}, status=status.HTTP_404_NOT_FOUND)
 
-        serializer = PublicRegistrationSerializer(data=request.data)
+        serializer = PublicRegistrationSerializer(
+            data=request.data, context={'organization': organization}
+        )
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
 
+        # username se auto-genera en CustomUser.save() (ya no es el email; el email
+        # es único por org pero el username es global, así que no puede ser el email).
         user = User(
-            username=data['email'],
             email=data['email'],
             first_name=data['first_name'],
             last_name=data.get('last_name', ''),

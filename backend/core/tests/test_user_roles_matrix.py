@@ -67,8 +67,8 @@ def _auth_as(api_client, make_user, org, role):
 @pytest.mark.parametrize('target_role', ALL_ROLES)
 def test_create_matrix(api_client, make_user, org, actor_role, target_role):
     _auth_as(api_client, make_user, org, actor_role)
-    username = f'new_{actor_role}_{target_role}'
-    payload = {'username': username, 'role': target_role, 'password': 'Passw0rd2026'}
+    email = f'new_{actor_role}_{target_role}@test.local'
+    payload = {'email': email, 'role': target_role, 'password': 'Passw0rd2026'}
     if target_role != 'superadmin':
         payload['organization'] = org.id
 
@@ -76,11 +76,11 @@ def test_create_matrix(api_client, make_user, org, actor_role, target_role):
 
     if target_role in ASSIGNABLE[actor_role]:
         assert response.status_code == 201, response.data
-        created = User.objects.get(username=username)
+        created = User.objects.get(email__iexact=email)
         assert created.role == target_role
     else:
         assert response.status_code in DENIED_STATUSES, response.data
-        assert not User.objects.filter(username=username).exists()
+        assert not User.objects.filter(email__iexact=email).exists()
 
 
 # ---------------------------------------------------------------------------
@@ -90,12 +90,12 @@ def test_create_matrix(api_client, make_user, org, actor_role, target_role):
 @pytest.mark.parametrize('actor_role', ['gym_admin', 'manager', 'monitor', 'teacher', 'student'])
 def test_org_roles_cannot_create_superadmin_even_in_payload(api_client, make_user, org, actor_role):
     _auth_as(api_client, make_user, org, actor_role)
-    payload = {'username': 'sneaky_admin', 'role': 'superadmin', 'password': 'Passw0rd2026'}
+    payload = {'email': 'sneaky_admin@test.local', 'role': 'superadmin', 'password': 'Passw0rd2026'}
 
     response = api_client.post('/api/users/', payload, format='json')
 
     assert response.status_code in DENIED_STATUSES
-    assert not User.objects.filter(username='sneaky_admin').exists()
+    assert not User.objects.filter(email__iexact='sneaky_admin@test.local').exists()
     assert not User.objects.filter(is_staff=True).exists()
 
 
@@ -106,7 +106,7 @@ def test_org_roles_cannot_create_superadmin_even_in_payload(api_client, make_use
 def test_superadmin_creates_superadmin_with_staff_flags_and_no_org(api_client, make_user, org):
     _auth_as(api_client, make_user, org, 'superadmin')
     payload = {
-        'username': 'new_platform_admin',
+        'email': 'new_platform_admin@test.local',
         'role': 'superadmin',
         'password': 'Passw0rd2026',
         'organization': org.id,  # debe ser ignorada/forzada a None
@@ -115,7 +115,7 @@ def test_superadmin_creates_superadmin_with_staff_flags_and_no_org(api_client, m
     response = api_client.post('/api/users/', payload, format='json')
 
     assert response.status_code == 201, response.data
-    created = User.objects.get(username='new_platform_admin')
+    created = User.objects.get(email__iexact='new_platform_admin@test.local')
     assert created.is_staff is True
     assert created.is_superuser is True
     assert created.organization_id is None
@@ -124,7 +124,7 @@ def test_superadmin_creates_superadmin_with_staff_flags_and_no_org(api_client, m
 def test_superadmin_creates_gym_admin_without_staff_flags(api_client, make_user, org):
     _auth_as(api_client, make_user, org, 'superadmin')
     payload = {
-        'username': 'new_gym_admin',
+        'email': 'new_gym_admin@test.local',
         'role': 'gym_admin',
         'password': 'Passw0rd2026',
         'organization': org.id,
@@ -133,7 +133,7 @@ def test_superadmin_creates_gym_admin_without_staff_flags(api_client, make_user,
     response = api_client.post('/api/users/', payload, format='json')
 
     assert response.status_code == 201, response.data
-    created = User.objects.get(username='new_gym_admin')
+    created = User.objects.get(email__iexact='new_gym_admin@test.local')
     assert created.is_staff is False
     assert created.is_superuser is False
     assert created.organization_id == org.id
@@ -147,7 +147,7 @@ def test_superadmin_creates_gym_admin_without_staff_flags(api_client, make_user,
 def test_org_admin_cannot_create_in_other_org(api_client, make_user, org, other_org, actor_role):
     _auth_as(api_client, make_user, org, actor_role)
     payload = {
-        'username': 'cross_org_teacher',
+        'email': 'cross_org_teacher@test.local',
         'role': 'teacher',
         'password': 'Passw0rd2026',
         'organization': other_org.id,
@@ -156,18 +156,19 @@ def test_org_admin_cannot_create_in_other_org(api_client, make_user, org, other_
     response = api_client.post('/api/users/', payload, format='json')
 
     assert response.status_code == 403
-    assert not User.objects.filter(username='cross_org_teacher').exists()
+    assert not User.objects.filter(email__iexact='cross_org_teacher@test.local').exists()
 
 
 @pytest.mark.parametrize('actor_role', ['gym_admin', 'manager'])
 def test_org_admin_creates_without_org_in_payload_gets_own_org(api_client, make_user, org, actor_role):
     _auth_as(api_client, make_user, org, actor_role)
-    payload = {'username': f'auto_org_student_{actor_role}', 'role': 'student', 'password': 'Passw0rd2026'}
+    email = f'auto_org_student_{actor_role}@test.local'
+    payload = {'email': email, 'role': 'student', 'password': 'Passw0rd2026'}
 
     response = api_client.post('/api/users/', payload, format='json')
 
     assert response.status_code == 201, response.data
-    created = User.objects.get(username=f'auto_org_student_{actor_role}')
+    created = User.objects.get(email__iexact=email)
     assert created.organization_id == org.id
 
 

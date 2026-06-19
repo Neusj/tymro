@@ -6,6 +6,9 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
+      // Permite desactivar el service worker (p.ej. en E2E, donde el SW puede
+      // servir un shell cacheado y enmascarar cambios). VITE_DISABLE_PWA=1.
+      disable: process.env.VITE_DISABLE_PWA === '1',
       // 'autoUpdate' = cuando hay una nueva versión, el SW la instala y la
       // página se recarga automáticamente para tomarla (update policy).
       registerType: 'autoUpdate',
@@ -82,17 +85,24 @@ export default defineConfig({
     allowedHosts: [
       '.trycloudflare.com',
       'tymroapp.com',
+      '.tymroapp.com',  // subdominios de tenant en prod
+      '.localhost',     // subdominios de tenant en dev (r2b-qa.localhost, gym-test.localhost, ...)
       'localhost',
       '127.0.0.1',
     ],
     proxy: {
+      // changeOrigin:false + xfwd:true ⇒ el backend recibe el Host del subdominio
+      // (y X-Forwarded-Host), que OrganizationMiddleware usa para resolver la org.
+      // Con changeOrigin:true el Host se reescribiría a 127.0.0.1 y se perdería el tenant.
       '/api': {
         target: 'http://127.0.0.1:8000',
-        changeOrigin: true,
+        changeOrigin: false,
+        xfwd: true,
       },
       '/media': {
         target: 'http://127.0.0.1:8000',
-        changeOrigin: true,
+        changeOrigin: false,
+        xfwd: true,
       },
     },
   },

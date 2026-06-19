@@ -7,7 +7,7 @@ export default function LoginPage() {
   const { login, isAuthenticated, user } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
-  const [username, setUsername] = useState('')
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -22,7 +22,7 @@ export default function LoginPage() {
     setLoading(true)
 
     try {
-      const currentUser = await login(username, password)
+      const currentUser = await login(email, password)
       const fromLocation = location.state?.from
       const from = fromLocation ? `${fromLocation.pathname || ''}${fromLocation.search || ''}` : ''
       navigate(from && from !== '/login' ? from : defaultRouteByRole(currentUser.role), { replace: true })
@@ -63,17 +63,18 @@ export default function LoginPage() {
           <div className="w-full max-w-md">
             <p className="font-display text-xs font-bold uppercase tracking-[0.3em] text-brand-orange lg:hidden">TYMRO</p>
             <h1 className="mt-3 font-display text-3xl font-bold lg:mt-0">Inicia sesión</h1>
-            <p className="mt-2 text-sm text-brand-muted">Ingresa con tu usuario y contraseña.</p>
+            <p className="mt-2 text-sm text-brand-muted">Ingresa con tu email y contraseña.</p>
 
             <form onSubmit={onSubmit} className="mt-7 space-y-4">
               <label className="block space-y-2">
-                <span className="text-sm font-medium text-brand-muted">Usuario</span>
+                <span className="text-sm font-medium text-brand-muted">Email</span>
                 <input
                   required
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
                   className="field min-h-12 px-4"
-                  placeholder="superadmin"
+                  placeholder="tu@email.com"
                 />
               </label>
 

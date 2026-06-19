@@ -18,8 +18,10 @@ def test_created_branch_appears_in_listing_immediately(api_client, make_organiza
     org = make_organization(name='Gym Repro')
     make_user('super', role='superadmin', organization=None)
 
+    from django.contrib.auth import get_user_model
+    superuser = get_user_model().objects.get(username='super')
     token = api_client.post(
-        '/api/login/', {'username': 'super', 'password': PASSWORD}, format='json'
+        '/api/login/', {'email': superuser.email, 'password': PASSWORD}, format='json'
     ).json()['token']
     api_client.credentials(HTTP_AUTHORIZATION=f'Token {token}')
 
