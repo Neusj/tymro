@@ -11,6 +11,7 @@ const ROOT = path.join(__dirname, '..')
 const FIXTURES_PATH = path.join(ROOT, '.fixtures.json')
 const STORAGE_PATH = path.join(ROOT, 'storageState.student.json')
 const TEACHER_STORAGE_PATH = path.join(ROOT, 'storageState.teacher.json')
+const GYM_STORAGE_PATH = path.join(ROOT, 'storageState.gym.json')
 
 export const baseURL = (process.env.QA_BASE_URL || 'https://qa.tymroapp.com').replace(/\/$/, '')
 export const apiURL = (process.env.QA_API_URL || `${baseURL}/api`).replace(/\/$/, '')
@@ -110,6 +111,26 @@ export function teacherUserFromStorage() {
   const entry = state.origins?.[0]?.localStorage?.find((kv) => kv.name === 'tymro_user')
   if (!entry?.value) {
     throw new Error('No se encontró tymro_user en storageState.teacher.json.')
+  }
+  return JSON.parse(entry.value)
+}
+
+// Token del GYM_ADMIN sin consumir un login extra: lo leemos del storageState que
+// dejó 20-gym-admin-auth.setup.js. Los specs de gym_admin (cálculo de pago,
+// multitenancy) lo usan para asserts vía API sin gatillar el throttle de /login/.
+export function gymAdminTokenFromStorage() {
+  return tokenFromStorage(GYM_STORAGE_PATH, 'storageState.gym.json')
+}
+
+// Datos del gym_admin (id, organization) desde el storageState.
+export function gymAdminUserFromStorage() {
+  if (!fs.existsSync(GYM_STORAGE_PATH)) {
+    throw new Error('Falta storageState.gym.json (¿corrió 20-gym-admin-auth.setup.js?).')
+  }
+  const state = JSON.parse(fs.readFileSync(GYM_STORAGE_PATH, 'utf8'))
+  const entry = state.origins?.[0]?.localStorage?.find((kv) => kv.name === 'tymro_user')
+  if (!entry?.value) {
+    throw new Error('No se encontró tymro_user en storageState.gym.json.')
   }
   return JSON.parse(entry.value)
 }
