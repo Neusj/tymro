@@ -112,7 +112,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
     if (mode === 'history') {
       params.status_in = 'completed,completed_early'
     } else {
-      params.status_in = 'scheduled,in_progress'
+      params.status_in = 'scheduled,in_progress,suspended'
     }
     return params
   }, [mode])
@@ -320,7 +320,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
   }
 
   const closeClass = async (row, actionName) => {
-    const comment = window.prompt(actionName === 'cancel' ? 'Motivo de cancelacion' : 'Motivo de suspension')
+    const comment = window.prompt(actionName === 'cancel' ? 'Motivo de cancelacion' : 'Motivo de cierre anticipado')
     if (!comment || !comment.trim()) {
       return
     }
@@ -336,6 +336,44 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
       await loadData()
     } catch (apiError) {
       setError(firstApiError(apiError?.response?.data, 'No se pudo actualizar la clase.'))
+    } finally {
+      setWorking(false)
+    }
+  }
+
+  // Suspende la clase (pausa reactivable): cambia el estado a 'suspended' y avisa
+  // por email a los alumnos inscritos. NO es lo mismo que el cierre anticipado.
+  const suspendClass = async (row) => {
+    const reason = window.prompt('Motivo de suspension (opcional)')
+    if (reason === null) {
+      return // el usuario canceló el prompt
+    }
+
+    setWorking(true)
+    setError('')
+    try {
+      await classesApi.suspend(row.id, { suspend_reason: reason.trim() })
+      await loadData()
+    } catch (apiError) {
+      setError(firstApiError(apiError?.response?.data, 'No se pudo suspender la clase.'))
+    } finally {
+      setWorking(false)
+    }
+  }
+
+  // Reactiva una clase suspendida (vuelve a 'scheduled'/'in_progress' según la hora).
+  const reactivateClass = async (row) => {
+    if (!window.confirm('Reactivar esta clase suspendida?')) {
+      return
+    }
+
+    setWorking(true)
+    setError('')
+    try {
+      await classesApi.reactivate(row.id)
+      await loadData()
+    } catch (apiError) {
+      setError(firstApiError(apiError?.response?.data, 'No se pudo reactivar la clase.'))
     } finally {
       setWorking(false)
     }
@@ -390,6 +428,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
         sortable: false,
         render: (row) => {
           const canOperate = canOperateClass(row)
+          const isSuspended = row.status === 'suspended'
           return (
             <>
               <button
@@ -400,7 +439,27 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
               >
                 {mode === 'history' ? 'Ver asistencia' : 'Tomar asistencia'}
               </button>
-              {mode === 'upcoming' ? (
+              {mode === 'upcoming' && isSuspended ? (
+                <>
+                  <button
+                    type="button"
+                    disabled={working}
+                    onClick={() => reactivateClass(row)}
+                    className="w-full rounded-lg border border-emerald-500/50 px-2.5 py-1.5 text-left text-xs text-emerald-200 transition hover:border-emerald-400 disabled:opacity-60"
+                  >
+                    Reactivar clase
+                  </button>
+                  <button
+                    type="button"
+                    disabled={working}
+                    onClick={() => closeClass(row, 'cancel')}
+                    className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 transition hover:bg-brand-red/10 disabled:opacity-60"
+                  >
+                    Cancelar clase
+                  </button>
+                </>
+              ) : null}
+              {mode === 'upcoming' && !isSuspended ? (
                 <>
                   <button
                     type="button"
@@ -421,10 +480,18 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
                   <button
                     type="button"
                     disabled={!canOperate || working}
-                    onClick={() => closeClass(row, 'complete_early')}
+                    onClick={() => suspendClass(row)}
                     className="w-full rounded-lg border border-brand-orange/50 px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-orange disabled:opacity-60"
                   >
                     Suspender clase
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!canOperate || working}
+                    onClick={() => closeClass(row, 'complete_early')}
+                    className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue disabled:opacity-60"
+                  >
+                    Finalizar (cierre anticipado)
                   </button>
                   <button
                     type="button"
@@ -516,7 +583,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
               onClick={() => setBulkModalOpen(true)}
               className="rounded-lg border border-brand-orange px-3 py-2 text-xs font-semibold text-brand-white disabled:opacity-50"
             >
-              Suspender/Cancelar ({selectedIds.length})
+              Finalizar/Cancelar ({selectedIds.length})
             </button>
           ) : null}
         </div>
@@ -535,14 +602,14 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
 
       <BulkActionModal
         open={mode === 'upcoming' && bulkModalOpen}
-        title="Suspender o cancelar clases"
+        title="Finalizar o cancelar clases"
         selectedCount={selectedIds.length}
         loading={working}
         actions={[
           {
             value: 'complete_early',
-            label: 'Suspender clases',
-            description: 'Suspende clases seleccionadas sin eliminar su trazabilidad.',
+            label: 'Finalizar anticipadamente',
+            description: 'Cierra anticipadamente las clases seleccionadas (estado finalizada anticipada).',
           },
           {
             value: 'cancel',

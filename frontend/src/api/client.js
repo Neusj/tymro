@@ -302,6 +302,14 @@ export const classesApi = {
     const { data } = await api.post(`/classes/${id}/complete-early/`, { comment })
     return data
   },
+  suspend: async (id, payload = {}) => {
+    const { data } = await api.post(`/classes/${id}/suspend/`, payload)
+    return data
+  },
+  reactivate: async (id) => {
+    const { data } = await api.post(`/classes/${id}/reactivate/`)
+    return data
+  },
   bulkClose: async (payload) => {
     const { data } = await api.post('/classes/bulk-close/', payload)
     return data

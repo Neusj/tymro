@@ -2,6 +2,7 @@
   { value: '', label: 'Todos' },
   { value: 'scheduled', label: 'Programada' },
   { value: 'in_progress', label: 'En curso' },
+  { value: 'suspended', label: 'Suspendida' },
 ]
 
 export const HISTORY_STATUS_OPTIONS = [
@@ -27,6 +28,7 @@ export function formatClassStatus(status) {
     completed: 'Finalizada',
     cancelled: 'Cancelada',
     completed_early: 'Finalizada anticipadamente',
+    suspended: 'Suspendida',
   }
   return statusMap[status] || status || '-'
 }

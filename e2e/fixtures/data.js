@@ -10,6 +10,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.join(__dirname, '..')
 const FIXTURES_PATH = path.join(ROOT, '.fixtures.json')
 const STORAGE_PATH = path.join(ROOT, 'storageState.student.json')
+const TEACHER_STORAGE_PATH = path.join(ROOT, 'storageState.teacher.json')
 
 export const baseURL = (process.env.QA_BASE_URL || 'https://qa.tymroapp.com').replace(/\/$/, '')
 export const apiURL = (process.env.QA_API_URL || `${baseURL}/api`).replace(/\/$/, '')
@@ -22,6 +23,10 @@ export const creds = {
   gymAdmin: {
     username: process.env.QA_GYM_ADMIN_USER || 'gymadmin',
     password: process.env.QA_GYM_ADMIN_PASSWORD || 'gymadmin123',
+  },
+  teacher: {
+    username: process.env.QA_TEACHER_USER || 'teacher1',
+    password: process.env.QA_TEACHER_PASSWORD || 'teacher123',
   },
 }
 
@@ -72,14 +77,39 @@ export async function apiContext(token) {
 // Token del alumno SIN consumir un login: lo leemos del storageState que dejó
 // global-setup (localStorage tymro_token). Lo usan los specs de API (multitenancy,
 // rechazos de cupo/solape) para no gatillar el throttle de /login/.
-export function studentTokenFromStorage() {
-  if (!fs.existsSync(STORAGE_PATH)) {
-    throw new Error('Falta storageState.student.json (¿corrió global-setup?).')
+function tokenFromStorage(storagePath, label) {
+  if (!fs.existsSync(storagePath)) {
+    throw new Error(`Falta ${label} (¿corrió el setup/global-setup?).`)
   }
-  const state = JSON.parse(fs.readFileSync(STORAGE_PATH, 'utf8'))
+  const state = JSON.parse(fs.readFileSync(storagePath, 'utf8'))
   const entry = state.origins?.[0]?.localStorage?.find((kv) => kv.name === 'tymro_token')
   if (!entry?.value) {
-    throw new Error('No se encontró tymro_token en el storageState.')
+    throw new Error(`No se encontró tymro_token en ${label}.`)
   }
   return entry.value
+}
+
+export function studentTokenFromStorage() {
+  return tokenFromStorage(STORAGE_PATH, 'storageState.student.json')
+}
+
+// Token del PROFESOR sin consumir un login: lo leemos del storageState que dejó
+// su setup (00b-teacher-auth.setup.js). Lo usan los specs de API del profesor
+// (multitenancy, pago $0) para no gatillar el throttle de /login/.
+export function teacherTokenFromStorage() {
+  return tokenFromStorage(TEACHER_STORAGE_PATH, 'storageState.teacher.json')
+}
+
+// Datos del profesor (id, organization, branch) leídos del storageState (clave
+// 'tymro_user'), útiles para aprovisionar clases sin una query extra.
+export function teacherUserFromStorage() {
+  if (!fs.existsSync(TEACHER_STORAGE_PATH)) {
+    throw new Error('Falta storageState.teacher.json (¿corrió el setup del profesor?).')
+  }
+  const state = JSON.parse(fs.readFileSync(TEACHER_STORAGE_PATH, 'utf8'))
+  const entry = state.origins?.[0]?.localStorage?.find((kv) => kv.name === 'tymro_user')
+  if (!entry?.value) {
+    throw new Error('No se encontró tymro_user en storageState.teacher.json.')
+  }
+  return JSON.parse(entry.value)
 }

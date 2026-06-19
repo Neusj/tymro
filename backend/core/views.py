@@ -171,6 +171,19 @@ def _can_close_or_cancel(user, gym_class):
     return False
 
 
+def _refund_active_enrollments_for_cancelled_class(gym_class):
+    """Al cancelar una clase, cada inscripción activa se cancela y se devuelve la
+    clase consumida al plan del alumno (should_refund_consumption ya es True porque
+    la clase quedó en estado CANCELLED). Devuelve la cantidad de inscripciones
+    afectadas."""
+    refunded = 0
+    for enrollment in gym_class.enrollments.filter(status='active').select_related('student'):
+        enrollment.gym_class = gym_class  # asegura que el refund vea el estado CANCELLED en memoria
+        cancel_enrollment_with_refund(enrollment)
+        refunded += 1
+    return refunded
+
+
 def _can_manage_org_resource(user, organization_id):
     if _is_superadmin(user):
         return True
@@ -1936,6 +1949,7 @@ class GymClassViewSet(ModelViewSet):
         gym_class.closed_at = gym_class.closed_at or timezone.now()
         gym_class.closure_comment = comment
         gym_class.save(update_fields=['status', 'is_active', 'closed_by', 'closed_at', 'closure_comment', 'updated_at'])
+        _refund_active_enrollments_for_cancelled_class(gym_class)
 
         return Response(self.get_serializer(gym_class).data)
 
@@ -2096,6 +2110,8 @@ class GymClassViewSet(ModelViewSet):
                 gym_class.status = GymClass.Status.COMPLETED_EARLY
 
             gym_class.save(update_fields=['status', 'is_active', 'closed_by', 'closed_at', 'closure_comment', 'updated_at'])
+            if action_name == 'cancel':
+                _refund_active_enrollments_for_cancelled_class(gym_class)
             if action_name == 'complete_early':
                 gym_class.consolidate_attendance(marked_by=user, marked_at=gym_class.closed_at)
                 _register_teacher_payment_for_class(gym_class)
