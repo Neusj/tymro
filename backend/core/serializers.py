@@ -1401,6 +1401,14 @@ class TeacherPaymentRuleSerializer(serializers.ModelSerializer):
                 )
             if amount is None or float(amount) < 0 or float(amount) > 100:
                 raise serializers.ValidationError({'amount': 'El porcentaje debe estar entre 0 y 100.'})
+        elif payment_type in (
+            TeacherPaymentRule.PaymentType.PER_ENROLLED,
+            TeacherPaymentRule.PaymentType.PER_HOUR,
+            TeacherPaymentRule.PaymentType.MONTHLY_FIXED,
+        ):
+            attrs['calculation_base'] = None
+            if amount is None or float(amount) < 0:
+                raise serializers.ValidationError({'amount': 'El monto debe ser mayor o igual a 0.'})
         else:
             raise serializers.ValidationError({'payment_type': 'Tipo de pago invalido.'})
 
