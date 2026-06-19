@@ -13,7 +13,7 @@
 
 ## Decisiones bloqueadas (aprobadas por el usuario)
 
-1. **Entorno:** org E2E dedicado `e2e-gym`, reusando el backend local. `r2b-qa` intacto.
+1. **Entorno:** org E2E dedicado `e2e-gym`, reusando el backend local. `r2b-qa` **NO se toca**: no se reseedea, y las suites de estudiante (39) y profesor (21) **no se ejecutan hoy** (ya están validadas en sesiones previas). Solo se siembra/corre `e2e-gym`.
 2. **"Por reserva":** `per_plan_price` + `active_enrollments` (motor ya testeado; cobra por inscrito activo aunque falte; no cobra si cancela en deadline porque se borra el `ConsumptionLog`; deduplica). `revenue_share` queda legacy, no se promueve en UI.
 3. **Alcance:** P0 + P1 + P2 **hoy**, sin diferir. Si algo falla, se arregla hoy.
 4. **Git:** rama `feature/gym-admin-e2e`; merge a `deploy/railway-prod` al estar 100% verde.
@@ -113,7 +113,7 @@
 - `QA_GYM_ADMIN_E2E_USER=gymadmin_e2e`
 - `QA_GYM_ADMIN_E2E_PASSWORD=gymadmin123`
 - `QA_SEED_CMD` para el org e2e: `docker compose exec -T backend python manage.py seed_demo_data --org=e2e-gym`
-- (Las suites de estudiante/profesor también se repuntan al org e2e para no tocar r2b-qa.)
+- `r2b-qa` NO se reseedea. Las suites estudiante/profesor mantienen su config actual (r2b-qa) pero no se corren hoy.
 
 ## Orden de implementación
 
@@ -140,7 +140,7 @@
 
 - 3 bugs corregidos (commits) y verificados.
 - pytest backend verde con los gaps rellenados.
-- E2E gym_admin 25-30 specs verdes contra backend real.
-- Suites existentes verdes contra el org e2e: 39 estudiante + 21 profesor + 25+ gym_admin = 85+.
+- E2E gym_admin 25-30 specs verdes contra backend real (org `e2e-gym`).
+- Suites estudiante (39) + profesor (21) permanecen como ya validadas (no se re-ejecutan hoy; `r2b-qa` intacto).
 - Reporte HTML con screenshots por flujo.
 - Sin credenciales hardcodeadas.
