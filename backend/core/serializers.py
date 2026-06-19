@@ -270,6 +270,19 @@ class PersonSerializer(serializers.ModelSerializer):
             'role',
             'is_active',
         ]
+        extra_kwargs = {
+            'organization': {'required': False},
+        }
+
+    def validate(self, attrs):
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        # Para no-superadmin la organización la fuerza el ViewSet (perform_create/
+        # update). Ignoramos cualquier 'organization' del payload para evitar
+        # escritura cross-tenant.
+        if user and user.is_authenticated and user.role != User.Role.SUPERADMIN:
+            attrs.pop('organization', None)
+        return attrs
 
 
 class ClassTypeSerializer(serializers.ModelSerializer):
@@ -1401,6 +1414,14 @@ class TeacherPaymentRuleSerializer(serializers.ModelSerializer):
                 )
             if amount is None or float(amount) < 0 or float(amount) > 100:
                 raise serializers.ValidationError({'amount': 'El porcentaje debe estar entre 0 y 100.'})
+        elif payment_type in (
+            TeacherPaymentRule.PaymentType.PER_ENROLLED,
+            TeacherPaymentRule.PaymentType.PER_HOUR,
+            TeacherPaymentRule.PaymentType.MONTHLY_FIXED,
+        ):
+            attrs['calculation_base'] = None
+            if amount is None or float(amount) < 0:
+                raise serializers.ValidationError({'amount': 'El monto debe ser mayor o igual a 0.'})
         else:
             raise serializers.ValidationError({'payment_type': 'Tipo de pago invalido.'})
 

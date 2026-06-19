@@ -36,14 +36,28 @@ export default defineConfig({
   },
 
   projects: [
-    // El setup hace el login válido del alumno UNA sola vez y guarda la sesión.
-    // (El backend ROTA el token en cada login, así que el alumno se loguea una vez.)
-    { name: 'setup', testMatch: /auth\.setup\.js/ },
+    // Setups de alumno (00) y profesor (00b): login válido UNA vez y guardan sesión.
+    // (El backend ROTA el token en cada login, así que cada rol se loguea una vez.)
+    { name: 'setup', testMatch: /(00-auth|00b-teacher-auth)\.setup\.js/ },
     {
       name: 'chromium',
-      testIgnore: /auth\.setup\.js/,
+      testIgnore: [/auth\.setup\.js/, /gym-admin/],
       use: { ...devices['Desktop Chrome'], storageState: 'storageState.student.json' },
       dependencies: ['setup'],
+    },
+
+    // Suite gym_admin (org e2e-gym): aislada, su propio setup y storageState.
+    // Correr con:  npx playwright test --project=gym-admin
+    { name: 'setup-gym', testMatch: /20-gym-admin-auth\.setup\.js/ },
+    {
+      name: 'gym-admin',
+      testMatch: /gym-admin.*\.spec\.js/,
+      use: {
+        ...devices['Desktop Chrome'],
+        storageState: 'storageState.gym.json',
+        screenshot: 'on', // capturar pantalla de cada flujo para el reporte
+      },
+      dependencies: ['setup-gym'],
     },
   ],
 })
