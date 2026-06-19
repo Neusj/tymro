@@ -10,15 +10,22 @@ from core.models import (
     Branch,
     ClassTemplate,
     ClassType,
+    ConsumptionLog,
     Discipline,
     Enrollment,
     GymClass,
     Organization,
     Plan,
     StudentPlan,
+    TeacherPaymentRule,
 )
 
 User = get_user_model()
+
+# Orgs canónicos: sus usuarios usan usernames globales sin sufijo (p.ej. r2b-qa
+# es la org real de R2B). Cualquier otro org (e2e-gym) sufija los usernames para
+# NO reasignar usuarios existentes de un org canónico.
+CANONICAL_SLUGS = {'tymro-demo', 'r2b-qa'}
 
 
 class Command(BaseCommand):
@@ -32,8 +39,13 @@ class Command(BaseCommand):
             help='Slug de la organización primaria a poblar (default: tymro-demo).',
         )
 
+    def _u(self, base):
+        """Aplica el sufijo de org al username para aislar orgs no canónicos."""
+        return f'{base}{self.user_suffix}'
+
     def handle(self, *args, **options):
         slug = options.get('org_slug') or 'tymro-demo'
+        self.user_suffix = '' if slug in CANONICAL_SLUGS else '_' + ''.join(c for c in slug if c.isalnum())
         org, _ = Organization.objects.get_or_create(
             slug=slug,
             defaults={
@@ -81,7 +93,7 @@ class Command(BaseCommand):
         )
 
         gym_admin = self._create_or_update_user(
-            username='gymadmin',
+            username=self._u('gymadmin'),
             password='gymadmin123',
             role=User.Role.GYM_ADMIN,
             email='gymadmin@tymro.local',
@@ -97,7 +109,7 @@ class Command(BaseCommand):
             ('teacher2', 'Pedro', 'Leiva', branch_norte),
         ]:
             teachers[username] = self._create_or_update_user(
-                username=username,
+                username=self._u(username),
                 password='teacher123',
                 role=User.Role.TEACHER,
                 email=f'{username}@tymro.local',
@@ -114,7 +126,7 @@ class Command(BaseCommand):
             ('student3', 'Josefa', 'Perez', branch_norte),
         ]:
             students[username] = self._create_or_update_user(
-                username=username,
+                username=self._u(username),
                 password='student123',
                 role=User.Role.STUDENT,
                 email=f'{username}@tymro.local',
@@ -252,7 +264,7 @@ class Command(BaseCommand):
             '2 completadas con asistencias y 4 futuras.'
         )
 
-        return self._seed_e2e_fixtures(
+        fixtures = self._seed_e2e_fixtures(
             org=org,
             branch=branch_central,
             teacher=teacher_central,
@@ -267,6 +279,16 @@ class Command(BaseCommand):
             now=now,
             today=today,
         )
+
+        # Fixtures deterministas de cálculo de pago a profesor (solo para el org E2E
+        # de gym_admin). El motor calcula al cerrar la clase; aquí dejamos los records
+        # listos para que la suite asierte montos exactos vía la API de resumen.
+        if org.slug == 'e2e-gym':
+            fixtures['payment_calc'] = self._seed_payment_calc_fixtures(
+                org, branch_central, gym_admin, now,
+            )
+
+        return fixtures
 
     def _seed_e2e_fixtures(self, *, org, branch, teacher, branch_alt, teacher_alt,
                            class_type, discipline, discipline_alt, plan,
@@ -388,7 +410,7 @@ class Command(BaseCommand):
         result = {}
 
         no_plan = self._create_or_update_user(
-            username='e2e_noplan', password='student123', role=User.Role.STUDENT,
+            username=self._u('e2e_noplan'), password='student123', role=User.Role.STUDENT,
             email='e2e_noplan@tymro.local', first_name='Sin', last_name='Plan',
             organization=org, branch=branch,
         )
@@ -396,7 +418,7 @@ class Command(BaseCommand):
         result['no_plan'] = no_plan.username
 
         no_balance = self._create_or_update_user(
-            username='e2e_nobalance', password='student123', role=User.Role.STUDENT,
+            username=self._u('e2e_nobalance'), password='student123', role=User.Role.STUDENT,
             email='e2e_nobalance@tymro.local', first_name='Sin', last_name='Saldo',
             organization=org, branch=branch,
         )
@@ -409,7 +431,7 @@ class Command(BaseCommand):
         result['no_balance'] = no_balance.username
 
         unpaid = self._create_or_update_user(
-            username='e2e_unpaid', password='student123', role=User.Role.STUDENT,
+            username=self._u('e2e_unpaid'), password='student123', role=User.Role.STUDENT,
             email='e2e_unpaid@tymro.local', first_name='Matricula', last_name='Impaga',
             organization=org, branch=branch,
         )
@@ -449,6 +471,129 @@ class Command(BaseCommand):
             'class_name': foreign_class.name,
         }
 
+    def _seed_payment_calc_fixtures(self, org, branch, gym_admin, now):
+        """Escenarios DETERMINISTAS de cálculo de pago a profesor para el E2E.
+
+        - FIJO: $5.000 por clase, independiente de alumnos.
+        - ASISTENCIA (per_plan_price present_attendees 40%): % del precio-por-clase
+          de los PRESENTES. PlanA $40k/4=$10k, PlanB $40k/8=$5k, ilimitado=$0 ->
+          (10000+5000)*0.4 = 6000.
+        - RESERVA (per_plan_price active_enrollments 60%): inscritos activos aunque
+          falten. (10000+5000)*0.6 = 9000.
+        """
+        from core.services.teacher_payments import calculate_teacher_payment
+
+        today = timezone.localdate()
+
+        def make_plan(name, total, price, unlimited=False):
+            p, _ = Plan.objects.get_or_create(
+                organization=org,
+                name=name,
+                defaults={
+                    'plan_type': Plan.PlanType.PACK,
+                    'total_classes': total,
+                    'unlimited_classes': unlimited,
+                    'duration_days': 30,
+                    'price': price,
+                },
+            )
+            return p
+
+        def make_student(uname, fname, plan_obj, total, price, unlimited=False):
+            u = self._create_or_update_user(
+                username=self._u(uname), password='student123', role=User.Role.STUDENT,
+                email=f'{self._u(uname)}@tymro.local', first_name=fname, last_name='Pago',
+                organization=org, branch=branch,
+            )
+            StudentPlan.objects.filter(user=u).delete()
+            sp = StudentPlan.objects.create(
+                user=u, plan=plan_obj, start_date=today - timedelta(days=2),
+                end_date=today + timedelta(days=28), total_classes=total,
+                unlimited_classes=unlimited, classes_used=0, final_price=price, is_active=True,
+            )
+            return u, sp
+
+        def make_teacher(uname, fname):
+            return self._create_or_update_user(
+                username=self._u(uname), password='teacher123', role=User.Role.TEACHER,
+                email=f'{self._u(uname)}@tymro.local', first_name=fname, last_name='Pago',
+                organization=org, branch=branch,
+            )
+
+        plan_a = make_plan('E2E Pago A 4/40k', 4, 40000)
+        plan_b = make_plan('E2E Pago B 8/40k', 8, 40000)
+        plan_il = make_plan('E2E Pago Ilimitado', 0, 0, unlimited=True)
+        s_a, sp_a = make_student('s_pago_a', 'AlumnoA', plan_a, 4, 40000)
+        s_b, sp_b = make_student('s_pago_b', 'AlumnoB', plan_b, 8, 40000)
+        s_il, sp_il = make_student('s_pago_il', 'AlumnoIlim', plan_il, 0, 0, unlimited=True)
+
+        t_fijo = make_teacher('teacher_fijo', 'ProfeFijo')
+        t_asis = make_teacher('teacher_asis', 'ProfeAsistencia')
+        t_res = make_teacher('teacher_res', 'ProfeReserva')
+
+        # Reglas activas (una por profe), sin restricción de sucursal/disciplina.
+        TeacherPaymentRule.objects.filter(organization=org, teachers__in=[t_fijo, t_asis, t_res]).delete()
+        r_fijo = TeacherPaymentRule.objects.create(
+            organization=org, payment_type=TeacherPaymentRule.PaymentType.FIXED_PER_CLASS,
+            amount=5000, is_active=True,
+        )
+        r_fijo.teachers.add(t_fijo)
+        r_asis = TeacherPaymentRule.objects.create(
+            organization=org, payment_type=TeacherPaymentRule.PaymentType.PER_PLAN_PRICE,
+            per_plan_price_base=TeacherPaymentRule.PerPlanPriceBase.PRESENT_ATTENDEES,
+            amount=40, is_active=True,
+        )
+        r_asis.teachers.add(t_asis)
+        r_res = TeacherPaymentRule.objects.create(
+            organization=org, payment_type=TeacherPaymentRule.PaymentType.PER_PLAN_PRICE,
+            per_plan_price_base=TeacherPaymentRule.PerPlanPriceBase.ACTIVE_ENROLLMENTS,
+            amount=60, is_active=True,
+        )
+        r_res.teachers.add(t_res)
+
+        start = now - timedelta(hours=2)
+
+        def completed_class(name, teacher):
+            return GymClass.objects.create(
+                organization=org, branch=branch, teacher=teacher, name=name,
+                start_datetime=start, end_datetime=start + timedelta(hours=1),
+                status=GymClass.Status.COMPLETED, created_by=gym_admin,
+            )
+
+        def enroll(gym_class, student, student_plan, present, status='active'):
+            Enrollment.objects.create(gym_class=gym_class, student=student, status=status)
+            if student_plan is not None:
+                ConsumptionLog.objects.create(user=student, student_plan=student_plan, class_instance=gym_class)
+            if present:
+                Attendance.objects.create(gym_class=gym_class, student=student, status=Attendance.Status.PRESENT)
+
+        # FIJO -> 5000 (3 presentes, da igual cuántos)
+        c_fijo = completed_class('E2E Pago Fijo', t_fijo)
+        enroll(c_fijo, s_a, sp_a, present=True)
+        enroll(c_fijo, s_b, sp_b, present=True)
+        enroll(c_fijo, s_il, sp_il, present=True)
+        calculate_teacher_payment(c_fijo)
+
+        # ASISTENCIA 40% -> (10000+5000)*0.4 = 6000 (ilimitado aporta 0)
+        c_asis = completed_class('E2E Pago Asistencia', t_asis)
+        enroll(c_asis, s_a, sp_a, present=True)
+        enroll(c_asis, s_b, sp_b, present=True)
+        enroll(c_asis, s_il, sp_il, present=True)
+        calculate_teacher_payment(c_asis)
+
+        # RESERVA 60% -> (10000+5000)*0.6 = 9000 (s_b inscrito pero ausente igual aporta)
+        c_res = completed_class('E2E Pago Reserva', t_res)
+        enroll(c_res, s_a, sp_a, present=True)
+        enroll(c_res, s_b, sp_b, present=False)
+        calculate_teacher_payment(c_res)
+
+        self.stdout.write('Fixtures de cálculo de pago creadas (fijo=5000, asistencia=6000, reserva=9000).')
+        return {
+            'fijo': {'teacher': t_fijo.username, 'expected': 5000},
+            'asistencia': {'teacher': t_asis.username, 'expected': 6000},
+            'reserva': {'teacher': t_res.username, 'expected': 9000},
+        }
+
     def _print_e2e_fixtures(self, org, gym_admin, fixtures):
         """Imprime una línea parseable que global-setup.js captura para los tests."""
         payload = {
@@ -456,7 +601,7 @@ class Command(BaseCommand):
             'org_id': org.id,
             'attendance_screen_code': org.attendance_screen_code,
             'gym_admin': {'username': gym_admin.username, 'password': 'gymadmin123'},
-            'student': {'username': 'student1', 'password': 'student123'},
+            'student': {'username': self._u('student1'), 'password': 'student123'},
             **fixtures,
         }
         self.stdout.write('TYMRO_E2E_FIXTURES=' + json.dumps(payload, ensure_ascii=False))
