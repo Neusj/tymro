@@ -12,8 +12,11 @@ const EMPTY_FORM = {
   payment_type: 'fixed_per_class',
   amount: '',
   calculation_base: '',
+  per_plan_price_base: '',
   is_active: true,
 }
+
+const PCT_TYPES = ['revenue_share', 'per_plan_price']
 
 const AMOUNT_LABELS = {
   fixed_per_class: 'Monto por clase',
@@ -21,6 +24,7 @@ const AMOUNT_LABELS = {
   per_enrolled: 'Monto por alumno inscrito',
   per_hour: 'Valor por hora',
   revenue_share: 'Porcentaje (%)',
+  per_plan_price: 'Porcentaje (%)',
   monthly_fixed: 'Sueldo mensual',
 }
 
@@ -28,6 +32,7 @@ const AMOUNT_HINTS = {
   per_hour: 'Se multiplica por la duracion de cada clase.',
   per_enrolled: 'Se multiplica por los alumnos inscritos activos al cerrar la clase.',
   monthly_fixed: 'Monto completo por cada mes del periodo. No genera pago por clase.',
+  per_plan_price: '% del precio por clase del plan de cada alumno (precio / clases del plan).',
 }
 
 function firstApiError(detail, fallback) {
@@ -136,6 +141,7 @@ export default function TeacherPaymentRulesPage() {
       payment_type: row.payment_type || 'fixed_per_class',
       amount: row.amount ?? '',
       calculation_base: row.calculation_base || '',
+      per_plan_price_base: row.per_plan_price_base || '',
       is_active: Boolean(row.is_active),
     })
     setFormOpen(true)
@@ -195,6 +201,7 @@ export default function TeacherPaymentRulesPage() {
         payment_type: row.payment_type,
         amount: Number(row.amount),
         calculation_base: row.calculation_base || null,
+        per_plan_price_base: row.per_plan_price_base || null,
         is_active: false,
       })
       setNotice('Regla deshabilitada.')
@@ -242,6 +249,10 @@ export default function TeacherPaymentRulesPage() {
       setError('Debes seleccionar base de calculo para porcentaje.')
       return
     }
+    if (form.payment_type === 'per_plan_price' && !form.per_plan_price_base) {
+      setError('Debes seleccionar si el porcentaje es por asistencia o por reserva.')
+      return
+    }
 
     setWorking(true)
     setError('')
@@ -251,6 +262,7 @@ export default function TeacherPaymentRulesPage() {
         payment_type: form.payment_type,
         amount: Number(form.amount),
         calculation_base: form.payment_type === 'revenue_share' ? form.calculation_base : null,
+        per_plan_price_base: form.payment_type === 'per_plan_price' ? form.per_plan_price_base : null,
         is_active: Boolean(form.is_active),
       }
       if (isSuperadmin) {
@@ -276,8 +288,8 @@ export default function TeacherPaymentRulesPage() {
   const columns = useMemo(
     () => [
       { key: 'payment_type', label: 'Tipo', render: (row) => <ValueBadge kind="payment_type" value={row.payment_type} /> },
-      { key: 'amount', label: 'Monto', render: (row) => (row.payment_type === 'revenue_share' ? `${Number(row.amount || 0).toLocaleString('es-CL')}%` : `$${Number(row.amount || 0).toLocaleString('es-CL')}`) },
-      { key: 'calculation_base', label: 'Base', render: (row) => row.calculation_base || '-' },
+      { key: 'amount', label: 'Monto', render: (row) => (PCT_TYPES.includes(row.payment_type) ? `${Number(row.amount || 0).toLocaleString('es-CL')}%` : `$${Number(row.amount || 0).toLocaleString('es-CL')}`) },
+      { key: 'calculation_base', label: 'Base', render: (row) => row.per_plan_price_base || row.calculation_base || '-' },
       { key: 'usage_count', label: 'Asignaciones' },
       { key: 'assigned_teachers_count', label: 'Profesores asignados' },
       { key: 'is_active', label: 'Estado', render: (row) => <ValueBadge kind="template_status" value={row.is_active ? 'active' : 'inactive'} /> },
@@ -409,6 +421,7 @@ export default function TeacherPaymentRulesPage() {
                   ...prev,
                   payment_type: event.target.value,
                   calculation_base: event.target.value === 'revenue_share' ? prev.calculation_base : '',
+                  per_plan_price_base: event.target.value === 'per_plan_price' ? prev.per_plan_price_base : '',
                 }))
               }
               className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
@@ -417,7 +430,7 @@ export default function TeacherPaymentRulesPage() {
               <option value="per_student">Por alumno presente</option>
               <option value="per_enrolled">Por alumno inscrito</option>
               <option value="per_hour">Por hora</option>
-              <option value="revenue_share">% sobre ingreso</option>
+              <option value="per_plan_price">% del precio del plan</option>
               <option value="monthly_fixed">Sueldo mensual fijo</option>
             </select>
           </label>
@@ -447,6 +460,21 @@ export default function TeacherPaymentRulesPage() {
                 <option value="">Seleccionar</option>
                 <option value="attendance">Asistencia</option>
                 <option value="enrollment">Inscripcion</option>
+              </select>
+            </label>
+          ) : null}
+
+          {form.payment_type === 'per_plan_price' ? (
+            <label className="space-y-1 text-sm">
+              <span className="text-brand-muted">¿Sobre quién se calcula?</span>
+              <select
+                value={form.per_plan_price_base}
+                onChange={(event) => setForm((prev) => ({ ...prev, per_plan_price_base: event.target.value }))}
+                className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
+              >
+                <option value="">Seleccionar base</option>
+                <option value="present_attendees">Por asistencia (solo presentes)</option>
+                <option value="active_enrollments">Por reserva (inscritos activos)</option>
               </select>
             </label>
           ) : null}
