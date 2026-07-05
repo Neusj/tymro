@@ -12,8 +12,10 @@ services:
       POSTGRES_HOST: ${POSTGRES_HOST:-}
       POSTGRES_PORT: ${POSTGRES_PORT:-5432}
       SQLITE_DB_NAME: ${SQLITE_DB_NAME:-/data/db.sqlite3}
-      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1,backend,frontend,tymroapp.com,qa.tymroapp.com,.trycloudflare.com}
-      CSRF_TRUSTED_ORIGINS: ${CSRF_TRUSTED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173,https://tymroapp.com,https://qa.tymroapp.com,https://*.trycloudflare.com}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1,backend,frontend,.tymroapp.com,.localhost,.trycloudflare.com}
+      CSRF_TRUSTED_ORIGINS: ${CSRF_TRUSTED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173,https://tymroapp.com,https://*.tymroapp.com,https://qa.tymroapp.com,https://*.trycloudflare.com}
+      # Dominio base para resolver el subdominio de tenant (<gym>.<BASE_DOMAIN> -> org).
+      BASE_DOMAIN: ${BASE_DOMAIN:-localhost}
       CORS_ALLOW_ALL_ORIGINS: ${CORS_ALLOW_ALL_ORIGINS:-False}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173,https://tymroapp.com,https://qa.tymroapp.com}
       # Base para armar los links públicos (registro de prueba) y los emails (verificación / reset).

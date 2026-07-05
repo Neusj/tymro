@@ -23,23 +23,39 @@ from core.models import (
 User = get_user_model()
 
 # Orgs canónicos: sus usuarios usan usernames globales sin sufijo (p.ej. r2b-qa
-# es la org real de R2B). Cualquier otro org (e2e-gym) sufija los usernames para
-# NO reasignar usuarios existentes de un org canónico.
+# es la org real de R2B). Cualquier otro org (e2e-gym, r2b) sufija los usernames
+# para NO reasignar usuarios existentes de un org canónico. OJO: 'r2b' (réplica
+# de PROD) NO es canónico a propósito; si lo fuera, get_or_create por username
+# reasignaría los usuarios de 'r2b-qa' (canónico) a 'r2b' y rompería QA.
 CANONICAL_SLUGS = {'tymro-demo', 'r2b-qa'}
 
 # Orgs que poblamos con --org=all (cada una con su subdominio de tenant).
-ALL_SLUGS = ['r2b-qa', 'gym-test', 'e2e-gym']
+# r2b-qa/gym-test/e2e-gym = orgs de QA/E2E (la suite los referencia por slug).
+# 'r2b' = réplica del flujo de cliente en PROD (subdominio de un nivel:
+# r2b.<BASE_DOMAIN>, p.ej. r2b.tymroapp.com con la Universal SSL existente).
+# 'guerrero'/'kick' = orgs demo del modelo multi-org: la MISMA persona
+# (user1@correo.com) es Profesor en guerrero y Alumno en kick, como DOS usuarios
+# independientes. Subdominio de un nivel (guerrero.<BASE_DOMAIN>, kick.<...>).
+ALL_SLUGS = ['r2b-qa', 'gym-test', 'e2e-gym', 'r2b', 'guerrero', 'kick']
 
 # name + subdomain por slug (el subdominio mapea <subdomain>.<BASE_DOMAIN> -> org).
 ORG_DEFAULTS = {
     'r2b-qa': {'name': 'R2B Fight Club QA', 'subdomain': 'r2b-qa'},
     'gym-test': {'name': 'Gym Test QA', 'subdomain': 'gym-test'},
     'e2e-gym': {'name': 'E2E Gym', 'subdomain': 'e2e-gym'},
+    'r2b': {'name': 'R2B Fight Club', 'subdomain': 'r2b'},
+    'guerrero': {'name': 'Guerrero Fight Club', 'subdomain': 'guerrero'},
+    'kick': {'name': 'Kick BJJ Academy', 'subdomain': 'kick'},
 }
 
 # Email compartido a propósito entre dos orgs (caso clave del rediseño): mismo
 # email, distinta org y distinto rol. Login se desambigua por subdominio.
 SHARED_EMAIL = 'juan@demo.local'
+
+# Persona multi-org del escenario demo: el MISMO email en dos orgs distintas, como
+# dos filas de usuario independientes (rol/password/perfil propios). Ver
+# _seed_multiorg_person. Es exactamente el caso "guerrero != kick".
+MULTIORG_EMAIL = 'user1@correo.com'
 
 
 class Command(BaseCommand):
@@ -50,7 +66,7 @@ class Command(BaseCommand):
             '--org',
             dest='org_slug',
             default='tymro-demo',
-            help="Slug de la organización a poblar, o 'all' para r2b-qa + gym-test + e2e-gym.",
+            help="Slug de la organización a poblar, o 'all' para r2b-qa + gym-test + e2e-gym + r2b.",
         )
 
     def _u(self, base):
@@ -91,11 +107,13 @@ class Command(BaseCommand):
                 primary = (org, gym_admin, fixtures)
 
         shared = self._seed_shared_email(slugs)
+        multiorg = self._seed_multiorg_person(slugs)
 
         primary_org, primary_gym_admin, primary_fixtures = primary
         self._print_e2e_fixtures(
             primary_org, primary_gym_admin, primary_fixtures,
             orgs_summary=orgs_summary, superadmin_email=superadmin.email, shared=shared,
+            multiorg=multiorg,
         )
         self.stdout.write(self.style.SUCCESS('Datos demo creados/actualizados correctamente.'))
 
@@ -209,6 +227,44 @@ class Command(BaseCommand):
                 organization=org, branch=Branch.objects.filter(organization=org).first(),
             )
             result['gym-test'] = {'email': SHARED_EMAIL, 'role': 'teacher', 'password': 'teacher123'}
+        return result
+
+    def _seed_multiorg_person(self, slugs):
+        """La MISMA persona (MULTIORG_EMAIL) como DOS usuarios independientes en dos
+        orgs distintas: Profesor en 'guerrero', Alumno en 'kick'. Password distinto a
+        propósito: son cuentas separadas que solo comparten el string del email. El
+        login se desambigua por subdominio (guerrero.<dom> vs kick.<dom>)."""
+        result = {}
+        if 'guerrero' in slugs:
+            org = Organization.objects.get(slug='guerrero')
+            self._create_or_update_user(
+                username='user1_guerrero', password='teacher123', role=User.Role.TEACHER,
+                email=MULTIORG_EMAIL, first_name='User', last_name='Uno',
+                organization=org, branch=Branch.objects.filter(organization=org).first(),
+            )
+            result['guerrero'] = {'email': MULTIORG_EMAIL, 'role': 'teacher', 'password': 'teacher123'}
+        if 'kick' in slugs:
+            org = Organization.objects.get(slug='kick')
+            student = self._create_or_update_user(
+                username='user1_kick', password='student123', role=User.Role.STUDENT,
+                email=MULTIORG_EMAIL, first_name='User', last_name='Uno',
+                organization=org, branch=Branch.objects.filter(organization=org).first(),
+            )
+            # Plan activo en kick para que el alumno pueda reservar/asistir de verdad.
+            plan = Plan.objects.filter(organization=org).first()
+            if plan:
+                today = timezone.localdate()
+                StudentPlan.objects.update_or_create(
+                    user=student, plan=plan,
+                    defaults={
+                        'start_date': today - timedelta(days=5),
+                        'end_date': today + timedelta(days=25),
+                        'total_classes': plan.total_classes,
+                        'classes_used': 0,
+                        'is_active': True,
+                    },
+                )
+            result['kick'] = {'email': MULTIORG_EMAIL, 'role': 'student', 'password': 'student123'}
         return result
 
     def _seed_attendance_flow(self, org, branch_central, branch_norte, gym_admin, teachers, students):
@@ -665,11 +721,12 @@ class Command(BaseCommand):
         }
 
     def _print_e2e_fixtures(self, org, gym_admin, fixtures, *, orgs_summary=None,
-                            superadmin_email=None, shared=None):
+                            superadmin_email=None, shared=None, multiorg=None):
         """Imprime una línea parseable que global-setup.js captura para los tests.
 
         Incluye las claves legacy (org primaria) + las claves multi-org nuevas
-        (orgs/subdominios, superadmin, email compartido). El login es por EMAIL."""
+        (orgs/subdominios, superadmin, email compartido, persona multi-org). El
+        login es por EMAIL."""
         primary_suffix = '' if org.slug in CANONICAL_SLUGS else '_' + ''.join(c for c in org.slug if c.isalnum())
         payload = {
             'org_slug': org.slug,
@@ -689,6 +746,7 @@ class Command(BaseCommand):
             'orgs': orgs_summary or {},
             'superadmin': {'email': superadmin_email, 'password': 'superadmin123'},
             'shared': shared or {},
+            'multiorg': multiorg or {},
             **fixtures,
         }
         self.stdout.write('TYMRO_E2E_FIXTURES=' + json.dumps(payload, ensure_ascii=False))
