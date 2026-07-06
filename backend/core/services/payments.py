@@ -13,6 +13,7 @@ from django.utils import timezone
 from core.models import PaymentAccount, PaymentTransaction
 from .providers import PaymentProviderError, get_payment_provider
 from .providers.base import BackUrls, CheckoutItem, PaymentStatus
+from .public_urls import organization_public_base_url
 
 STATE_SALT = 'payments-oauth'
 STATE_MAX_AGE = 600          # 10 minutos
@@ -185,15 +186,13 @@ def create_checkout(*, organization, user, plan=None, target_student_plan=None):
     provider = get_payment_provider(account.provider)
     access_token = get_valid_access_token(account=account)
     apex = settings.PAYMENTS_APEX_BASE_URL.rstrip('/')
-    frontend = getattr(settings, 'FRONTEND_URL', apex).rstrip('/')
+    result_url = f'{organization_public_base_url(organization)}/pagos/resultado?tx={tx.id}'
     session = provider.create_checkout(
         access_token=access_token,
         external_reference=str(tx.id),
         items=items,
         payer_email=getattr(user, 'email', None),
-        back_urls=BackUrls(success=f'{frontend}/pagos/resultado?tx={tx.id}',
-                           pending=f'{frontend}/pagos/resultado?tx={tx.id}',
-                           failure=f'{frontend}/pagos/resultado?tx={tx.id}'),
+        back_urls=BackUrls(success=result_url, pending=result_url, failure=result_url),
         notification_url=f'{apex}/api/payments/webhook/?tx={tx.id}',
         expires_at=None,
     )
