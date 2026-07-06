@@ -8,6 +8,7 @@ from .views_payments import (
     PaymentConnectView,
     PaymentOAuthCallbackView,
     PaymentTransactionStatusView,
+    PaymentWebhookView,
 )
 from .views import (
     BranchViewSet,
@@ -89,5 +90,6 @@ urlpatterns = [
     path('payments/checkout/', PaymentCheckoutView.as_view(), name='payments-checkout'),
     path('payments/transactions/<uuid:pk>/status/', PaymentTransactionStatusView.as_view(),
          name='payments-transaction-status'),
+    path('payments/webhook/', PaymentWebhookView.as_view(), name='payments-webhook'),
     path('', include(router.urls)),
 ]

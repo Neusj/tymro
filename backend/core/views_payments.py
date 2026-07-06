@@ -8,10 +8,11 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import PaymentAccount, PaymentTransaction, Plan, StudentPlan
+from .models import PaymentAccount, PaymentTransaction, Plan, StudentPlan, WebhookEvent
 from .serializers import (PaymentAccountSerializer, PaymentCheckoutRequestSerializer,
                           PaymentTransactionStatusSerializer)
 from .services import payments
+from .services.providers import get_payment_provider
 from .views import _is_gym_admin, _is_student, _is_superadmin   # helpers de rol existentes
 
 
@@ -97,3 +98,35 @@ class PaymentTransactionStatusView(APIView):
         tx = get_object_or_404(PaymentTransaction, id=pk,
                                organization_id=request.user.organization_id, user=request.user)
         return Response(PaymentTransactionStatusSerializer(tx).data)
+
+
+class PaymentWebhookView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []   # sin SessionAuth → sin CSRF
+
+    def post(self, request):
+        raw_body = request.body
+        provider = get_payment_provider()   # settings.PAYMENTS_PROVIDER
+        headers = {k[5:].replace('_', '-').lower(): v
+                   for k, v in request.META.items() if k.startswith('HTTP_')}
+        if not provider.verify_webhook(headers=headers, raw_body=raw_body):
+            return Response({'detail': 'firma inválida'}, status=status.HTTP_401_UNAUTHORIZED)
+
+        env = provider.parse_webhook(headers=headers, raw_body=raw_body)
+        WebhookEvent.objects.create(
+            provider=provider.name, provider_payment_id=env.provider_payment_id,
+            raw_body=raw_body.decode('utf-8', 'replace'),
+            headers={'x-request-id': headers.get('x-request-id')},
+        )
+        if env.type != 'payment' or not env.provider_payment_id:
+            return Response(status=status.HTTP_200_OK)   # ack, ignorar
+
+        tx_id = request.GET.get('tx')
+        if tx_id:
+            try:
+                payments.process_payment_notification(
+                    tx_id=tx_id, provider_payment_id=env.provider_payment_id)
+            except payments.PaymentIntegrityError:
+                # No re-encolar: es una inconsistencia, no un fallo transitorio.
+                return Response(status=status.HTTP_200_OK)
+        return Response(status=status.HTTP_200_OK)
