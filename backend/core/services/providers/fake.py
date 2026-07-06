@@ -1,25 +1,44 @@
-"""Proveedor falso, en memoria, para tests (sin HTTP)."""
+"""Proveedor falso, en memoria, para tests (sin HTTP).
+
+get_payment_provider() instancia un FakePaymentProvider nuevo en cada llamada
+(igual que haría con el proveedor real, que no guarda estado local). Para que
+un test pueda `queue_payment(...)` sobre una instancia y luego el código bajo
+prueba haga `fetch_payment(...)` sobre otra, el estado de "pagos encolados" se
+guarda en el cache de Django en vez de en `self`. El cache ya se limpia antes
+y después de cada test (ver `_clear_throttle_cache` en conftest.py), así que
+distintos tests no se contaminan entre sí aunque reutilicen el mismo
+provider_payment_id.
+"""
 from decimal import Decimal
+
+from django.core.cache import cache
 
 from .base import (BackUrls, CheckoutItem, CheckoutSession, OAuthTokens,
                    PaymentProvider, PaymentStatus, ProviderPayment, WebhookEnvelope)
+
+_CACHE_KEY = 'fake_payment_provider:payments'
 
 
 class FakePaymentProvider(PaymentProvider):
     name = 'fake'
 
     def __init__(self):
-        self._payments = {}   # external_reference -> dict
         self.created_preferences = []
+
+    @property
+    def _payments(self):
+        return cache.get(_CACHE_KEY) or {}
 
     # --- helpers de test ---
     def queue_payment(self, *, external_reference, status, amount,
                       currency='CLP', collector_id='fake-collector',
                       provider_payment_id='fake-pay'):
-        self._payments[external_reference] = dict(
+        payments = self._payments
+        payments[external_reference] = dict(
             provider_payment_id=provider_payment_id, status=status, amount=Decimal(amount),
             currency=currency, external_reference=external_reference, collector_id=collector_id,
         )
+        cache.set(_CACHE_KEY, payments, timeout=None)
 
     # --- interfaz ---
     def get_authorization_url(self, *, state, redirect_uri):
@@ -47,7 +66,10 @@ class FakePaymentProvider(PaymentProvider):
         # Busca por el último payment encolado (los tests encolan por external_reference).
         for data in self._payments.values():
             if data['provider_payment_id'] == provider_payment_id:
-                return ProviderPayment(status_detail='accredited', raw=dict(data), **{
+                # El payload "raw" debe ser JSON-safe, igual que el `resp.json()` del
+                # proveedor real (que nunca trae Decimal): no reusar `data` tal cual.
+                raw = {**data, 'status': data['status'].value, 'amount': str(data['amount'])}
+                return ProviderPayment(status_detail='accredited', raw=raw, **{
                     k: data[k] for k in ('provider_payment_id', 'status', 'amount',
                                          'currency', 'external_reference', 'collector_id')})
         raise KeyError(provider_payment_id)
