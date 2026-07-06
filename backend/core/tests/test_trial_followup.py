@@ -167,6 +167,24 @@ def test_command_substitutes_template_variables(setup, mailoutbox):
     assert '{' not in body  # todas las variables fueron reemplazadas
 
 
+def test_signup_link_uses_org_subdomain(setup, mailoutbox, settings):
+    settings.BASE_DOMAIN = 'tymroapp.com'
+    settings.FRONTEND_URL = 'https://tymroapp.com'
+    gym_class = _completed_class(setup)
+    _trial_attendee(gym_class, setup['student'])
+    _config(
+        setup['org'], minutes_after_class_end=30,
+        email_subject='Vuelve', email_body='Agenda de nuevo: {signup_link}',
+    )
+
+    call_command('send_trial_followups')
+
+    assert len(mailoutbox) == 1
+    # setup usa make_organization -> subdomain 'org-1'.
+    assert 'https://org-1.tymroapp.com/clase-gratis' in mailoutbox[0].body
+    assert 'tymroapp.com/org-1/clase-gratis' not in mailoutbox[0].body  # NO el esquema viejo por slug
+
+
 def test_command_is_multitenant_scoped(setup, mailoutbox, make_organization, make_user):
     # Org del fixture: cumple todo.
     gym_class = _completed_class(setup)

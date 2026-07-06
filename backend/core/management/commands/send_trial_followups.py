@@ -18,6 +18,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from core.models import Attendance, Enrollment, GymClass, TrialFollowupConfiguration
+from core.services.public_urls import trial_signup_url
 
 logger = logging.getLogger(__name__)
 
@@ -65,8 +66,7 @@ class Command(BaseCommand):
                 end_datetime__lte=cutoff,
             ).select_related('teacher')
 
-            base = settings.FRONTEND_URL.rstrip('/')
-            signup_link = f'{base}/{org.slug}/clase-gratis'
+            signup_link = trial_signup_url(org)
 
             for gym_class in classes:
                 trial_student_ids = set(
