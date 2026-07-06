@@ -91,6 +91,7 @@ from .services.recurrence import (
     reactivate_future_cancelled_instances_for_template,
 )
 from .services.class_dashboard import get_class_dashboard_summary
+from .services.public_urls import organization_public_base_url
 from .services.reservations import (
     ReservationRuleError,
     cancel_enrollment_with_refund,
@@ -545,7 +546,8 @@ class PasswordResetRequestView(APIView):
         if user:
             uid = urlsafe_base64_encode(force_bytes(user.pk))
             token = default_token_generator.make_token(user)
-            reset_link = f"{settings.FRONTEND_URL.rstrip('/')}/reset-password?uid={uid}&token={token}"
+            base = organization_public_base_url(getattr(user, 'organization', None))
+            reset_link = f"{base}/reset-password?uid={uid}&token={token}"
             send_mail(
                 subject='Restablecer tu contraseña — TYMRO',
                 message=(
@@ -690,7 +692,7 @@ class PublicRegisterView(APIView):
 
         uid = urlsafe_base64_encode(force_bytes(user.pk))
         token = default_token_generator.make_token(user)
-        verify_link = f"{settings.FRONTEND_URL.rstrip('/')}/verify-email?uid={uid}&token={token}"
+        verify_link = f"{organization_public_base_url(organization)}/verify-email?uid={uid}&token={token}"
         send_mail(
             subject=f'Confirma tu email — {organization.name}',
             message=(
