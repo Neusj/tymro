@@ -20,6 +20,9 @@ import AttendanceScreenAutoPage from './pages/AttendanceScreenAutoPage'
 import GymAdminDashboard from './pages/GymAdminDashboard'
 import GymAdminUsersPage from './pages/GymAdminUsersPage'
 import GymAdminPlanMembershipsPage from './pages/GymAdminPlanMembershipsPage'
+import GymAdminPaymentsSettingsPage from './pages/GymAdminPaymentsSettingsPage'
+import StudentBuyPlanPage from './pages/StudentBuyPlanPage'
+import PaymentResultPage from './pages/PaymentResultPage'
 import LoginPage from './pages/LoginPage'
 import ForgotPasswordPage from './pages/ForgotPasswordPage'
 import ResetPasswordPage from './pages/ResetPasswordPage'
@@ -491,6 +494,16 @@ export default function App() {
         }
       />
       <Route
+        path="/student/plans/comprar"
+        element={
+          <ProtectedRoute allowedRoles={['student']}>
+            <ShellRoute>
+              <StudentBuyPlanPage />
+            </ShellRoute>
+          </ProtectedRoute>
+        }
+      />
+      <Route
         path="/student/classes/available"
         element={
           <ProtectedRoute allowedRoles={['student']}>
@@ -526,6 +539,29 @@ export default function App() {
           <ProtectedRoute allowedRoles={['student']}>
             <ShellRoute>
               <StudentClassesPage mode="history" />
+            </ShellRoute>
+          </ProtectedRoute>
+        }
+      />
+
+      {/* Pagos MercadoPago — rutas top-level que el backend hardcodea en el callback
+          OAuth (/ajustes/pagos) y en los back_urls del checkout (/pagos/resultado). */}
+      <Route
+        path="/ajustes/pagos"
+        element={
+          <ProtectedRoute allowedRoles={['gym_admin', 'superadmin']}>
+            <ShellRoute>
+              <GymAdminPaymentsSettingsPage />
+            </ShellRoute>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/pagos/resultado"
+        element={
+          <ProtectedRoute allowedRoles={['student']}>
+            <ShellRoute>
+              <PaymentResultPage />
             </ShellRoute>
           </ProtectedRoute>
         }

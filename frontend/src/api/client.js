@@ -611,4 +611,38 @@ export const getMyMemberships = async () => {
   return data
 }
 
+// Pagos con MercadoPago (Checkout Pro + OAuth por organización). Todo por la
+// instancia autenticada `api`: los cuatro endpoints exigen token (nunca publicApi).
+// La activación real del plan la confirma el webhook del backend, no estas llamadas.
+export const paymentsApi = {
+  // gym_admin/superadmin: estado de la conexión de la org.
+  // → {status:'disconnected', provider} o {provider, status:'connected', provider_user_id,
+  //    is_sandbox, connected_at, token_expires_at}
+  getAccount: async () => {
+    const { data } = await api.get('/payments/account/')
+    return data
+  },
+  // gym_admin/superadmin: inicia OAuth. → {authorization_url}
+  connect: async () => {
+    const { data } = await api.post('/payments/connect/')
+    return data
+  },
+  // student: crea PaymentTransaction + preference. Exactamente uno de planId
+  // (comprar/renovar plan) o targetStudentPlanId (pagar matrícula pendiente).
+  // → {transaction_id, redirect_url}
+  checkout: async ({ planId, targetStudentPlanId } = {}) => {
+    const payload = {}
+    if (planId) payload.plan_id = planId
+    if (targetStudentPlanId) payload.target_student_plan_id = targetStudentPlanId
+    const { data } = await api.post('/payments/checkout/', payload)
+    return data
+  },
+  // student dueño de la tx: estado informativo para el polling del back_url.
+  // → {id, status, status_detail, amount, currency}
+  transactionStatus: async (id) => {
+    const { data } = await api.get(`/payments/transactions/${id}/status/`)
+    return data
+  },
+}
+
 export default api

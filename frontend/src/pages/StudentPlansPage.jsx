@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
-import { getMyMemberships } from '../api/client'
+import { getMyMemberships, paymentsApi } from '../api/client'
 import DashboardHeader from '../components/DashboardHeader'
 import DataTable from '../components/ui/DataTable'
 import ValueBadge from '../components/ui/ValueBadge'
 import { getPlanAlertInfo } from '../utils/planAlerts'
+import { clp } from '../utils/format'
 
 function firstApiError(detail, fallback) {
   if (!detail) {
@@ -37,6 +38,25 @@ export default function StudentPlansPage() {
   const [plans, setPlans] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [payingId, setPayingId] = useState(null)
+
+  const handlePayEnrollment = async (row) => {
+    setPayingId(row.id)
+    setError('')
+    try {
+      const { redirect_url: url } = await paymentsApi.checkout({ targetStudentPlanId: row.id })
+      if (!url) throw new Error('sin url')
+      window.location.assign(url)
+    } catch (apiError) {
+      setPayingId(null)
+      const statusCode = apiError?.response?.status
+      if (statusCode === 409) {
+        setError('El gimnasio aún no habilitó pagos en línea. Escríbeles para activarlo.')
+      } else {
+        setError(firstApiError(apiError?.response?.data, 'No se pudo iniciar el pago de la matrícula.'))
+      }
+    }
+  }
 
   const loadData = async () => {
     setLoading(true)
@@ -85,8 +105,37 @@ export default function StudentPlansPage() {
           return <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${alert.className}`}>{alert.label}</span>
         },
       },
+      {
+        key: 'matricula',
+        label: 'Matrícula',
+        sortable: false,
+        render: (row) => {
+          const status = row.enrollment_fee_status?.status
+          const fee = Number(row.enrollment_fee || 0)
+          if (status === 'paid') {
+            return (
+              <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-200">
+                Pagada
+              </span>
+            )
+          }
+          if ((status === 'pending' || status === 'overdue') && fee > 0) {
+            return (
+              <button
+                type="button"
+                onClick={() => handlePayEnrollment(row)}
+                disabled={payingId === row.id}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-brand-orange/50 px-2.5 py-1 text-xs font-semibold text-brand-orange transition hover:bg-brand-orange/10 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {payingId === row.id ? 'Redirigiendo…' : `Pagar matrícula · ${clp(fee)}`}
+              </button>
+            )
+          }
+          return <span className="text-xs text-brand-dim">—</span>
+        },
+      },
     ],
-    [],
+    [payingId],
   )
 
   return (
