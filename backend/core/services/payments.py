@@ -45,11 +45,8 @@ def connect_callback(*, code, state) -> PaymentAccount:
     provider = get_payment_provider()
     tokens = provider.exchange_code(code=code, redirect_uri=settings.MP_OAUTH_REDIRECT_URI)
     now = timezone.now()
-    # El campo `provider` es el identificador de negocio (siempre 'mercadopago' hoy),
-    # independiente del backend concreto que resuelve get_payment_provider() (p.ej.
-    # 'fake' en tests vía settings.PAYMENTS_PROVIDER).
     account, _ = PaymentAccount.objects.update_or_create(
-        organization=organization, provider='mercadopago',
+        organization=organization, provider=provider.name,
         defaults=dict(
             provider_user_id=tokens.provider_user_id,
             access_token=tokens.access_token,
@@ -69,9 +66,7 @@ def get_valid_access_token(*, account) -> str:
                 or account.token_expires_at <= timezone.now() + REFRESH_MARGIN)
     if not expiring:
         return account.access_token
-    # Sin argumento: resuelve por settings.PAYMENTS_PROVIDER (permite swap a 'fake' en
-    # tests). account.provider es el identificador de negocio, no el backend concreto.
-    provider = get_payment_provider()
+    provider = get_payment_provider(account.provider)
     try:
         tokens = provider.refresh_tokens(refresh_token=account.refresh_token)
     except PaymentProviderError:

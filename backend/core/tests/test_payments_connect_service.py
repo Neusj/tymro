@@ -25,7 +25,7 @@ def test_connect_callback_creates_account(make_organization):
     state = payments._sign_state(org.id)          # helper interno para el test
     acc = payments.connect_callback(code='CODE', state=state)
     assert acc.organization_id == org.id
-    assert acc.provider == 'mercadopago'
+    assert acc.provider == 'fake'
     assert acc.access_token == 'fake-access'       # descifrado
     assert acc.status == PaymentAccount.STATUS_CONNECTED
     assert acc.provider_user_id == 'fake-collector'
