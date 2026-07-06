@@ -886,8 +886,10 @@ class PaymentAccount(TimestampedModel):
     provider_user_id = models.CharField(max_length=64)
     access_token = EncryptedTextField()
     refresh_token = EncryptedTextField()
-    public_key = models.CharField(max_length=255, null=True, blank=True)
-    scope = models.CharField(max_length=255, null=True, blank=True)
+    # Strings opacos que devuelve el proveedor OAuth (MP): el scope es una lista
+    # larga separada por espacios que supera varchar(255). Sin límite de longitud.
+    public_key = models.TextField(null=True, blank=True)
+    scope = models.TextField(null=True, blank=True)
     token_expires_at = models.DateTimeField(null=True, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_CONNECTED)
     is_sandbox = models.BooleanField(default=False)

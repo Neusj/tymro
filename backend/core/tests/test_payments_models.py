@@ -28,6 +28,35 @@ def test_payment_account_tokens_encrypted_at_rest(db, enc_key, make_organization
     assert raw != 'AT'                        # cifrado en DB
 
 
+@pytest.mark.parametrize('field_name', ['scope', 'public_key'])
+def test_provider_string_fields_are_unlimited_text(field_name):
+    """``scope`` y ``public_key`` guardan strings opacos que devuelve MercadoPago
+    en el intercambio OAuth. MP retorna un ``scope`` largo (lista separada por
+    espacios) que supera ``varchar(255)`` y en Postgres rompe con
+    "value too long for type character varying(255)". Deben persistir como TEXT
+    ilimitado. Se verifica el TIPO de columna (no un guardado) porque la suite
+    corre en SQLite, que ignora el límite de longitud del varchar."""
+    field = PaymentAccount._meta.get_field(field_name)
+    assert field.get_internal_type() == 'TextField', (
+        f'{field_name} debe ser TextField para no capar a varchar(255)')
+    assert field.max_length is None, f'{field_name} no debe tener max_length'
+
+
+def test_payment_account_stores_long_provider_scope(db, enc_key, make_organization):
+    """Round-trip con un ``scope`` >255 chars como el que devuelve MercadoPago.
+    (En SQLite pasa aunque el campo fuera varchar; sí protege contra la regresión
+    en Postgres, donde el límite se aplica.)"""
+    org = make_organization()
+    long_scope = 'read write offline_access ' * 20   # ~520 chars
+    acc = PaymentAccount.objects.create(
+        organization=org, provider='mercadopago', provider_user_id='u1',
+        access_token='AT', refresh_token='RT', scope=long_scope,
+        status=PaymentAccount.STATUS_CONNECTED,
+    )
+    acc.refresh_from_db()
+    assert acc.scope == long_scope
+
+
 def test_payment_account_unique_per_org_provider(db, enc_key, make_organization):
     org = make_organization()
     PaymentAccount.objects.create(organization=org, provider='mercadopago',
