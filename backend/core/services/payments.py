@@ -6,11 +6,12 @@ from decimal import Decimal
 
 from django.conf import settings
 from django.core import signing
+from django.db import transaction as db_transaction
 from django.utils import timezone
 
 from core.models import PaymentAccount, PaymentTransaction
 from .providers import PaymentProviderError, get_payment_provider
-from .providers.base import BackUrls, CheckoutItem
+from .providers.base import BackUrls, CheckoutItem, PaymentStatus
 
 STATE_SALT = 'payments-oauth'
 STATE_MAX_AGE = 600          # 10 minutos
@@ -27,6 +28,10 @@ class CheckoutError(Exception):
 
 class NotConnected(CheckoutError):
     """La organización no tiene cuenta de pago conectada."""
+
+
+class PaymentIntegrityError(Exception):
+    """El pago no cuadra con la transacción (monto/collector) — posible forja."""
 
 
 def _sign_state(organization_id) -> str:
@@ -153,3 +158,65 @@ def create_checkout(*, organization, user, plan=None, target_student_plan=None):
     tx.provider_preference_id = session.provider_preference_id
     tx.save(update_fields=['provider_preference_id', 'updated_at'])
     return tx, session.redirect_url
+
+
+def apply_provider_payment(*, tx, payment):
+    """Núcleo idempotente. Debe llamarse por webhook y por reconcile."""
+    with db_transaction.atomic():
+        tx = PaymentTransaction.objects.select_for_update().get(pk=tx.pk)
+        if tx.processed_at is not None:
+            return tx   # ya activado: no-op
+
+        account = PaymentAccount.objects.filter(
+            organization_id=tx.organization_id, provider=tx.provider).first()
+        if (payment.collector_id and account and account.provider_user_id
+                and str(payment.collector_id) != str(account.provider_user_id)):
+            raise PaymentIntegrityError('collector_id no coincide con la cuenta del gym.')
+        if payment.external_reference and str(payment.external_reference) != str(tx.id):
+            raise PaymentIntegrityError('external_reference no coincide.')
+
+        tx.provider_payment_id = payment.provider_payment_id
+        tx.status = payment.status.value
+        tx.status_detail = payment.status_detail
+        tx.raw_provider_payload = payment.raw
+
+        if payment.status == PaymentStatus.APPROVED:
+            if payment.amount != tx.amount:
+                raise PaymentIntegrityError(f'monto {payment.amount} != esperado {tx.amount}')
+            from .plans import activate_student_plan
+            if tx.plan_id:
+                sp = activate_student_plan(student=tx.user, plan=tx.plan,
+                                           start_date=timezone.localdate())
+                tx.student_plan = sp
+            elif tx.target_student_plan_id:
+                sp = tx.target_student_plan
+                sp.enrollment_fee_paid_at = timezone.now()
+                sp.save(update_fields=['enrollment_fee_paid_at', 'updated_at'])
+                tx.student_plan = sp
+            tx.processed_at = timezone.now()
+
+        tx.save()
+        return tx
+
+
+def process_payment_notification(*, tx_id, provider_payment_id):
+    tx = PaymentTransaction.objects.filter(id=tx_id).select_related(
+        'organization', 'user', 'plan', 'target_student_plan').first()
+    if tx is None:
+        return None
+    account = PaymentAccount.objects.filter(
+        organization_id=tx.organization_id, provider=tx.provider).first()
+    if account is None:
+        return None
+    provider = get_payment_provider(tx.provider)
+    access_token = get_valid_access_token(account=account)
+    payment = provider.fetch_payment(access_token=access_token,
+                                     provider_payment_id=provider_payment_id)
+    return apply_provider_payment(tx=tx, payment=payment)
+
+
+def reconcile_transaction(*, tx):
+    if tx.provider_payment_id:
+        return process_payment_notification(tx_id=tx.id,
+                                            provider_payment_id=tx.provider_payment_id)
+    return tx
