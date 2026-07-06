@@ -38,6 +38,52 @@ def test_oauth_callback_creates_account_and_redirects(api_client, make_organizat
     assert PaymentAccount.objects.filter(organization=org).exists()
 
 
+def test_oauth_callback_redirects_to_org_subdomain(api_client, make_organization, settings):
+    # Tras procesar el callback (que llega al apex), el backend redirige al SUBDOMINIO
+    # del gym para que el gym_admin vuelva con su sesión intacta (no al apex).
+    settings.FRONTEND_URL = 'https://tymroapp.com'
+    org = make_organization()   # subdomain = 'org-N'
+    state = payments._sign_state(org.id)
+    resp = api_client.get('/api/payments/oauth/callback/', {'code': 'C', 'state': state})
+    assert resp.status_code == 302
+    assert resp['Location'] == f'https://{org.subdomain}.tymroapp.com/ajustes/pagos?connected=1'
+
+
+def test_oauth_callback_invalid_state_redirects_to_apex(api_client, settings):
+    # Sin org resoluble (state inválido), no hay subdominio al cual volver: cae al apex.
+    settings.FRONTEND_URL = 'https://tymroapp.com'
+    resp = api_client.get('/api/payments/oauth/callback/', {'code': 'C', 'state': 'bogus'})
+    assert resp.status_code == 302
+    assert resp['Location'] == 'https://tymroapp.com/ajustes/pagos?connected=0&error=state'
+
+
+def test_frontend_base_for_organization_prepends_subdomain(settings):
+    settings.FRONTEND_URL = 'https://tymroapp.com'
+
+    class _Org:
+        subdomain = 'acme'
+
+    assert payments.frontend_base_for_organization(_Org()) == 'https://acme.tymroapp.com'
+
+
+def test_frontend_base_for_organization_preserves_scheme_and_port(settings):
+    settings.FRONTEND_URL = 'http://localhost:5173'
+
+    class _Org:
+        subdomain = 'acme'
+
+    assert payments.frontend_base_for_organization(_Org()) == 'http://acme.localhost:5173'
+
+
+def test_frontend_base_for_organization_without_subdomain_falls_back_to_apex(settings):
+    settings.FRONTEND_URL = 'https://tymroapp.com'
+
+    class _Org:
+        subdomain = ''
+
+    assert payments.frontend_base_for_organization(_Org()) == 'https://tymroapp.com'
+
+
 def test_account_view_scoped_to_org(api_client, make_organization, make_user):
     org = make_organization()
     payments.connect_callback(code='C', state=payments._sign_state(org.id))

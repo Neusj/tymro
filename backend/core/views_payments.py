@@ -43,13 +43,21 @@ class PaymentOAuthCallbackView(APIView):
     def get(self, request):
         code = request.GET.get('code')
         state = request.GET.get('state')
-        frontend = getattr(settings, 'FRONTEND_URL', '') or settings.PAYMENTS_APEX_BASE_URL
+        # Apex: destino de fallback cuando aún no sabemos la org (no hay subdominio al cual volver).
+        apex = (getattr(settings, 'FRONTEND_URL', '') or settings.PAYMENTS_APEX_BASE_URL).rstrip('/')
         if not code or not state:
-            return redirect(f'{frontend}/ajustes/pagos?connected=0')
+            return redirect(f'{apex}/ajustes/pagos?connected=0')
+        # Resolver la org del state (el callback llega al apex; el tenant viaja en el state)
+        # para redirigir al SUBDOMINIO del gym, así el gym_admin vuelve con su sesión intacta.
+        try:
+            organization = payments.organization_from_state(state)
+        except payments.InvalidState:
+            return redirect(f'{apex}/ajustes/pagos?connected=0&error=state')
+        frontend = payments.frontend_base_for_organization(organization)
         try:
             payments.connect_callback(code=code, state=state)
         except payments.InvalidState:
-            return redirect(f'{frontend}/ajustes/pagos?connected=0&error=state')
+            return redirect(f'{apex}/ajustes/pagos?connected=0&error=state')
         except Exception as exc:
             logger.warning('Fallo en callback OAuth de pagos (state válido, exchange falló): %s', exc)
             return redirect(f'{frontend}/ajustes/pagos?connected=0&error=exchange')

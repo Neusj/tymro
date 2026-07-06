@@ -3,6 +3,7 @@ delega en get_payment_provider(). Aísla la lógica de negocio de las views.
 """
 from datetime import timedelta
 from decimal import Decimal
+from urllib.parse import urlsplit, urlunsplit
 
 from django.conf import settings
 from django.core import signing
@@ -51,6 +52,45 @@ def build_connect_url(*, organization) -> str:
     provider = get_payment_provider()
     state = _sign_state(organization.id)
     return provider.get_authorization_url(state=state, redirect_uri=settings.MP_OAUTH_REDIRECT_URI)
+
+
+def organization_from_state(state):
+    """Valida el ``state`` firmado y devuelve la Organization que viaja en él.
+    Levanta InvalidState si el state es inválido/expiró o la org ya no existe.
+    Se usa en el callback OAuth para saber a qué subdominio volver (el callback
+    llega al apex; el tenant no viaja en el host, solo en el state)."""
+    from core.models import Organization
+    org_id = _load_state(state)
+    try:
+        return Organization.objects.get(id=org_id)
+    except Organization.DoesNotExist as exc:
+        raise InvalidState('la organización del state no existe') from exc
+
+
+def _apex_frontend_base() -> str:
+    return (getattr(settings, 'FRONTEND_URL', '') or settings.PAYMENTS_APEX_BASE_URL).rstrip('/')
+
+
+def frontend_base_for_organization(organization) -> str:
+    """Base del frontend para volver al SUBDOMINIO del gym tras el callback OAuth.
+
+    Antepone el subdominio de la organización al host de ``FRONTEND_URL`` preservando
+    esquema y puerto (ej. ``https://tymroapp.com`` → ``https://<sub>.tymroapp.com``;
+    ``http://localhost:5173`` → ``http://<sub>.localhost:5173``). Si la org no tiene
+    subdominio, cae al apex (``FRONTEND_URL``). NO cambia el ``redirect_uri`` de OAuth
+    ni la ``notification_url`` del webhook: solo el destino del redirect posterior."""
+    apex = _apex_frontend_base()
+    subdomain = (getattr(organization, 'subdomain', '') or '').strip().lower()
+    if not subdomain:
+        return apex
+    parts = urlsplit(apex)
+    host = parts.hostname or ''
+    if not host or host.split('.')[0] == subdomain:
+        return apex   # sin host utilizable o ya es el subdominio → no duplicar
+    netloc = f'{subdomain}.{host}'
+    if parts.port:
+        netloc = f'{netloc}:{parts.port}'
+    return urlunsplit((parts.scheme, netloc, parts.path.rstrip('/'), '', ''))
 
 
 def connect_callback(*, code, state) -> PaymentAccount:
