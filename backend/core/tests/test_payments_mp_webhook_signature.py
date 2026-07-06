@@ -2,6 +2,8 @@ import hashlib
 import hmac
 import json
 
+import pytest
+
 from core.services.providers.mercadopago import MercadoPagoProvider
 
 
@@ -33,3 +35,10 @@ def test_parse_webhook_extracts_payment_id():
     assert env.type == 'payment'
     assert env.action == 'payment.updated'
     assert env.provider_payment_id == '999'
+
+
+@pytest.mark.parametrize('raw', [b'[]', b'42', b'null', b'"x"', b'{"data": "oops"}', b'not json'])
+def test_parse_webhook_handles_non_object_bodies(raw):
+    p = MercadoPagoProvider(client_id='A', client_secret='S', webhook_secret='W')
+    env = p.parse_webhook(headers={}, raw_body=raw)
+    assert env.provider_payment_id is None   # no crash, safe default

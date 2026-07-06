@@ -178,7 +178,11 @@ class MercadoPagoProvider(PaymentProvider):
             body = json.loads(raw_body or b'{}')
         except ValueError:
             body = {}
-        data = body.get('data') or {}
+        if not isinstance(body, dict):
+            body = {}
+        data = body.get('data')
+        if not isinstance(data, dict):
+            data = {}
         pid = data.get('id')
         return WebhookEnvelope(type=body.get('type', ''), action=body.get('action'),
                                provider_payment_id=str(pid) if pid is not None else None)
