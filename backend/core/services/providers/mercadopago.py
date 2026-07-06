@@ -8,6 +8,9 @@ VERIFICAR CONTRA LA DOC VIGENTE DE MP AL IMPLEMENTAR/PROBAR:
 - TTL real de expires_in (se usa el valor devuelto, no se hardcodea).
 - Formato del header x-signature y del manifest (ver Task 12).
 """
+import hashlib
+import hmac
+import json
 from decimal import Decimal
 from urllib.parse import urlencode
 
@@ -144,9 +147,38 @@ class MercadoPagoProvider(PaymentProvider):
             raw=d,
         )
 
-    # --- Webhook (Task 12): stub por ahora ---
-    def verify_webhook(self, **kwargs):
-        raise NotImplementedError('verify_webhook: ver Task 12')
+    # --- Webhook (Task 12) ---
+    def _parse_x_signature(self, header_value):
+        # "ts=1720000000,v1=abc123..."
+        parts = {}
+        for chunk in (header_value or '').split(','):
+            if '=' in chunk:
+                k, v = chunk.split('=', 1)
+                parts[k.strip()] = v.strip()
+        return parts.get('ts'), parts.get('v1')
 
-    def parse_webhook(self, **kwargs):
-        raise NotImplementedError('parse_webhook: ver Task 12')
+    def verify_webhook(self, *, headers, raw_body):
+        h = {k.lower(): v for k, v in dict(headers).items()}
+        ts, v1 = self._parse_x_signature(h.get('x-signature'))
+        request_id = h.get('x-request-id', '')
+        if not ts or not v1:
+            return False
+        try:
+            data_id = str(json.loads(raw_body or b'{}').get('data', {}).get('id', ''))
+        except (ValueError, AttributeError):
+            data_id = ''
+        manifest = f'id:{data_id};request-id:{request_id};ts:{ts};'
+        expected = hmac.new(self.webhook_secret.encode(), manifest.encode(),
+                            hashlib.sha256).hexdigest()
+        return hmac.compare_digest(expected, v1)
+
+    def parse_webhook(self, *, headers, raw_body):
+        from .base import WebhookEnvelope
+        try:
+            body = json.loads(raw_body or b'{}')
+        except ValueError:
+            body = {}
+        data = body.get('data') or {}
+        pid = data.get('id')
+        return WebhookEnvelope(type=body.get('type', ''), action=body.get('action'),
+                               provider_payment_id=str(pid) if pid is not None else None)
