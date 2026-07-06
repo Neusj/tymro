@@ -24,6 +24,7 @@ import LoginPage from './pages/LoginPage'
 import ForgotPasswordPage from './pages/ForgotPasswordPage'
 import ResetPasswordPage from './pages/ResetPasswordPage'
 import GymPublicRegisterPage from './pages/GymPublicRegisterPage'
+import TrialLinkRedirect from './pages/TrialLinkRedirect'
 import VerifyEmailPage from './pages/VerifyEmailPage'
 import TrialBookingPage from './pages/TrialBookingPage'
 import PlanListPage from './pages/PlanListPage'
@@ -71,7 +72,8 @@ export default function App() {
       <Route path="/login" element={<LoginPage />} />
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
       <Route path="/reset-password" element={<ResetPasswordPage />} />
-      <Route path="/:slug/clase-gratis" element={<GymPublicRegisterPage />} />
+      <Route path="/clase-gratis" element={<GymPublicRegisterPage />} />
+      <Route path="/:slug/clase-gratis" element={<TrialLinkRedirect />} />
       <Route path="/verify-email" element={<VerifyEmailPage />} />
       <Route
         path="/trial"

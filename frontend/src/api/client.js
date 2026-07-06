@@ -113,20 +113,24 @@ export const authApi = {
 // Usa `publicApi` (sin Authorization, sin redirect 401): la persona que escanea
 // el QR no está autenticada y un token viejo en el navegador no debe interferir.
 export const registrationApi = {
-  // Valida el slug del gym y devuelve su branding para la landing.
-  validateInvite: async ({ slug }) => {
-    const { data } = await publicApi.get('/public/invite/', { params: { slug } })
+  // Resuelve el gym por el SUBDOMINIO del host (sin slug) y devuelve su branding.
+  // `slug` es opcional: solo lo usan los links viejos servidos en el apex (back-compat).
+  validateInvite: async ({ slug } = {}) => {
+    const { data } = await publicApi.get('/public/invite/', { params: slug ? { slug } : {} })
     return data
   },
   register: async ({ slug, firstName, lastName, email, password, phone }) => {
-    const { data } = await publicApi.post('/public/register/', {
-      slug,
+    const payload = {
       first_name: firstName,
       last_name: lastName,
       email,
       password,
       phone,
-    })
+    }
+    if (slug) {
+      payload.slug = slug
+    }
+    const { data } = await publicApi.post('/public/register/', payload)
     return data
   },
   verifyEmail: async ({ uid, token }) => {

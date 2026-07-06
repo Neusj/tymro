@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import { registrationApi, resolveMediaUrl } from '../api/client'
 
 const STATUS = {
@@ -25,8 +25,6 @@ function Backdrop() {
 }
 
 export default function GymPublicRegisterPage() {
-  const { slug } = useParams()
-
   const [status, setStatus] = useState(STATUS.CHECKING)
   const [org, setOrg] = useState(null)
   const [form, setForm] = useState({ firstName: '', lastName: '', email: '', password: '', phone: '' })
@@ -37,12 +35,9 @@ export default function GymPublicRegisterPage() {
   useEffect(() => {
     let active = true
     const validate = async () => {
-      if (!slug) {
-        setStatus(STATUS.INVALID)
-        return
-      }
       try {
-        const data = await registrationApi.validateInvite({ slug })
+        // La org se resuelve por el subdominio del host (sin slug en el path).
+        const data = await registrationApi.validateInvite()
         if (active) {
           setOrg(data)
           setStatus(STATUS.READY)
@@ -57,7 +52,7 @@ export default function GymPublicRegisterPage() {
     return () => {
       active = false
     }
-  }, [slug])
+  }, [])
 
   const brandStyle = useMemo(
     () => ({
@@ -75,7 +70,7 @@ export default function GymPublicRegisterPage() {
     setExistingAccount(false)
     setSubmitting(true)
     try {
-      await registrationApi.register({ slug, ...form })
+      await registrationApi.register({ ...form })
       setStatus(STATUS.DONE)
     } catch (err) {
       const data = err?.response?.data
