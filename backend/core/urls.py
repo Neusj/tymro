@@ -2,6 +2,11 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
 from .importer.views import ImporterViewSet
+from .views_payments import (
+    PaymentAccountView,
+    PaymentConnectView,
+    PaymentOAuthCallbackView,
+)
 from .views import (
     BranchViewSet,
     AttendanceQrCheckInView,
@@ -76,5 +81,8 @@ urlpatterns = [
     path('attendance-qr/screen-code/', AttendanceQrScreenCodeView.as_view()),
     path('attendance-qr/screen-session/', AttendanceQrScreenSessionView.as_view()),
     path('my-recurring-enrollments/', RecurringEnrollmentViewSet.as_view({'get': 'my_recurring'})),
+    path('payments/connect/', PaymentConnectView.as_view(), name='payments-connect'),
+    path('payments/oauth/callback/', PaymentOAuthCallbackView.as_view(), name='payments-oauth-callback'),
+    path('payments/account/', PaymentAccountView.as_view(), name='payments-account'),
     path('', include(router.urls)),
 ]

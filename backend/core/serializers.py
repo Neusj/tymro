@@ -23,6 +23,7 @@ from .models import (
     Plan,
     MembershipPlan,
     Organization,
+    PaymentAccount,
     Person,
     RecurringEnrollment,
     StudentPlan,
@@ -1601,6 +1602,12 @@ class PublicTrialClassSerializer(serializers.ModelSerializer):
         return max(0, obj.capacity - active)
 
 
+class PaymentAccountSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PaymentAccount
+        fields = ['provider', 'status', 'provider_user_id', 'is_sandbox',
+                  'connected_at', 'token_expires_at']
+        read_only_fields = fields
 
 
 

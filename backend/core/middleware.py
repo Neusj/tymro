@@ -20,7 +20,10 @@ from django.http import JsonResponse
 from .models import RESERVED_SUBDOMAINS, Organization
 
 # Prefijos de path que NO exigen un subdominio válido (infra/estáticos/SPA/health).
-_ALLOWLIST_PREFIXES = ('/admin', '/static', '/media', '/api/health')
+# Defensivo: callback y webhook de pagos llegan al apex (request.organization ya es
+# None sin 404), pero esto los protege si un host tipo túnel se resolviera como subdominio.
+_ALLOWLIST_PREFIXES = ('/admin', '/static', '/media', '/api/health',
+                       '/api/payments/webhook', '/api/payments/oauth/callback')
 
 
 def _base_domain():
