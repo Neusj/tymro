@@ -1,4 +1,5 @@
-﻿from datetime import timedelta
+﻿import uuid
+from datetime import timedelta
 
 from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator
@@ -7,6 +8,8 @@ from django.utils import timezone
 import re
 import secrets
 import string
+
+from .fields import EncryptedTextField
 
 
 # Subdominios reservados para la plataforma: ninguna organización puede tomarlos
@@ -871,5 +874,95 @@ class RecurringEnrollment(TimestampedModel):
             raise ValidationError({'start_date': 'La fecha de inicio supera el termino de la plantilla.'})
         if self.end_date and self.class_template.end_date and self.end_date > self.class_template.end_date:
             raise ValidationError({'end_date': 'La recurrencia no puede terminar despues de la plantilla.'})
+
+
+class PaymentAccount(TimestampedModel):
+    STATUS_CONNECTED = 'connected'
+    STATUS_DISCONNECTED = 'disconnected'
+    STATUS_CHOICES = [(STATUS_CONNECTED, 'Conectada'), (STATUS_DISCONNECTED, 'Desconectada')]
+
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='payment_accounts')
+    provider = models.CharField(max_length=30, default='mercadopago')
+    provider_user_id = models.CharField(max_length=64)
+    access_token = EncryptedTextField()
+    refresh_token = EncryptedTextField()
+    public_key = models.CharField(max_length=255, null=True, blank=True)
+    scope = models.CharField(max_length=255, null=True, blank=True)
+    token_expires_at = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_CONNECTED)
+    is_sandbox = models.BooleanField(default=False)
+    connected_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        unique_together = [('organization', 'provider')]
+
+    def __str__(self):
+        return f'{self.organization} · {self.provider} ({self.status})'
+
+
+class PaymentTransaction(TimestampedModel):
+    # Lista literal (evita import circular models -> core.services.providers.base).
+    # Debe mantenerse en sync con core.services.providers.base.PaymentStatus.
+    STATUS_CHOICES = [
+        ('pending', 'pending'),
+        ('in_process', 'in_process'),
+        ('approved', 'approved'),
+        ('rejected', 'rejected'),
+        ('cancelled', 'cancelled'),
+        ('refunded', 'refunded'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='payment_transactions')
+    user = models.ForeignKey('accounts.CustomUser', on_delete=models.CASCADE, related_name='payment_transactions')
+    provider = models.CharField(max_length=30, default='mercadopago')
+    provider_preference_id = models.CharField(max_length=64, null=True, blank=True)
+    provider_payment_id = models.CharField(max_length=64, null=True, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    status_detail = models.CharField(max_length=120, null=True, blank=True)
+    currency = models.CharField(max_length=3, default='CLP')
+    plan = models.ForeignKey(Plan, on_delete=models.SET_NULL, null=True, blank=True,
+                             related_name='payment_transactions')
+    plan_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    enrollment_fee_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    target_student_plan = models.ForeignKey(StudentPlan, on_delete=models.SET_NULL, null=True, blank=True,
+                                            related_name='enrollment_fee_transactions')
+    student_plan = models.ForeignKey(StudentPlan, on_delete=models.SET_NULL, null=True, blank=True,
+                                     related_name='origin_transactions')
+    processed_at = models.DateTimeField(null=True, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    raw_provider_payload = models.JSONField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['provider', 'provider_payment_id'],
+                condition=models.Q(provider_payment_id__isnull=False),
+                name='uniq_provider_payment',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['organization', 'status']),
+            models.Index(fields=['user', 'status']),
+        ]
+
+    def __str__(self):
+        return f'{self.id} · {self.status} · {self.amount} {self.currency}'
+
+
+class WebhookEvent(TimestampedModel):
+    provider = models.CharField(max_length=30, default='mercadopago')
+    provider_payment_id = models.CharField(max_length=64, null=True, blank=True)
+    transaction = models.ForeignKey(PaymentTransaction, on_delete=models.SET_NULL, null=True, blank=True,
+                                    related_name='webhook_events')
+    raw_body = models.TextField()
+    headers = models.JSONField(default=dict, blank=True)
+    processed_ok = models.BooleanField(default=False)
+    note = models.CharField(max_length=255, null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
 
 
