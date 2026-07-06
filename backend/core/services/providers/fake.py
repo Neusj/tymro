@@ -17,17 +17,20 @@ from .base import (BackUrls, CheckoutItem, CheckoutSession, OAuthTokens,
                    PaymentProvider, PaymentStatus, ProviderPayment, WebhookEnvelope)
 
 _CACHE_KEY = 'fake_payment_provider:payments'
+_PREFS_CACHE_KEY = 'fake_payment_provider:preferences'
 
 
 class FakePaymentProvider(PaymentProvider):
     name = 'fake'
 
-    def __init__(self):
-        self.created_preferences = []
-
     @property
     def _payments(self):
         return cache.get(_CACHE_KEY) or {}
+
+    @property
+    def created_preferences(self):
+        # En cache: la instancia se descarta por llamada, así el test lee tras el checkout.
+        return cache.get(_PREFS_CACHE_KEY) or []
 
     # --- helpers de test ---
     def queue_payment(self, *, external_reference, status, amount,
@@ -57,8 +60,14 @@ class FakePaymentProvider(PaymentProvider):
     def create_checkout(self, *, access_token, external_reference, items, payer_email,
                         back_urls, notification_url, expires_at):
         pref_id = f'pref-{external_reference}'
-        self.created_preferences.append(dict(external_reference=external_reference,
-                                             notification_url=notification_url))
+        prefs = self.created_preferences
+        prefs.append(dict(
+            external_reference=external_reference,
+            notification_url=notification_url,
+            back_urls=(dict(success=back_urls.success, pending=back_urls.pending,
+                            failure=back_urls.failure) if back_urls else None),
+        ))
+        cache.set(_PREFS_CACHE_KEY, prefs, timeout=None)
         return CheckoutSession(redirect_url=f'https://fake.mp/checkout/{pref_id}',
                                provider_preference_id=pref_id)
 

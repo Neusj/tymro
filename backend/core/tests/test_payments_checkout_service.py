@@ -4,6 +4,7 @@ import pytest
 
 from core.models import Plan, PaymentTransaction, StudentPlan
 from core.services import payments
+from core.services.providers.fake import FakePaymentProvider
 
 
 @pytest.fixture(autouse=True)
@@ -69,6 +70,29 @@ def test_checkout_rejects_plan_from_other_org(connected_org, make_organization, 
                                        duration_days=30, price=1000.0)
     with pytest.raises(payments.CheckoutError):
         payments.create_checkout(organization=org, user=student, plan=foreign_plan)
+
+
+def test_checkout_back_urls_point_to_org_subdomain(connected_org, make_user, settings):
+    settings.BASE_DOMAIN = 'tymroapp.com'
+    settings.FRONTEND_URL = 'https://tymroapp.com'
+    org = connected_org            # subdominio 'org-1'
+    student = make_user('stu6', organization=org, role='student')
+    plan = Plan.objects.create(organization=org, name='Mensual', plan_type='monthly',
+                               total_classes=12, unlimited_classes=False, duration_days=30,
+                               price=30000.0, discount_percentage=0)
+    tx, _ = payments.create_checkout(organization=org, user=student, plan=plan)
+
+    pref = FakePaymentProvider().created_preferences[-1]
+    expected = f'https://{org.subdomain}.tymroapp.com/pagos/resultado?tx={tx.id}'
+    assert pref['back_urls'] == {'success': expected, 'pending': expected, 'failure': expected}
+    # regresión: NUNCA el apex (sin cert TLS válido)
+    for url in pref['back_urls'].values():
+        assert not url.startswith('https://tymroapp.com/')
+    # el webhook sí va al apex del backend
+    assert pref['notification_url'] == f'https://app.tymroapp.com/api/payments/webhook/?tx={tx.id}'
+    # Nota: una org persistida nunca queda sin subdominio (Organization.save() lo re-deriva del
+    # slug), así que el checkout siempre arma back_urls sobre el subdominio. El fallback al apex
+    # del helper (org sin subdominio / None) está cubierto en test_public_urls.py.
 
 
 def test_checkout_rejects_trial_plan(connected_org, make_user):
