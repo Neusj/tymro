@@ -9,6 +9,8 @@ from rest_framework import serializers
 
 from accounts import roles
 
+from .services.public_urls import trial_signup_url
+
 from .models import (
     Attendance,
     Branch,
@@ -139,8 +141,7 @@ class OrganizationSerializer(serializers.ModelSerializer):
         return fields
 
     def get_public_registration_url(self, obj):
-        base = settings.FRONTEND_URL.rstrip('/')
-        return f'{base}/{obj.slug}/clase-gratis'
+        return trial_signup_url(obj)
 
 
 class BranchSerializer(serializers.ModelSerializer):
@@ -1521,11 +1522,17 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
 
 class PublicOrganizationBrandingSerializer(serializers.ModelSerializer):
     """Marca pública del gimnasio para la landing de registro. Solo lectura,
-    sin exponer el token ni datos internos."""
+    sin exponer el token ni datos internos. Incluye la URL pública por subdominio
+    para que el redirect de links viejos sepa a dónde saltar."""
+
+    public_registration_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Organization
-        fields = ['name', 'slug', 'logo', 'primary_color', 'secondary_color']
+        fields = ['name', 'slug', 'logo', 'primary_color', 'secondary_color', 'public_registration_url']
+
+    def get_public_registration_url(self, obj):
+        return trial_signup_url(obj)
 
 
 class PublicRegistrationSerializer(serializers.Serializer):
