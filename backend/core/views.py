@@ -620,9 +620,21 @@ def _resolve_invite_org(slug):
         return None
 
 
+def _resolve_public_org(request, slug=None):
+    """Org del flujo público: por subdominio (``request.organization``, lo setea
+    OrganizationMiddleware) y, como back-compat para links viejos servidos en el
+    apex, por ``slug``. Respeta el interruptor ``public_registration_enabled``."""
+    org = getattr(request, 'organization', None)
+    if org is not None:
+        return org if org.public_registration_enabled else None
+    if slug:
+        return _resolve_invite_org(slug)
+    return None
+
+
 class PublicInviteValidateView(APIView):
     """Valida el link público y devuelve la marca del gimnasio para la landing.
-    Slug desconocido o registro desactivado → 404."""
+    Subdominio/slug desconocido o registro desactivado → 404."""
 
     # Endpoint público: no autenticamos. Un token caducado en el header no debe
     # producir 401 en una vista AllowAny (la autenticación corre antes que el permiso).
@@ -632,7 +644,7 @@ class PublicInviteValidateView(APIView):
     throttle_scope = 'public_invite'
 
     def get(self, request):
-        organization = _resolve_invite_org(request.query_params.get('slug'))
+        organization = _resolve_public_org(request, request.query_params.get('slug'))
         if organization is None:
             return Response({'detail': 'Link inválido o desactivado.'}, status=status.HTTP_404_NOT_FOUND)
         return Response(PublicOrganizationBrandingSerializer(organization, context={'request': request}).data)
@@ -649,7 +661,7 @@ class PublicRegisterView(APIView):
     throttle_scope = 'public_register'
 
     def post(self, request):
-        organization = _resolve_invite_org(request.data.get('slug'))
+        organization = _resolve_public_org(request, request.data.get('slug'))
         if organization is None:
             return Response({'detail': 'Link inválido o desactivado.'}, status=status.HTTP_404_NOT_FOUND)
 

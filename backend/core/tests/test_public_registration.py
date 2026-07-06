@@ -224,6 +224,38 @@ def test_trial_respects_capacity(api_client, make_organization, make_user):
     assert student.has_used_trial is False
 
 
+# --- 6) Resolución por subdominio (sin slug en el path) -------------------------
+
+def test_invite_by_subdomain_without_slug(api_client, make_organization):
+    org = make_organization(name='Cross Santiago')  # subdomain 'org-1'
+    ok = api_client.get(INVITE_URL, HTTP_HOST=f'{org.subdomain}.localhost')
+    assert ok.status_code == 200
+    assert ok.json()['name'] == 'Cross Santiago'
+
+
+def test_register_by_subdomain_without_slug(api_client, make_organization):
+    org = make_organization(name='Cross Santiago')
+    from django.contrib.auth import get_user_model
+    payload = {
+        'first_name': 'Pros', 'last_name': 'Pecto',
+        'email': 'pros@example.com', 'password': STRONG_PASSWORD,
+    }
+    resp = api_client.post(REGISTER_URL, payload, format='json', HTTP_HOST=f'{org.subdomain}.localhost')
+    assert resp.status_code == 201, resp.content
+    user = get_user_model().objects.get(email__iexact='pros@example.com')
+    assert user.organization_id == org.id
+
+
+def test_disabled_registration_blocks_by_subdomain(api_client, make_organization, make_user):
+    org = make_organization(name='Org A')
+    admin = make_user('admin_a', organization=org, role='gym_admin')
+    api_client.force_authenticate(user=admin)
+    api_client.post(f'/api/organizations/{org.id}/set-public-registration/', {'enabled': False}, format='json')
+    api_client.force_authenticate(user=None)
+    # En el subdominio, con el switch apagado -> 404 (respeta el interruptor).
+    assert api_client.get(INVITE_URL, HTTP_HOST=f'{org.subdomain}.localhost').status_code == 404
+
+
 # --- 5) Rate-limit del registro público -----------------------------------------
 
 def test_public_register_is_rate_limited(api_client, make_organization):
