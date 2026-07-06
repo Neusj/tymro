@@ -69,3 +69,13 @@ def test_checkout_rejects_plan_from_other_org(connected_org, make_organization, 
                                        duration_days=30, price=1000.0)
     with pytest.raises(payments.CheckoutError):
         payments.create_checkout(organization=org, user=student, plan=foreign_plan)
+
+
+def test_checkout_rejects_trial_plan(connected_org, make_user):
+    org = connected_org
+    student = make_user('stu5', organization=org, role='student')
+    trial_plan = Plan.objects.create(organization=org, name='Trial', plan_type='trial',
+                                     total_classes=1, unlimited_classes=False,
+                                     duration_days=7, price=0.0, is_public=True, is_active=True)
+    with pytest.raises(payments.CheckoutError):
+        payments.create_checkout(organization=org, user=student, plan=trial_plan)

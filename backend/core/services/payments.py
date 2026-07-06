@@ -119,6 +119,8 @@ def create_checkout(*, organization, user, plan=None, target_student_plan=None):
     if plan is not None:
         if plan.organization_id != organization.id:
             raise CheckoutError('El plan no pertenece a la organización.')
+        if plan.plan_type in ('trial', 'giftcard'):
+            raise CheckoutError('Este plan no se puede comprar en línea.')
         discount = plan.discount_percentage or 0
         plan_amount = _clp(max(float(plan.price) * (1 - discount / 100), 0))
         items.append(CheckoutItem(title=f'Plan {plan.name}', quantity=1, unit_price=plan_amount))
@@ -169,8 +171,8 @@ def apply_provider_payment(*, tx, payment):
 
         account = PaymentAccount.objects.filter(
             organization_id=tx.organization_id, provider=tx.provider).first()
-        if (payment.collector_id and account and account.provider_user_id
-                and str(payment.collector_id) != str(account.provider_user_id)):
+        if (not payment.collector_id or not account or not account.provider_user_id
+                or str(payment.collector_id) != str(account.provider_user_id)):
             raise PaymentIntegrityError('collector_id no coincide con la cuenta del gym.')
         if payment.external_reference and str(payment.external_reference) != str(tx.id):
             raise PaymentIntegrityError('external_reference no coincide.')

@@ -50,7 +50,8 @@ class PaymentOAuthCallbackView(APIView):
             payments.connect_callback(code=code, state=state)
         except payments.InvalidState:
             return redirect(f'{frontend}/ajustes/pagos?connected=0&error=state')
-        except Exception:
+        except Exception as exc:
+            logger.warning('Fallo en callback OAuth de pagos (state válido, exchange falló): %s', exc)
             return redirect(f'{frontend}/ajustes/pagos?connected=0&error=exchange')
         return redirect(f'{frontend}/ajustes/pagos?connected=1')
 
@@ -81,7 +82,8 @@ class PaymentCheckoutView(APIView):
         plan = target = None
         if req.validated_data.get('plan_id'):
             plan = get_object_or_404(Plan, id=req.validated_data['plan_id'],
-                                     organization_id=user.organization_id)
+                                     organization_id=user.organization_id,
+                                     is_active=True, is_public=True)
         else:
             target = get_object_or_404(StudentPlan, id=req.validated_data['target_student_plan_id'],
                                        user=user)

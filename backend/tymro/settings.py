@@ -314,3 +314,8 @@ if not DEBUG:
         raise ImproperlyConfigured(
             f'Faltan variables de entorno de pagos en producción: {", ".join(_missing_payment)}'
         )
+
+    if ('localhost' in PAYMENTS_APEX_BASE_URL) or not PAYMENTS_APEX_BASE_URL.startswith('https://'):
+        raise ImproperlyConfigured(
+            'PAYMENTS_APEX_BASE_URL debe ser una URL https pública en producción'
+        )

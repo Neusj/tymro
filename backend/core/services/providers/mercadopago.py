@@ -66,6 +66,8 @@ class MercadoPagoProvider(PaymentProvider):
         if resp.status_code >= 400:
             raise PaymentProviderError(f'MP token error {resp.status_code}: {resp.text}')
         data = resp.json()
+        if 'access_token' not in data or 'refresh_token' not in data:
+            raise PaymentProviderError(f'MP token response sin access_token/refresh_token: {data}')
         return OAuthTokens(
             access_token=data['access_token'],
             refresh_token=data['refresh_token'],
@@ -158,6 +160,8 @@ class MercadoPagoProvider(PaymentProvider):
         return parts.get('ts'), parts.get('v1')
 
     def verify_webhook(self, *, headers, raw_body):
+        if not self.webhook_secret:
+            return False
         h = {k.lower(): v for k, v in dict(headers).items()}
         ts, v1 = self._parse_x_signature(h.get('x-signature'))
         request_id = h.get('x-request-id', '')

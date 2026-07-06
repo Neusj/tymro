@@ -40,6 +40,28 @@ def test_checkout_requires_student(api_client, connected_org, make_user):
     assert resp.status_code == 403
 
 
+def test_checkout_rejects_non_public_plan_404(api_client, connected_org, make_user):
+    org = connected_org
+    student = make_user('stu6', organization=org, role='student')
+    plan = Plan.objects.create(organization=org, name='Oculto', plan_type='monthly',
+                               total_classes=1, unlimited_classes=False, duration_days=30,
+                               price=1000.0, is_public=False)
+    api_client.force_authenticate(user=student)
+    resp = api_client.post('/api/payments/checkout/', {'plan_id': plan.id}, format='json')
+    assert resp.status_code == 404
+
+
+def test_checkout_rejects_inactive_plan_404(api_client, connected_org, make_user):
+    org = connected_org
+    student = make_user('stu7', organization=org, role='student')
+    plan = Plan.objects.create(organization=org, name='Inactivo', plan_type='monthly',
+                               total_classes=1, unlimited_classes=False, duration_days=30,
+                               price=1000.0, is_active=False)
+    api_client.force_authenticate(user=student)
+    resp = api_client.post('/api/payments/checkout/', {'plan_id': plan.id}, format='json')
+    assert resp.status_code == 404
+
+
 def test_status_endpoint_scoped_to_owner(api_client, connected_org, make_user):
     org = connected_org
     student = make_user('stu2', organization=org, role='student')

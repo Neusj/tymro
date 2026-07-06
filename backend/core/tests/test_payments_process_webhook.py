@@ -84,6 +84,19 @@ def test_amount_mismatch_is_rejected(scenario):
     assert tx.processed_at is None
 
 
+def test_collector_mismatch_is_rejected(scenario):
+    org, student, plan, tx = scenario
+    from core.services.providers import get_payment_provider
+    provider = get_payment_provider()
+    provider.queue_payment(external_reference=str(tx.id), status=PaymentStatus.APPROVED,
+                           amount=Decimal('30000'), provider_payment_id='PAYCOL',
+                           collector_id='someone-elses-collector')
+    with pytest.raises(payments.PaymentIntegrityError):
+        payments.process_payment_notification(tx_id=str(tx.id), provider_payment_id='PAYCOL')
+    tx.refresh_from_db()
+    assert tx.processed_at is None
+
+
 def test_unknown_tx_returns_none(scenario):
     import uuid
     assert payments.process_payment_notification(
