@@ -2772,20 +2772,13 @@ class MembershipPlanViewSet(ModelViewSet):
         if plan.organization_id != student.organization_id:
             raise PermissionDenied('No puedes asignar un plan de otra organización.')
 
-        with transaction.atomic():
-            StudentPlan.objects.filter(user=student, is_active=True).update(is_active=False)
-            assigned = StudentPlan.objects.create(
-                user=student,
-                plan=plan,
-                start_date=validated['start_date'],
-                end_date=validated['end_date'],
-                total_classes=validated['total_classes'],
-                unlimited_classes=validated['unlimited_classes'],
-                discount_percentage=validated['discount_percentage'],
-                final_price=max(float(plan.price) * (1 - (validated['discount_percentage'] / 100)), 0),
-                is_active=True,
-            )
-
+        from core.services.plans import activate_student_plan
+        assigned = activate_student_plan(
+            student=student,
+            plan=plan,
+            start_date=validated['start_date'],
+            discount_percentage=validated['discount_percentage'],
+        )
         return Response(StudentPlanSerializer(assigned).data, status=status.HTTP_201_CREATED)
 
     @action(detail=False, methods=['get'], url_path='my-plan')
