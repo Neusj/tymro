@@ -24,6 +24,7 @@ from .models import (
     MembershipPlan,
     Organization,
     PaymentAccount,
+    PaymentTransaction,
     Person,
     RecurringEnrollment,
     StudentPlan,
@@ -1607,6 +1608,23 @@ class PaymentAccountSerializer(serializers.ModelSerializer):
         model = PaymentAccount
         fields = ['provider', 'status', 'provider_user_id', 'is_sandbox',
                   'connected_at', 'token_expires_at']
+        read_only_fields = fields
+
+
+class PaymentCheckoutRequestSerializer(serializers.Serializer):
+    plan_id = serializers.IntegerField(required=False)
+    target_student_plan_id = serializers.IntegerField(required=False)
+
+    def validate(self, attrs):
+        if bool(attrs.get('plan_id')) == bool(attrs.get('target_student_plan_id')):
+            raise serializers.ValidationError('Indica exactamente uno: plan_id o target_student_plan_id.')
+        return attrs
+
+
+class PaymentTransactionStatusSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PaymentTransaction
+        fields = ['id', 'status', 'status_detail', 'amount', 'currency']
         read_only_fields = fields
 
 

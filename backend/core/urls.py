@@ -4,8 +4,10 @@ from rest_framework.routers import DefaultRouter
 from .importer.views import ImporterViewSet
 from .views_payments import (
     PaymentAccountView,
+    PaymentCheckoutView,
     PaymentConnectView,
     PaymentOAuthCallbackView,
+    PaymentTransactionStatusView,
 )
 from .views import (
     BranchViewSet,
@@ -84,5 +86,8 @@ urlpatterns = [
     path('payments/connect/', PaymentConnectView.as_view(), name='payments-connect'),
     path('payments/oauth/callback/', PaymentOAuthCallbackView.as_view(), name='payments-oauth-callback'),
     path('payments/account/', PaymentAccountView.as_view(), name='payments-account'),
+    path('payments/checkout/', PaymentCheckoutView.as_view(), name='payments-checkout'),
+    path('payments/transactions/<uuid:pk>/status/', PaymentTransactionStatusView.as_view(),
+         name='payments-transaction-status'),
     path('', include(router.urls)),
 ]
