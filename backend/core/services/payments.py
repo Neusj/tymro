@@ -2,13 +2,15 @@
 delega en get_payment_provider(). Aísla la lógica de negocio de las views.
 """
 from datetime import timedelta
+from decimal import Decimal
 
 from django.conf import settings
 from django.core import signing
 from django.utils import timezone
 
-from core.models import PaymentAccount
+from core.models import PaymentAccount, PaymentTransaction
 from .providers import PaymentProviderError, get_payment_provider
+from .providers.base import BackUrls, CheckoutItem
 
 STATE_SALT = 'payments-oauth'
 STATE_MAX_AGE = 600          # 10 minutos
@@ -17,6 +19,14 @@ REFRESH_MARGIN = timedelta(hours=24)
 
 class InvalidState(Exception):
     """El parámetro state del callback OAuth no es válido/expiró."""
+
+
+class CheckoutError(Exception):
+    """No se puede iniciar el cobro."""
+
+
+class NotConnected(CheckoutError):
+    """La organización no tiene cuenta de pago conectada."""
 
 
 def _sign_state(organization_id) -> str:
@@ -81,3 +91,65 @@ def get_valid_access_token(*, account) -> str:
     account.save(update_fields=['access_token', 'refresh_token', 'token_expires_at',
                                 'status', 'updated_at'])
     return account.access_token
+
+
+def _clp(value) -> Decimal:
+    return Decimal(int(round(float(value))))
+
+
+def create_checkout(*, organization, user, plan=None, target_student_plan=None):
+    if bool(plan) == bool(target_student_plan):
+        raise CheckoutError('Debe indicarse exactamente uno: plan o target_student_plan.')
+
+    account = PaymentAccount.objects.filter(
+        organization=organization, provider=settings.PAYMENTS_PROVIDER,
+        status=PaymentAccount.STATUS_CONNECTED).first()
+    if account is None:
+        raise NotConnected('La organización no tiene MercadoPago conectado.')
+
+    plan_amount = Decimal('0')
+    enrollment_fee_amount = Decimal('0')
+    items = []
+
+    if plan is not None:
+        if plan.organization_id != organization.id:
+            raise CheckoutError('El plan no pertenece a la organización.')
+        discount = plan.discount_percentage or 0
+        plan_amount = _clp(max(float(plan.price) * (1 - discount / 100), 0))
+        items.append(CheckoutItem(title=f'Plan {plan.name}', quantity=1, unit_price=plan_amount))
+    else:
+        sp = target_student_plan
+        if sp.user_id != user.id or sp.plan.organization_id != organization.id:
+            raise CheckoutError('La matrícula no corresponde al alumno/organización.')
+        if not (sp.enrollment_fee and sp.enrollment_fee > 0) or sp.enrollment_fee_paid_at is not None:
+            raise CheckoutError('No hay matrícula pendiente para este plan.')
+        enrollment_fee_amount = _clp(sp.enrollment_fee)
+        items.append(CheckoutItem(title='Matrícula', quantity=1, unit_price=enrollment_fee_amount))
+
+    amount = plan_amount + enrollment_fee_amount
+
+    tx = PaymentTransaction.objects.create(
+        organization=organization, user=user, provider=account.provider,
+        plan=plan, plan_amount=plan_amount, enrollment_fee_amount=enrollment_fee_amount,
+        amount=amount, currency='CLP', target_student_plan=target_student_plan,
+        metadata={'items': [it.title for it in items]},
+    )
+
+    provider = get_payment_provider(account.provider)
+    access_token = get_valid_access_token(account=account)
+    apex = settings.PAYMENTS_APEX_BASE_URL.rstrip('/')
+    frontend = getattr(settings, 'FRONTEND_URL', apex).rstrip('/')
+    session = provider.create_checkout(
+        access_token=access_token,
+        external_reference=str(tx.id),
+        items=items,
+        payer_email=getattr(user, 'email', None),
+        back_urls=BackUrls(success=f'{frontend}/pagos/resultado?tx={tx.id}',
+                           pending=f'{frontend}/pagos/resultado?tx={tx.id}',
+                           failure=f'{frontend}/pagos/resultado?tx={tx.id}'),
+        notification_url=f'{apex}/api/payments/webhook/?tx={tx.id}',
+        expires_at=None,
+    )
+    tx.provider_preference_id = session.provider_preference_id
+    tx.save(update_fields=['provider_preference_id', 'updated_at'])
+    return tx, session.redirect_url
