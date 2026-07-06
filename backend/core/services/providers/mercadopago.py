@@ -13,9 +13,21 @@ from urllib.parse import urlencode
 
 import requests
 
-from .base import (OAuthTokens, PaymentProvider, PaymentProviderError)
+from .base import (BackUrls, CheckoutItem, CheckoutSession, OAuthTokens, PaymentProvider,
+                   PaymentProviderError, PaymentStatus, ProviderPayment)
 
 _TIMEOUT = 15
+
+_STATUS_MAP = {
+    'approved': PaymentStatus.APPROVED,
+    'pending': PaymentStatus.PENDING,
+    'in_process': PaymentStatus.IN_PROCESS,
+    'authorized': PaymentStatus.IN_PROCESS,
+    'rejected': PaymentStatus.REJECTED,
+    'cancelled': PaymentStatus.CANCELLED,
+    'refunded': PaymentStatus.REFUNDED,
+    'charged_back': PaymentStatus.REFUNDED,
+}
 
 
 class MercadoPagoProvider(PaymentProvider):
@@ -77,13 +89,62 @@ class MercadoPagoProvider(PaymentProvider):
             'refresh_token': refresh_token,
         })
 
-    # --- Cobro (Task 9) y Webhook (Task 12): stubs por ahora ---
-    def create_checkout(self, **kwargs):
-        raise NotImplementedError('create_checkout: ver Task 9')
+    # --- Cobro (Task 9) ---
+    def create_checkout(self, *, access_token, external_reference, items, payer_email,
+                        back_urls, notification_url, expires_at):
+        body = {
+            'items': [{
+                'title': it.title,
+                'quantity': it.quantity,
+                'unit_price': int(it.unit_price),   # CLP sin decimales
+                'currency_id': 'CLP',
+            } for it in items],
+            'external_reference': external_reference,
+            'notification_url': notification_url,
+            'auto_return': 'approved',
+        }
+        if payer_email:
+            body['payer'] = {'email': payer_email}
+        if back_urls:
+            body['back_urls'] = {'success': back_urls.success, 'pending': back_urls.pending,
+                                 'failure': back_urls.failure}
+        if expires_at:
+            body['expires'] = True
+            body['expiration_date_to'] = expires_at.isoformat()
+        try:
+            resp = requests.post(self.PREFERENCE_URL, json=body, timeout=_TIMEOUT,
+                                 headers={'Authorization': f'Bearer {access_token}',
+                                          'Accept': 'application/json'})
+        except requests.RequestException as exc:
+            raise PaymentProviderError(f'MP preference falló: {exc}') from exc
+        if resp.status_code >= 400:
+            raise PaymentProviderError(f'MP preference error {resp.status_code}: {resp.text}')
+        data = resp.json()
+        return CheckoutSession(redirect_url=data['init_point'],
+                               provider_preference_id=str(data['id']))
 
-    def fetch_payment(self, **kwargs):
-        raise NotImplementedError('fetch_payment: ver Task 9')
+    def fetch_payment(self, *, access_token, provider_payment_id):
+        try:
+            resp = requests.get(self.PAYMENT_URL.format(id=provider_payment_id), timeout=_TIMEOUT,
+                                headers={'Authorization': f'Bearer {access_token}',
+                                         'Accept': 'application/json'})
+        except requests.RequestException as exc:
+            raise PaymentProviderError(f'MP fetch_payment falló: {exc}') from exc
+        if resp.status_code >= 400:
+            raise PaymentProviderError(f'MP fetch_payment error {resp.status_code}: {resp.text}')
+        d = resp.json()
+        return ProviderPayment(
+            provider_payment_id=str(d['id']),
+            status=_STATUS_MAP.get(d.get('status'), PaymentStatus.PENDING),
+            status_detail=d.get('status_detail'),
+            amount=Decimal(str(d.get('transaction_amount', '0'))),
+            currency=d.get('currency_id', 'CLP'),
+            external_reference=d.get('external_reference'),
+            collector_id=str(d['collector_id']) if d.get('collector_id') is not None else None,
+            raw=d,
+        )
 
+    # --- Webhook (Task 12): stub por ahora ---
     def verify_webhook(self, **kwargs):
         raise NotImplementedError('verify_webhook: ver Task 12')
 
