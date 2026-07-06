@@ -52,6 +52,25 @@ def test_webhook_invalid_signature_401(api_client, settings):
     assert resp.status_code == 401
 
 
+@pytest.mark.django_db
+def test_invalid_signature_records_no_webhook_event(api_client, settings):
+    settings.PAYMENTS_PROVIDER = 'mercadopago'
+    body, headers = _signed({'type': 'payment', 'data': {'id': '1'}}, secret='WRONG')
+    resp = api_client.post('/api/payments/webhook/?tx=abc', data=body,
+                           content_type='application/json', **headers)
+    assert resp.status_code == 401
+    assert WebhookEvent.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_malformed_tx_returns_200(api_client, settings):
+    settings.PAYMENTS_PROVIDER = 'mercadopago'
+    body, headers = _signed({'type': 'payment', 'data': {'id': 'PAY1'}})
+    resp = api_client.post('/api/payments/webhook/?tx=not-a-uuid', data=body,
+                           content_type='application/json', **headers)
+    assert resp.status_code == 200
+
+
 def test_webhook_valid_signature_calls_processor(api_client, approved_tx, settings, monkeypatch):
     settings.PAYMENTS_PROVIDER = 'mercadopago'   # firma/parseo reales
     org, student, tx = approved_tx

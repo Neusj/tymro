@@ -1,7 +1,10 @@
 """APIViews de pagos (MercadoPago). Split de views.py por tamaño.
 Todas respetan multitenancy: connect/account filtran por request.user.organization;
 el callback resuelve la org por el state firmado (nunca por el Host)."""
+import logging
+
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.shortcuts import get_object_or_404, redirect
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -14,6 +17,8 @@ from .serializers import (PaymentAccountSerializer, PaymentCheckoutRequestSerial
 from .services import payments
 from .services.providers import get_payment_provider
 from .views import _is_gym_admin, _is_student, _is_superadmin   # helpers de rol existentes
+
+logger = logging.getLogger(__name__)
 
 
 class PaymentConnectView(APIView):
@@ -110,6 +115,8 @@ class PaymentWebhookView(APIView):
         headers = {k[5:].replace('_', '-').lower(): v
                    for k, v in request.META.items() if k.startswith('HTTP_')}
         if not provider.verify_webhook(headers=headers, raw_body=raw_body):
+            logger.warning('Webhook de pago con firma inválida (x-request-id=%s)',
+                           headers.get('x-request-id'))
             return Response({'detail': 'firma inválida'}, status=status.HTTP_401_UNAUTHORIZED)
 
         env = provider.parse_webhook(headers=headers, raw_body=raw_body)
@@ -126,7 +133,7 @@ class PaymentWebhookView(APIView):
             try:
                 payments.process_payment_notification(
                     tx_id=tx_id, provider_payment_id=env.provider_payment_id)
-            except payments.PaymentIntegrityError:
-                # No re-encolar: es una inconsistencia, no un fallo transitorio.
+            except (payments.PaymentIntegrityError, ValueError, ValidationError):
+                # No re-encolar: es una inconsistencia (incl. tx malformado), no un fallo transitorio.
                 return Response(status=status.HTTP_200_OK)
         return Response(status=status.HTTP_200_OK)
