@@ -279,6 +279,23 @@ FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173')
 # Validez del token de reset de contraseña (segundos). Default 3 días.
 PASSWORD_RESET_TIMEOUT = int(os.getenv('PASSWORD_RESET_TIMEOUT', str(60 * 60 * 24 * 3)))
 
+# --- Pagos (MercadoPago) ---
+PAYMENTS_PROVIDER = os.getenv('PAYMENTS_PROVIDER', 'mercadopago')
+PAYMENTS_ENCRYPTION_KEY = os.getenv('PAYMENTS_ENCRYPTION_KEY', '')
+# Base pública en el APEX (sin subdominio) para callback OAuth y webhook.
+PAYMENTS_APEX_BASE_URL = os.getenv('PAYMENTS_APEX_BASE_URL', 'http://localhost:8000')
+MP_CLIENT_ID = os.getenv('MP_CLIENT_ID', '')
+MP_CLIENT_SECRET = os.getenv('MP_CLIENT_SECRET', '')
+MP_WEBHOOK_SECRET = os.getenv('MP_WEBHOOK_SECRET', '')
+MP_OAUTH_REDIRECT_URI = os.getenv(
+    'MP_OAUTH_REDIRECT_URI',
+    f'{PAYMENTS_APEX_BASE_URL}/api/payments/oauth/callback/',
+)
+# Settings de pagos que no pueden faltar en producción (ver fail-fast más abajo).
+PAYMENTS_REQUIRED_IN_PROD = [
+    'PAYMENTS_ENCRYPTION_KEY', 'MP_CLIENT_ID', 'MP_CLIENT_SECRET', 'MP_WEBHOOK_SECRET',
+]
+
 # Hardening adicional cuando NO estamos en desarrollo.
 if not DEBUG:
     SECURE_SSL_REDIRECT = _env_bool('SECURE_SSL_REDIRECT', True)
@@ -288,3 +305,12 @@ if not DEBUG:
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
     SECURE_CONTENT_TYPE_NOSNIFF = True
+
+    _missing_payment = [
+        name for name in PAYMENTS_REQUIRED_IN_PROD
+        if not globals().get(name)
+    ]
+    if _missing_payment:
+        raise ImproperlyConfigured(
+            f'Faltan variables de entorno de pagos en producción: {", ".join(_missing_payment)}'
+        )
