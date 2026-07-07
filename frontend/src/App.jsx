@@ -21,6 +21,7 @@ import GymAdminDashboard from './pages/GymAdminDashboard'
 import GymAdminUsersPage from './pages/GymAdminUsersPage'
 import GymAdminPlanMembershipsPage from './pages/GymAdminPlanMembershipsPage'
 import GymAdminPaymentsSettingsPage from './pages/GymAdminPaymentsSettingsPage'
+import GymAdminPaymentsTransactionsPage from './pages/GymAdminPaymentsTransactionsPage'
 import StudentBuyPlanPage from './pages/StudentBuyPlanPage'
 import PaymentResultPage from './pages/PaymentResultPage'
 import LoginPage from './pages/LoginPage'
@@ -300,6 +301,16 @@ export default function App() {
           <ProtectedRoute allowedRoles={['gym_admin']}>
             <ShellRoute>
               <GymAdminImportPage />
+            </ShellRoute>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/gym-admin/pagos/transacciones"
+        element={
+          <ProtectedRoute allowedRoles={['gym_admin']}>
+            <ShellRoute>
+              <GymAdminPaymentsTransactionsPage />
             </ShellRoute>
           </ProtectedRoute>
         }

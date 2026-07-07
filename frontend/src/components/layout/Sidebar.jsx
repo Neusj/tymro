@@ -169,6 +169,7 @@ const navByRole = {
       label: 'Configuraciones',
       icon: <SettingsIcon />,
       children: [
+        { to: '/gym-admin/pagos/transacciones', label: 'Transacciones' },
         { to: '/ajustes/pagos', label: 'Pagos (MercadoPago)' },
         { to: '/gym-admin/settings/trial-followup', label: 'Emails de prueba' },
       ],
