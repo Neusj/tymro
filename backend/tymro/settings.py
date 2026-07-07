@@ -259,18 +259,14 @@ REST_FRAMEWORK = {
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
-# Email — consola en dev, SMTP por env en prod.
+# Email — consola en dev, Resend (API HTTPS) en prod. Railway bloquea SMTP saliente (587/465).
 EMAIL_BACKEND = os.getenv(
     'EMAIL_BACKEND',
     'django.core.mail.backends.console.EmailBackend'
     if DEBUG
-    else 'django.core.mail.backends.smtp.EmailBackend',
+    else 'anymail.backends.resend.EmailBackend',
 )
-EMAIL_HOST = os.getenv('EMAIL_HOST', '')
-EMAIL_PORT = int(os.getenv('EMAIL_PORT', '587'))
-EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '')
-EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
-EMAIL_USE_TLS = _env_bool('EMAIL_USE_TLS', True)
+ANYMAIL = {'RESEND_API_KEY': os.getenv('RESEND_API_KEY', '')}
 DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'no-reply@tymroapp.com')
 
 # URL base del frontend para armar el link de reset de contraseña.

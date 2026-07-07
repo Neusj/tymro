@@ -190,3 +190,16 @@ def test_login_is_throttled_after_limit(api_client, user, settings):
     ]
     assert codes[-1] == 429
     assert codes[:limit].count(429) == 0  # los primeros `limit` no se bloquean
+
+
+def test_reset_request_returns_200_even_if_email_send_fails(api_client, user, monkeypatch):
+    # Simula caída del proveedor de correo: el envío lanza.
+    def _boom(*args, **kwargs):
+        raise RuntimeError('email provider down')
+
+    monkeypatch.setattr('core.views.send_mail', _boom)
+
+    resp = api_client.post(RESET_URL, {'email': 'alice@example.com'}, format='json')
+
+    # Anti-enumeración: responde 200 igual, sin propagar el 500.
+    assert resp.status_code == 200

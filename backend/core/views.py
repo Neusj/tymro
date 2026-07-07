@@ -1,5 +1,6 @@
 ﻿from django.contrib.auth import authenticate, get_user_model
 import csv
+import logging
 from datetime import datetime, timedelta
 from uuid import uuid4
 
@@ -518,6 +519,9 @@ class MeView(APIView):
         return Response(serializer.data)
 
 
+logger = logging.getLogger(__name__)
+
+
 class PasswordResetRequestView(APIView):
     """Paso 1: el usuario pide el reset con su email.
 
@@ -548,17 +552,22 @@ class PasswordResetRequestView(APIView):
             token = default_token_generator.make_token(user)
             base = organization_public_base_url(getattr(user, 'organization', None))
             reset_link = f"{base}/reset-password?uid={uid}&token={token}"
-            send_mail(
-                subject='Restablecer tu contraseña — TYMRO',
-                message=(
-                    'Recibimos una solicitud para restablecer tu contraseña.\n\n'
-                    f'Abre este enlace para elegir una nueva contraseña:\n{reset_link}\n\n'
-                    'Si no fuiste tú, puedes ignorar este correo.'
-                ),
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[email],
-                fail_silently=False,
-            )
+            try:
+                send_mail(
+                    subject='Restablecer tu contraseña — TYMRO',
+                    message=(
+                        'Recibimos una solicitud para restablecer tu contraseña.\n\n'
+                        f'Abre este enlace para elegir una nueva contraseña:\n{reset_link}\n\n'
+                        'Si no fuiste tú, puedes ignorar este correo.'
+                    ),
+                    from_email=settings.DEFAULT_FROM_EMAIL,
+                    recipient_list=[email],
+                    fail_silently=False,
+                )
+            except Exception:
+                # El envío falló (proveedor caído/mal config): NO lo revelamos al
+                # cliente (anti-enumeración). Logueamos para diagnóstico.
+                logger.exception('Fallo enviando email de reset de contraseña a %s', email)
 
         return Response(
             {'detail': 'Si el email existe, te enviamos instrucciones para restablecer la contraseña.'}
@@ -693,18 +702,23 @@ class PublicRegisterView(APIView):
         uid = urlsafe_base64_encode(force_bytes(user.pk))
         token = default_token_generator.make_token(user)
         verify_link = f"{organization_public_base_url(organization)}/verify-email?uid={uid}&token={token}"
-        send_mail(
-            subject=f'Confirma tu email — {organization.name}',
-            message=(
-                f'¡Bienvenido/a a {organization.name}!\n\n'
-                'Confirma tu email para activar tu cuenta y agendar tu clase de prueba gratis:\n'
-                f'{verify_link}\n\n'
-                'Si no fuiste tú, puedes ignorar este correo.'
-            ),
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            recipient_list=[user.email],
-            fail_silently=False,
-        )
+        try:
+            send_mail(
+                subject=f'Confirma tu email — {organization.name}',
+                message=(
+                    f'¡Bienvenido/a a {organization.name}!\n\n'
+                    'Confirma tu email para activar tu cuenta y agendar tu clase de prueba gratis:\n'
+                    f'{verify_link}\n\n'
+                    'Si no fuiste tú, puedes ignorar este correo.'
+                ),
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[user.email],
+                fail_silently=False,
+            )
+        except Exception:
+            # El usuario ya se creó; si el correo de verificación falla, lo logueamos
+            # y devolvemos éxito igual (puede reintentar / pedir reenvío).
+            logger.exception('Fallo enviando email de verificación a %s', user.email)
 
         return Response(
             {'detail': 'Cuenta creada. Te enviamos un email para confirmar tu cuenta.'},

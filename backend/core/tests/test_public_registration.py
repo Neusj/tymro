@@ -304,3 +304,23 @@ def test_public_register_is_rate_limited(api_client, make_organization):
 
     assert statuses[:5] == [201, 201, 201, 201, 201]
     assert statuses[5] == 429
+
+
+def test_registration_returns_201_even_if_email_send_fails(api_client, make_organization, monkeypatch):
+    org = make_organization(name='Cross Santiago')
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError('email provider down')
+
+    monkeypatch.setattr('core.views.send_mail', _boom)
+
+    resp = api_client.post(REGISTER_URL, _register_payload(org), format='json')
+
+    # El envío falló pero el registro debe completarse igual.
+    assert resp.status_code == 201
+
+    from django.contrib.auth import get_user_model
+
+    user = get_user_model().objects.get(email__iexact='pros@example.com')
+    assert user.organization_id == org.id
+    assert user.role == 'student'
