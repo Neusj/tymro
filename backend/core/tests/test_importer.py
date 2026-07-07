@@ -777,7 +777,7 @@ def test_plans_template_has_plan_type_dropdown(api_client, admin_a):
 
 # ---------------------------------------------------------------- F3: Alumnos y Profesores
 
-USER_HEADERS = ['Email', 'Nombre', 'Apellido', 'Teléfono', 'Sucursal']
+USER_HEADERS = ['Email', 'RUT', 'Nombre', 'Apellido', 'Teléfono', 'Sucursal']
 
 
 def test_students_full_cycle_with_branch(api_client, admin_a, org_a):
@@ -786,8 +786,8 @@ def test_students_full_cycle_with_branch(api_client, admin_a, org_a):
     Branch.objects.create(organization=org_a, name='Sede Centro')
     login(api_client, 'admin_a')
     rows = [
-        ['maria.perez@gmail.com', 'María', 'Pérez', '+56 9 1234 5678', ' sede centro '],
-        ['juan.soto@gmail.com', 'Juan', '', '', ''],
+        ['maria.perez@gmail.com', '12.345.678-5', 'María', 'Pérez', '+56 9 1234 5678', ' sede centro '],
+        ['juan.soto@gmail.com', '20347878-K', 'Juan', '', '', ''],
     ]
     resp = import_entity(api_client, 'students', rows, USER_HEADERS)
     assert resp.status_code == 201, resp.content
@@ -799,9 +799,11 @@ def test_students_full_cycle_with_branch(api_client, admin_a, org_a):
     assert maria.role == 'student'
     assert maria.organization_id == org_a.id
     assert maria.branch.name == 'Sede Centro'
+    assert maria.rut == '12345678-5'  # normalizado a canónico
     assert maria.has_usable_password() is False
     juan = User.objects.get(email='juan.soto@gmail.com')
     assert juan.branch is None
+    assert juan.rut == '20347878-K'
 
     # Idempotente: re-importar no duplica ni toca lo existente.
     resp = import_entity(api_client, 'students', rows, USER_HEADERS)
@@ -813,19 +815,20 @@ def test_teachers_get_teacher_role(api_client, admin_a, org_a):
     from django.contrib.auth import get_user_model
 
     login(api_client, 'admin_a')
-    resp = import_entity(api_client, 'teachers', [['coach@gym.cl', 'Pedro', 'Coach', '', '']],
+    resp = import_entity(api_client, 'teachers', [['coach@gym.cl', '26711486-2', 'Pedro', 'Coach', '', '']],
                          USER_HEADERS)
     assert resp.status_code == 201
     coach = get_user_model().objects.get(email='coach@gym.cl')
     assert coach.role == 'teacher'
     assert coach.organization_id == org_a.id
+    assert coach.rut == '26711486-2'
     assert coach.has_usable_password() is False
 
 
 def test_users_branch_must_belong_to_org(api_client, admin_a, org_b):
     Branch.objects.create(organization=org_b, name='Sede Ajena')
     login(api_client, 'admin_a')
-    upload = build_xlsx([['x@y.cl', 'Ana', '', '', 'Sede Ajena']], headers=USER_HEADERS)
+    upload = build_xlsx([['x@y.cl', '11111111-1', 'Ana', '', '', 'Sede Ajena']], headers=USER_HEADERS)
     resp = api_client.post('/api/imports/students/validate/', {'file': upload}, format='multipart')
     body = resp.json()
     assert body['can_commit'] is False
@@ -838,7 +841,7 @@ def test_users_email_in_other_org_is_explicit_conflict(api_client, admin_a, admi
     # admin_b@tymro.cl existe en la org B: importarlo en la org A es error
     # explícito de fila, NO un skip silencioso ni un toque a esa cuenta.
     login(api_client, 'admin_a')
-    upload = build_xlsx([['ADMIN_B@tymro.cl', 'Otro', '', '', '']], headers=USER_HEADERS)
+    upload = build_xlsx([['ADMIN_B@tymro.cl', '22222222-2', 'Otro', '', '', '']], headers=USER_HEADERS)
     resp = api_client.post('/api/imports/students/validate/', {'file': upload}, format='multipart')
     body = resp.json()
     assert body['can_commit'] is False
@@ -852,8 +855,9 @@ def test_users_email_in_same_org_is_skipped_not_modified(api_client, admin_a, or
 
     login(api_client, 'admin_a')
     # admin_a@tymro.cl ya existe en la org A (rol gym_admin): se omite y NO se
-    # degrada su rol a student.
-    rows = [['admin_a@tymro.cl', 'Hacker', '', '', ''], ['nuevo@gym.cl', 'Nuevo', '', '', '']]
+    # degrada su rol a student. (Se omite por email ANTES de validar el RUT.)
+    rows = [['admin_a@tymro.cl', '33333333-3', 'Hacker', '', '', ''],
+            ['nuevo@gym.cl', '7654321-6', 'Nuevo', '', '', '']]
     resp = import_entity(api_client, 'students', rows, USER_HEADERS)
     assert resp.status_code == 201
     assert resp.json()['created'] == 1
@@ -866,9 +870,9 @@ def test_users_email_in_same_org_is_skipped_not_modified(api_client, admin_a, or
 def test_users_invalid_email_and_file_dedup(api_client, admin_a):
     login(api_client, 'admin_a')
     rows = [
-        ['no-es-correo', 'Ana', '', '', ''],
-        ['ana@gym.cl', 'Ana', '', '', ''],
-        [' ANA@GYM.CL ', 'Ana B', '', '', ''],
+        ['no-es-correo', '12345678-5', 'Ana', '', '', ''],
+        ['ana@gym.cl', '20347878-K', 'Ana', '', '', ''],
+        [' ANA@GYM.CL ', '26711486-2', 'Ana B', '', '', ''],
     ]
     upload = build_xlsx(rows, headers=USER_HEADERS)
     resp = api_client.post('/api/imports/students/validate/', {'file': upload}, format='multipart')
@@ -883,7 +887,7 @@ def test_users_email_of_platform_account_is_conflict(api_client, admin_a, supera
     # El superadmin no tiene organización: igual debe detectarse el conflicto
     # en validate (no recién en el commit).
     login(api_client, 'admin_a')
-    upload = build_xlsx([['root@tymro.cl', 'Root', '', '', '']], headers=USER_HEADERS)
+    upload = build_xlsx([['root@tymro.cl', '5000000-1', 'Root', '', '', '']], headers=USER_HEADERS)
     resp = api_client.post('/api/imports/students/validate/', {'file': upload}, format='multipart')
     body = resp.json()
     assert body['can_commit'] is False
@@ -894,11 +898,68 @@ def test_users_email_invalid_as_username_is_row_error(api_client, admin_a):
     # username=email: caracteres válidos en email pero no en username deben
     # rechazarse en validate con mensaje claro, no en commit con error técnico.
     login(api_client, 'admin_a')
-    upload = build_xlsx([["o'brien@gym.cl", 'Ana', '', '', '']], headers=USER_HEADERS)
+    upload = build_xlsx([["o'brien@gym.cl", '12345678-5', 'Ana', '', '', '']], headers=USER_HEADERS)
     resp = api_client.post('/api/imports/students/validate/', {'file': upload}, format='multipart')
     body = resp.json()
     assert body['can_commit'] is False
     assert 'caracteres no permitidos' in body['rows'][0]['errors'][0]['message']
+
+
+# --- RUT en el importador (obligatorio + validado + normalizado) -------------
+
+def test_students_missing_rut_is_required_error(api_client, admin_a):
+    login(api_client, 'admin_a')
+    upload = build_xlsx([['sin.rut@gym.cl', '', 'Ana', '', '', '']], headers=USER_HEADERS)
+    resp = api_client.post('/api/imports/students/validate/', {'file': upload}, format='multipart')
+    body = resp.json()
+    assert body['can_commit'] is False
+    error = body['rows'][0]['errors'][0]
+    assert error['column'] == 'RUT'
+    assert 'obligatorio' in error['message']
+
+
+def test_students_invalid_rut_is_row_error(api_client, admin_a):
+    login(api_client, 'admin_a')
+    upload = build_xlsx([['mal.rut@gym.cl', '12345678-9', 'Ana', '', '', '']], headers=USER_HEADERS)
+    resp = api_client.post('/api/imports/students/validate/', {'file': upload}, format='multipart')
+    body = resp.json()
+    assert body['can_commit'] is False
+    error = body['rows'][0]['errors'][0]
+    assert error['column'] == 'RUT'
+    assert 'no es válido' in error['message']
+
+
+def test_students_rut_already_in_org_is_conflict(api_client, admin_a, org_a, make_user):
+    # Un RUT que ya pertenece a otra persona de la MISMA org es conflicto en validate.
+    make_user('ya', organization=org_a, role='student', email='ya@a.local', rut='12345678-5')
+    login(api_client, 'admin_a')
+    upload = build_xlsx([['nuevo@gym.cl', '12.345.678-5', 'Nuevo', '', '', '']], headers=USER_HEADERS)
+    resp = api_client.post('/api/imports/students/validate/', {'file': upload}, format='multipart')
+    body = resp.json()
+    assert body['can_commit'] is False
+    error = body['rows'][0]['errors'][0]
+    assert error['column'] == 'RUT'
+    assert 'ya pertenece' in error['message']
+
+
+def test_students_same_rut_other_org_is_allowed(api_client, admin_a, org_b, make_user):
+    # El mismo RUT existiendo en OTRA org no bloquea el import (aislamiento).
+    make_user('otra', organization=org_b, role='student', email='otra@b.local', rut='12345678-5')
+    login(api_client, 'admin_a')
+    resp = import_entity(api_client, 'students',
+                         [['aca@gym.cl', '12345678-5', 'Aca', '', '', '']], USER_HEADERS)
+    assert resp.status_code == 201, resp.content
+    assert resp.json()['created'] == 1
+
+
+def test_students_template_has_rut_column(api_client, admin_a):
+    from openpyxl import load_workbook
+
+    login(api_client, 'admin_a')
+    resp = api_client.get('/api/imports/students/template/')
+    assert resp.status_code == 200
+    headers = [cell.value for cell in load_workbook(BytesIO(resp.content))['Datos'][1]]
+    assert 'RUT' in headers
 
 
 def test_users_template_references_only_own_branches(api_client, admin_a, org_a, org_b):

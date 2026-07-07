@@ -16,6 +16,7 @@ from ..registry import register
 from ..spec import EntityImportSpec, FieldSpec, FKSpec, RowError
 
 EMAIL_LABEL = 'Email'
+RUT_LABEL = 'RUT'
 
 
 def _email_conflict_outside_org(values, organization):
@@ -67,6 +68,45 @@ def _email_valid_as_username(values, organization):
     return []
 
 
+def _valid_and_normalize_rut(values, organization):
+    """Valida el dígito verificador y normaliza el RUT a canónico IN-PLACE
+    (mutando ``values['rut']``), para que build_instance guarde 26711486-2.
+    Si el RUT es vacío lo maneja required=True del FieldSpec (no aquí)."""
+    from accounts.rut import clean_rut
+
+    raw = values.get('rut')
+    if not raw:
+        return []
+    try:
+        values['rut'] = clean_rut(raw)
+    except ValueError:
+        return [RowError(
+            row=0, column=RUT_LABEL,
+            message=(
+                f"El RUT '{raw}' no es válido. Revisa el número y el dígito verificador "
+                '(ej. 12345678-5).'
+            ),
+        )]
+    return []
+
+
+def _rut_conflict_in_org(values, organization):
+    """Un RUT que ya pertenece a otra persona de la MISMA org es conflicto de fila
+    (se detecta en validate, no recién en el commit). Corre DESPUÉS de normalizar,
+    así compara canónico contra canónico. La unicidad entre orgs no se toca."""
+    from accounts.models import CustomUser
+
+    rut = values.get('rut')
+    if not rut:
+        return []
+    if CustomUser.objects.filter(organization=organization, rut=rut).exists():
+        return [RowError(
+            row=0, column=RUT_LABEL,
+            message=f"El RUT '{rut}' ya pertenece a otra persona en tu organización.",
+        )]
+    return []
+
+
 def _build_user_factory(role):
     def _build(values, organization):
         from accounts.models import CustomUser
@@ -78,6 +118,7 @@ def _build_user_factory(role):
             first_name=values.get('first_name') or '',
             last_name=values.get('last_name') or '',
             phone=values.get('phone') or '',
+            rut=values.get('rut') or None,   # canónico (normalizado por el row_validator); nunca ''
             branch=values.get('branch'),
             role=role,
             organization=organization,
@@ -94,6 +135,16 @@ def _user_fields(person_label):
             attr='email', label=EMAIL_LABEL, kind='email', required=True, max_length=150,
             example='maria.perez@gmail.com',
             help_text=f'Email de {person_label}. Será su usuario para entrar a TYMRO y no puede repetirse.',
+        ),
+        FieldSpec(
+            # max_length 15 sobre el texto de la celda (admite puntos y guion:
+            # '12.345.678-5' = 12 chars). Se guarda normalizado a canónico (12345678-5).
+            attr='rut', label=RUT_LABEL, kind='string', required=True, max_length=15,
+            example='12.345.678-5',
+            help_text=(
+                f'RUT de {person_label} (obligatorio). Con o sin puntos, con guion; '
+                'se guarda normalizado (ej. 12345678-5) y no puede repetirse en tu organización.'
+            ),
         ),
         FieldSpec(
             attr='first_name', label='Nombre', kind='string', required=True, max_length=150,
@@ -138,7 +189,10 @@ STUDENTS = register(EntityImportSpec(
     model='accounts.CustomUser',
     fields=_user_fields('el alumno o la alumna'),
     natural_key=('email',),
-    row_validators=(_email_valid_as_username, _email_conflict_outside_org),
+    row_validators=(
+        _email_valid_as_username, _email_conflict_outside_org,
+        _valid_and_normalize_rut, _rut_conflict_in_org,
+    ),
     build_instance=_build_user_factory('student'),
     instructions=(
         'Importa aquí a tus alumnos y alumnas. Cada fila crea una cuenta de alumno '
@@ -154,7 +208,10 @@ TEACHERS = register(EntityImportSpec(
     model='accounts.CustomUser',
     fields=_user_fields('el profesor o la profesora'),
     natural_key=('email',),
-    row_validators=(_email_valid_as_username, _email_conflict_outside_org),
+    row_validators=(
+        _email_valid_as_username, _email_conflict_outside_org,
+        _valid_and_normalize_rut, _rut_conflict_in_org,
+    ),
     build_instance=_build_user_factory('teacher'),
     instructions=(
         'Importa aquí a tus profesores y coaches. Cada fila crea una cuenta de profesor '

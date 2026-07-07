@@ -8,6 +8,7 @@ from django.utils import timezone
 from rest_framework import serializers
 
 from accounts import roles
+from accounts.rut import clean_rut
 
 from .services.public_urls import trial_signup_url
 
@@ -202,6 +203,27 @@ class BranchSerializer(serializers.ModelSerializer):
         return attrs
 
 
+class RutField(serializers.CharField):
+    """RUT chileno: normaliza a canónico (26711486-2) y valida el dígito
+    verificador (Módulo 11). Rechaza '' y null (allow_blank/allow_null False)
+    para que nunca se guarde vacío; sin RUT se omite el campo, no se blanquea."""
+
+    def __init__(self, **kwargs):
+        kwargs.setdefault('allow_blank', False)
+        kwargs.setdefault('allow_null', False)
+        kwargs.setdefault('max_length', 12)
+        super().__init__(**kwargs)
+
+    def to_internal_value(self, data):
+        value = super().to_internal_value(data)
+        try:
+            return clean_rut(value)
+        except ValueError:
+            raise serializers.ValidationError(
+                'RUT inválido. Revisa el número y el dígito verificador.'
+            )
+
+
 class CustomUserSerializer(serializers.ModelSerializer):
     organization_detail = OrganizationSerializer(source='organization', read_only=True)
     branch_detail = BranchSerializer(source='branch', read_only=True)
@@ -209,6 +231,10 @@ class CustomUserSerializer(serializers.ModelSerializer):
     # Email es la clave de login (único por org). 'username' ya NO se expone: es un
     # identificador interno auto-generado (ver CustomUser.save()).
     email = serializers.EmailField(required=True)
+    # RUT: obligatorio en el ALTA de usuarios de organización (ver validate()); en
+    # edición el corte es 'por presencia' (required=False => un PATCH parcial de
+    # sistema, ej. toggle is_active, no lo exige). Si viene, se valida y normaliza.
+    rut = RutField(required=False)
     # Etiqueta legible del rol (única fuente: los choices de CustomUser.Role vía
     # get_role_display()). Solo lectura: nunca expone la key interna ('gym_admin').
     role_display = serializers.CharField(source='get_role_display', read_only=True)
@@ -224,6 +250,7 @@ class CustomUserSerializer(serializers.ModelSerializer):
             'role',
             'role_display',
             'phone',
+            'rut',
             'profile_image',
             'is_active_member',
             'organization',
@@ -284,6 +311,32 @@ class CustomUserSerializer(serializers.ModelSerializer):
                     {'email': f'Ya existe un usuario con ese email en {scope}.'}
                 )
 
+        # RUT: obligatorio en el ALTA de usuarios de ORGANIZACIÓN (los roles de
+        # plataforma como superadmin no lo requieren). En edición no se exige
+        # (corte por presencia): el RutField ya validó/normalizó si vino, y si no
+        # vino queda intacto. Nunca se puede blanquear (allow_blank/allow_null False).
+        if self.instance is None and effective_role in roles.ORG_ROLES and not attrs.get('rut'):
+            raise serializers.ValidationError({'rut': 'El RUT es obligatorio.'})
+
+        # Unicidad de RUT POR organización (mensaje 400 limpio en vez del
+        # IntegrityError 500 de la constraint). Mismo RUT en otra org es válido;
+        # sin RUT (None) no colisiona.
+        rut = attrs.get('rut')
+        if rut:
+            target_org = attrs.get('organization', getattr(self.instance, 'organization', None))
+            rut_dup = User.objects.filter(rut=rut)
+            rut_dup = (
+                rut_dup.filter(organization=target_org)
+                if target_org is not None
+                else rut_dup.filter(organization__isnull=True)
+            )
+            if self.instance:
+                rut_dup = rut_dup.exclude(pk=self.instance.pk)
+            if rut_dup.exists():
+                raise serializers.ValidationError(
+                    {'rut': 'Ya existe un usuario con ese RUT en esta organización.'}
+                )
+
         return attrs
 
     def create(self, validated_data):
@@ -304,6 +357,46 @@ class CustomUserSerializer(serializers.ModelSerializer):
             instance.set_password(password)
         instance.save()
         return instance
+
+
+class SelfProfileSerializer(serializers.ModelSerializer):
+    """Perfil editable por el PROPIO usuario (self-service PATCH /api/me/).
+
+    Solo ``rut`` y ``phone`` son escribibles; rol, organización, is_active,
+    is_active_member y email son de SOLO lectura: este endpoint jamás puede
+    escalar privilegios ni cambiar de organización. Corte por presencia: el rut
+    se valida/normaliza si viene, y no se puede blanquear (allow_blank/null False).
+    """
+
+    rut = RutField(required=False)
+    role_display = serializers.CharField(source='get_role_display', read_only=True)
+
+    class Meta:
+        model = User
+        fields = [
+            'id', 'first_name', 'last_name', 'email', 'phone', 'rut',
+            'role', 'role_display', 'is_active', 'is_active_member',
+        ]
+        read_only_fields = [
+            'id', 'first_name', 'last_name', 'email',
+            'role', 'role_display', 'is_active', 'is_active_member',
+        ]
+
+    def validate(self, attrs):
+        rut = attrs.get('rut')
+        if rut:
+            user = self.instance
+            rut_dup = User.objects.filter(rut=rut)
+            rut_dup = (
+                rut_dup.filter(organization=user.organization)
+                if user.organization_id
+                else rut_dup.filter(organization__isnull=True)
+            )
+            if rut_dup.exclude(pk=user.pk).exists():
+                raise serializers.ValidationError(
+                    {'rut': 'Ya existe un usuario con ese RUT en esta organización.'}
+                )
+        return attrs
 
 
 class PersonSerializer(serializers.ModelSerializer):

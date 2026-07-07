@@ -95,6 +95,12 @@ export const authApi = {
     const { data } = await api.get('/me/')
     return data
   },
+  // Self-service: el propio usuario completa/actualiza su RUT (y teléfono). El
+  // backend acota los campos escribibles (nunca rol/org/is_active).
+  updateMe: async (payload) => {
+    const { data } = await api.patch('/me/', payload)
+    return data
+  },
   requestPasswordReset: async (email) => {
     const { data } = await api.post('/password-reset/', { email })
     return data

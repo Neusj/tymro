@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import AppLayout from './AppLayout'
+import { AuthProvider } from '../../auth/AuthContext'
 
 // jsdom no implementa matchMedia; AppLayout lo usa para el breakpoint móvil.
 beforeAll(() => {
@@ -19,12 +20,18 @@ beforeAll(() => {
     }))
 })
 
+// AppLayout monta RutReminderBanner, que consume AuthContext (useAuth). En la
+// app real AppLayout siempre vive bajo AuthProvider; sin token en localStorage
+// el provider no hace red y user=null, así que el banner no se renderiza y estas
+// pruebas del header (que leen el `user` PROP) quedan intactas.
 function renderLayout(user) {
   return render(
     <MemoryRouter>
-      <AppLayout user={user} onLogout={() => {}}>
-        <div>contenido</div>
-      </AppLayout>
+      <AuthProvider>
+        <AppLayout user={user} onLogout={() => {}}>
+          <div>contenido</div>
+        </AppLayout>
+      </AuthProvider>
     </MemoryRouter>,
   )
 }

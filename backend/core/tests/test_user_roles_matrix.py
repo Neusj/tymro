@@ -21,6 +21,11 @@ pytestmark = pytest.mark.django_db
 
 ALL_ROLES = ['superadmin', 'gym_admin', 'manager', 'monitor', 'teacher', 'student']
 
+# RUT válido (Módulo 11) para las altas: el RUT es obligatorio en la creación de
+# usuarios de organización, así que estos tests de permisos lo incluyen para
+# aislar lo que prueban (rol/organización), no el RUT.
+VALID_RUT = '12345678-5'
+
 # Espejo de accounts/roles.py: si la matriz central cambia, estos tests deben
 # cambiar conscientemente (fijan el contrato, no lo derivan).
 ASSIGNABLE = {
@@ -71,6 +76,7 @@ def test_create_matrix(api_client, make_user, org, actor_role, target_role):
     payload = {'email': email, 'role': target_role, 'password': 'Passw0rd2026'}
     if target_role != 'superadmin':
         payload['organization'] = org.id
+        payload['rut'] = VALID_RUT  # obligatorio en alta de usuarios de organización
 
     response = api_client.post('/api/users/', payload, format='json')
 
@@ -128,6 +134,7 @@ def test_superadmin_creates_gym_admin_without_staff_flags(api_client, make_user,
         'role': 'gym_admin',
         'password': 'Passw0rd2026',
         'organization': org.id,
+        'rut': VALID_RUT,
     }
 
     response = api_client.post('/api/users/', payload, format='json')
@@ -151,6 +158,7 @@ def test_org_admin_cannot_create_in_other_org(api_client, make_user, org, other_
         'role': 'teacher',
         'password': 'Passw0rd2026',
         'organization': other_org.id,
+        'rut': VALID_RUT,  # rut válido para que la denegación sea por org (403), no por rut faltante
     }
 
     response = api_client.post('/api/users/', payload, format='json')
@@ -163,7 +171,7 @@ def test_org_admin_cannot_create_in_other_org(api_client, make_user, org, other_
 def test_org_admin_creates_without_org_in_payload_gets_own_org(api_client, make_user, org, actor_role):
     _auth_as(api_client, make_user, org, actor_role)
     email = f'auto_org_student_{actor_role}@test.local'
-    payload = {'email': email, 'role': 'student', 'password': 'Passw0rd2026'}
+    payload = {'email': email, 'role': 'student', 'password': 'Passw0rd2026', 'rut': VALID_RUT}
 
     response = api_client.post('/api/users/', payload, format='json')
 

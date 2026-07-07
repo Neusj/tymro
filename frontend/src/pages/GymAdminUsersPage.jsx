@@ -11,12 +11,14 @@ import FormModal from '../components/FormModal'
 import RoleBadge from '../components/RoleBadge'
 import ValueBadge from '../components/ui/ValueBadge'
 import { extractApiErrorMessage } from '../utils/apiErrors'
+import { formatRut, toCanonical } from '../utils/rut'
 
 const userInitialForm = {
   first_name: '',
   last_name: '',
   email: '',
   role: '',
+  rut: '',
   branch: '',
   password: '',
   phone: '',
@@ -34,6 +36,7 @@ export default function GymAdminUsersPage() {
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState(null)
   const [form, setForm] = useState(userInitialForm)
+  const [formError, setFormError] = useState('')
   const [deleting, setDeleting] = useState(null)
   const [roleFilter, setRoleFilter] = useState('')
 
@@ -67,6 +70,7 @@ export default function GymAdminUsersPage() {
   const openCreate = () => {
     setEditing(null)
     setForm({ ...userInitialForm, role: defaultRoleValue() })
+    setFormError('')
     setModalOpen(true)
   }
 
@@ -77,6 +81,7 @@ export default function GymAdminUsersPage() {
       last_name: user.last_name || '',
       email: user.email || '',
       role: user.role || '',
+      rut: formatRut(user.rut || ''),
       branch: user.branch || '',
       password: '',
       phone: user.phone || '',
@@ -84,12 +89,19 @@ export default function GymAdminUsersPage() {
       is_active_member: Boolean(user.is_active_member),
       is_active: Boolean(user.is_active),
     })
+    setFormError('')
     setModalOpen(true)
   }
 
   const submitUser = async (event) => {
     event.preventDefault()
-    const payload = { ...form }
+    // Validación de dígito verificador antes de enviar (el backend re-valida).
+    const canonicalRut = toCanonical(form.rut)
+    if (!canonicalRut) {
+      setFormError('RUT inválido. Revisa el número y el dígito verificador.')
+      return
+    }
+    const payload = { ...form, rut: canonicalRut }
     if (!payload.profile_image) {
       delete payload.profile_image
     }
@@ -221,6 +233,11 @@ export default function GymAdminUsersPage() {
 
       <FormModal open={modalOpen} onClose={() => setModalOpen(false)} title={editing ? 'Editar usuario' : 'Crear usuario'}>
         <form onSubmit={submitUser} className="grid gap-3 md:grid-cols-2">
+          {formError ? (
+            <p className="md:col-span-2 rounded-lg border border-brand-red/50 bg-brand-red/10 px-3 py-2 text-sm text-red-200">
+              {formError}
+            </p>
+          ) : null}
           <label className="space-y-1 text-sm">
             <span>Nombre</span>
             <input
@@ -245,6 +262,17 @@ export default function GymAdminUsersPage() {
               type="email"
               value={form.email}
               onChange={(event) => setForm((prev) => ({ ...prev, email: event.target.value }))}
+              className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
+            />
+          </label>
+          <label className="space-y-1 text-sm">
+            <span>RUT</span>
+            <input
+              required
+              value={form.rut}
+              onChange={(event) => setForm((prev) => ({ ...prev, rut: formatRut(event.target.value) }))}
+              placeholder="12.345.678-5"
+              inputMode="text"
               className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
             />
           </label>

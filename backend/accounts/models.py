@@ -34,6 +34,10 @@ class CustomUser(AbstractUser):
         related_name='users',
     )
     phone = models.CharField(max_length=40, blank=True)
+    # RUT chileno canónico (sin puntos, con guion, K mayúscula: ej. 26711486-2).
+    # null=True a nivel DB para no romper filas existentes; la obligatoriedad en
+    # altas/ediciones humanas la aplica el serializer (nunca se guarda '').
+    rut = models.CharField(max_length=12, null=True, blank=True)
     profile_image = models.ImageField(upload_to='users/profile_images/', blank=True, null=True)
     is_active_member = models.BooleanField(default=True)
     email_verified = models.BooleanField(default=False)
@@ -55,6 +59,15 @@ class CustomUser(AbstractUser):
                 Lower('email'),
                 condition=Q(organization__isnull=True) & ~Q(email=''),
                 name='uniq_email_platform',
+            ),
+            # RUT único POR organización. La condición rut__isnull=False deja fuera
+            # las filas sin RUT: múltiples NULL por org NO colisionan. El mismo RUT
+            # puede existir en ORG A y ORG B (mismo patrón que el email).
+            UniqueConstraint(
+                'organization',
+                'rut',
+                condition=Q(rut__isnull=False),
+                name='uniq_rut_per_org',
             ),
         ]
 

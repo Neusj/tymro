@@ -74,6 +74,7 @@ from .serializers import (
     PublicTrialClassSerializer,
     PersonSerializer,
     RecurringEnrollmentSerializer,
+    SelfProfileSerializer,
     StudentPlanAssignSerializer,
     StudentPlanSerializer,
     TeacherPaymentRuleAssignmentsUpdateSerializer,
@@ -517,6 +518,17 @@ class MeView(APIView):
     def get(self, request):
         serializer = CustomUserSerializer(request.user, context={'request': request})
         return Response(serializer.data)
+
+    def patch(self, request):
+        """Self-service acotado: el usuario completa/actualiza SU rut (y phone).
+        SelfProfileSerializer deja de solo-lectura rol/org/is_active: no escala.
+        Devuelve el perfil completo (CustomUserSerializer) para refrescar `me`."""
+        serializer = SelfProfileSerializer(
+            request.user, data=request.data, partial=True, context={'request': request}
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(CustomUserSerializer(request.user, context={'request': request}).data)
 
 
 logger = logging.getLogger(__name__)
