@@ -5,6 +5,8 @@ import App from './App'
 import { AuthProvider } from './auth/AuthContext'
 import './index.css'
 import './registerSW'
+// Arranca la captura del evento `beforeinstallprompt` lo antes posible (es one-shot).
+import './pwa/installPrompt'
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>

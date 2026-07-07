@@ -1,4 +1,5 @@
 ﻿import { useEffect, useRef, useState } from 'react'
+import InstallAppButton from '../InstallAppButton'
 import RutReminderBanner from '../RutReminderBanner'
 import ScrollToTopButton from '../ScrollToTopButton'
 import Sidebar from './Sidebar'
@@ -88,6 +89,7 @@ export default function AppLayout({ user, onLogout, children }) {
                 {identity}
               </span>
             ) : null}
+            <InstallAppButton variant="header" />
             <button
               type="button"
               onClick={onLogout}

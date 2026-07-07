@@ -2,6 +2,7 @@
 import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { defaultRouteByRole } from '../utils/roles'
+import InstallAppButton from '../components/InstallAppButton'
 
 export default function LoginPage() {
   const { login, isAuthenticated, user } = useAuth()
@@ -106,6 +107,10 @@ export default function LoginPage() {
                 </Link>
               </p>
             </form>
+
+            {/* Instalación PWA: solo aparece si el navegador la ofrece o en iOS; oculto
+                si ya corre instalada. No toca la lógica de login. */}
+            <InstallAppButton variant="landing" />
           </div>
         </div>
       </div>
