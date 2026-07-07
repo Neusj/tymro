@@ -8,9 +8,12 @@ from django.db.models.functions import Lower
 
 class CustomUser(AbstractUser):
     class Role(models.TextChoices):
-        SUPERADMIN = 'superadmin', 'Superadmin'
-        GYM_ADMIN = 'gym_admin', 'Gym Admin'
-        MANAGER = 'manager', 'Manager'
+        # Los labels (segundo valor) son la ÚNICA fuente de verdad de la etiqueta
+        # legible del rol: se exponen vía get_role_display() (serializer role_display)
+        # y accounts/roles.py ROLE_LABELS. Mantener en español.
+        SUPERADMIN = 'superadmin', 'Superadministrador'
+        GYM_ADMIN = 'gym_admin', 'Administrador'
+        MANAGER = 'manager', 'Gerente'
         MONITOR = 'monitor', 'Monitor'
         TEACHER = 'teacher', 'Profesor'
         STUDENT = 'student', 'Alumno'

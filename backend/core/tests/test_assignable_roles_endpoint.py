@@ -11,16 +11,16 @@ pytestmark = pytest.mark.django_db
 
 EXPECTED = {
     'superadmin': [
-        {'value': 'superadmin', 'label': 'Superadmin'},
-        {'value': 'gym_admin', 'label': 'Gym Admin'},
-        {'value': 'manager', 'label': 'Manager'},
+        {'value': 'superadmin', 'label': 'Superadministrador'},
+        {'value': 'gym_admin', 'label': 'Administrador'},
+        {'value': 'manager', 'label': 'Gerente'},
         {'value': 'monitor', 'label': 'Monitor'},
         {'value': 'teacher', 'label': 'Profesor'},
         {'value': 'student', 'label': 'Alumno'},
     ],
     'gym_admin': [
-        {'value': 'gym_admin', 'label': 'Gym Admin'},
-        {'value': 'manager', 'label': 'Manager'},
+        {'value': 'gym_admin', 'label': 'Administrador'},
+        {'value': 'manager', 'label': 'Gerente'},
         {'value': 'monitor', 'label': 'Monitor'},
         {'value': 'teacher', 'label': 'Profesor'},
         {'value': 'student', 'label': 'Alumno'},

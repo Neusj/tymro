@@ -209,6 +209,9 @@ class CustomUserSerializer(serializers.ModelSerializer):
     # Email es la clave de login (único por org). 'username' ya NO se expone: es un
     # identificador interno auto-generado (ver CustomUser.save()).
     email = serializers.EmailField(required=True)
+    # Etiqueta legible del rol (única fuente: los choices de CustomUser.Role vía
+    # get_role_display()). Solo lectura: nunca expone la key interna ('gym_admin').
+    role_display = serializers.CharField(source='get_role_display', read_only=True)
 
     class Meta:
         model = User
@@ -219,6 +222,7 @@ class CustomUserSerializer(serializers.ModelSerializer):
             'email',
             'is_active',
             'role',
+            'role_display',
             'phone',
             'profile_image',
             'is_active_member',

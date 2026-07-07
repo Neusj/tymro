@@ -65,6 +65,36 @@ def test_me_without_token_returns_401(api_client, user):
     assert resp.status_code == 401
 
 
+# --- role_display (etiqueta legible del rol) --------------------------------
+
+# Contrato de etiquetas legibles (español), única fuente: los choices de
+# CustomUser.Role vía get_role_display(). Si cambian los labels del modelo, este
+# dict debe cambiar conscientemente.
+ROLE_DISPLAY_LABELS = {
+    'superadmin': 'Superadministrador',
+    'gym_admin': 'Administrador',
+    'manager': 'Gerente',
+    'monitor': 'Monitor',
+    'teacher': 'Profesor',
+    'student': 'Alumno',
+}
+
+
+@pytest.mark.parametrize('role,label', list(ROLE_DISPLAY_LABELS.items()))
+def test_me_exposes_readable_role_display(api_client, make_user, make_organization, role, label):
+    org = None if role == 'superadmin' else make_organization()
+    actor = make_user(f'u_{role}', organization=org, role=role)
+    api_client.force_authenticate(user=actor)
+
+    body = api_client.get(ME_URL).json()
+
+    # `role` sigue siendo la key interna; `role_display` es la etiqueta legible.
+    assert body['role'] == role
+    assert body['role_display'] == label
+    # Nunca filtra la key interna como display.
+    assert body['role_display'] != body['role']
+
+
 # --- Rotación y expiración --------------------------------------------------
 
 def test_relogin_rotates_token_and_invalidates_previous(api_client, user):

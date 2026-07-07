@@ -1,5 +1,4 @@
 ﻿import { useEffect, useRef, useState } from 'react'
-import RoleBadge from '../RoleBadge'
 import ScrollToTopButton from '../ScrollToTopButton'
 import Sidebar from './Sidebar'
 
@@ -34,6 +33,13 @@ export default function AppLayout({ user, onLogout, children }) {
   const orgName = user?.organization_detail?.name || 'TYMRO'
   const primary = user?.organization_detail?.primary_color || '#dc2626'
   const secondary = user?.organization_detail?.secondary_color || '#2563eb'
+
+  // Identidad del usuario: "Nombre Apellido — {rol legible}". role_display viene del
+  // backend (get_role_display, única fuente). Si falta el nombre, mostramos solo el
+  // rol (sin em-dash colgando); si falta el rol, solo el nombre.
+  const fullName = [user?.first_name, user?.last_name].filter(Boolean).join(' ').trim()
+  const roleDisplay = user?.role_display || ''
+  const identity = fullName && roleDisplay ? `${fullName} — ${roleDisplay}` : fullName || roleDisplay
 
   return (
     <div
@@ -73,9 +79,14 @@ export default function AppLayout({ user, onLogout, children }) {
           </div>
 
           <div className="flex items-center gap-2 sm:gap-3">
-            <div className="hidden sm:block">
-              <RoleBadge role={user?.role} />
-            </div>
+            {identity ? (
+              <span
+                className="hidden max-w-[16rem] truncate text-sm font-medium text-brand-white sm:inline-block"
+                title={identity}
+              >
+                {identity}
+              </span>
+            ) : null}
             <button
               type="button"
               onClick={onLogout}

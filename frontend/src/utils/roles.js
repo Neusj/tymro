@@ -13,9 +13,9 @@ export const roleRoutes = {
 // backend, accounts/models.py). Solo para RoleBadge y fallbacks; los selects de
 // gestión de usuarios se llenan desde GET /api/users/assignable-roles/.
 export const roleLabels = {
-  superadmin: 'Superadmin',
-  gym_admin: 'Gym Admin',
-  manager: 'Manager',
+  superadmin: 'Superadministrador',
+  gym_admin: 'Administrador',
+  manager: 'Gerente',
   monitor: 'Monitor',
   teacher: 'Profesor',
   student: 'Alumno',
