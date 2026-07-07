@@ -1628,4 +1628,39 @@ class PaymentTransactionStatusSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class PaymentTransactionAdminSerializer(serializers.ModelSerializer):
+    """Vista de solo lectura de una PaymentTransaction para el panel del gym_admin.
+    Incluye datos del alumno y si la transacción activó un StudentPlan."""
+    student_name = serializers.SerializerMethodField()
+    student_email = serializers.EmailField(source='user.email', read_only=True)
+    student_phone = serializers.CharField(source='user.phone', read_only=True)
+    plan_name = serializers.CharField(source='plan.name', read_only=True, allow_null=True)
+    concept = serializers.SerializerMethodField()
+    activated_student_plan = serializers.SerializerMethodField()
+
+    class Meta:
+        model = PaymentTransaction
+        fields = [
+            'id', 'created_at', 'processed_at',
+            'status', 'status_detail',
+            'amount', 'plan_amount', 'enrollment_fee_amount', 'currency',
+            'student_name', 'student_email', 'student_phone',
+            'plan_name', 'concept',
+            'activated_student_plan', 'student_plan',
+        ]
+        read_only_fields = fields
+
+    def get_student_name(self, obj):
+        full_name = f'{obj.user.first_name} {obj.user.last_name}'.strip()
+        return full_name or obj.user.username
+
+    def get_concept(self, obj):
+        if obj.plan_id:
+            return f'Plan: {obj.plan.name}'
+        if obj.target_student_plan_id:
+            return 'Matrícula'
+        return '—'
+
+    def get_activated_student_plan(self, obj):
+        return bool(obj.student_plan_id)
 
