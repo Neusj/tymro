@@ -39,7 +39,7 @@ describe('GymAdminPaymentsTransactionsPage', () => {
     expect(await screen.findByText('Ana Pérez')).toBeInTheDocument()
     expect(screen.getByText('ana@gym.cl')).toBeInTheDocument()
     expect(screen.getByText('Plan: Mensual')).toBeInTheDocument()
-    expect(screen.getByText(/approved/i)).toBeInTheDocument()
+    expect(screen.getByText(/aprobado/i, { selector: 'span' })).toBeInTheDocument()
   })
 
   it('muestra estado vacío cuando no hay transacciones', async () => {
@@ -49,11 +49,21 @@ describe('GymAdminPaymentsTransactionsPage', () => {
     expect(await screen.findByText(/sin transacciones/i)).toBeInTheDocument()
   })
 
-  it('el filtro de estado dispara un refetch con el status elegido', async () => {
-    paymentsApi.listTransactions.mockResolvedValue({ count: 0, next: null, previous: null, results: [] })
+  it('el filtro de estado dispara un refetch con el status elegido y resetea la página', async () => {
+    paymentsApi.listTransactions.mockResolvedValue({ count: 60, next: 'x', previous: null, results: [row()] })
     renderPage()
 
     await waitFor(() => expect(paymentsApi.listTransactions).toHaveBeenCalled())
+
+    const next = await screen.findByRole('button', { name: /siguiente/i })
+    await userEvent.click(next)
+
+    await waitFor(() =>
+      expect(paymentsApi.listTransactions).toHaveBeenLastCalledWith(
+        expect.objectContaining({ page: 2 }),
+      ),
+    )
+
     const select = screen.getByLabelText(/estado/i)
     await userEvent.selectOptions(select, 'approved')
 

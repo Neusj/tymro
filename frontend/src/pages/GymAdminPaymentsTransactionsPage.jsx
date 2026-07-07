@@ -17,6 +17,11 @@ const STATUS_OPTIONS = [
   { value: 'refunded', label: 'Reembolsado' },
 ]
 
+const STATUS_LABELS = STATUS_OPTIONS.reduce((acc, opt) => {
+  if (opt.value) acc[opt.value] = opt.label
+  return acc
+}, {})
+
 const STATUS_STYLES = {
   approved: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200',
   rejected: 'border-brand-red/50 bg-brand-red/10 text-red-200',
@@ -49,7 +54,7 @@ function StatusBadge({ status }) {
   const style = STATUS_STYLES[status] || 'border-brand-line bg-black/30 text-brand-muted'
   return (
     <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${style}`}>
-      {status}
+      {STATUS_LABELS[status] || status}
     </span>
   )
 }
@@ -155,7 +160,7 @@ export default function GymAdminPaymentsTransactionsPage() {
                       <div className="font-medium text-brand-white">{tx.student_name}</div>
                       <div className="text-xs text-brand-muted">{tx.student_email || tx.student_phone || '—'}</div>
                     </td>
-                    <td className="py-2 pr-3 text-brand-white">{tx.concept}</td>
+                    <td className="py-2 pr-3 text-brand-white">{tx.concept || '—'}</td>
                     <td className="py-2 pr-3 text-right font-medium text-brand-white">{formatMoney(tx.amount, tx.currency)}</td>
                     <td className="py-2 pr-3"><StatusBadge status={tx.status} /></td>
                     <td className="py-2 pr-3 text-brand-muted">{tx.activated_student_plan ? 'Sí' : 'No'}</td>
