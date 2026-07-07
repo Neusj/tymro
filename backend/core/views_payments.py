@@ -2,17 +2,22 @@
 Todas respetan multitenancy: connect/account filtran por request.user.organization;
 el callback resuelve la org por el state firmado (nunca por el Host)."""
 import logging
+from datetime import datetime
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.shortcuts import get_object_or_404, redirect
 from rest_framework import status
+from rest_framework.exceptions import PermissionDenied, ValidationError as DRFValidationError
+from rest_framework.generics import ListAPIView
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .models import PaymentAccount, PaymentTransaction, Plan, StudentPlan, WebhookEvent
 from .serializers import (PaymentAccountSerializer, PaymentCheckoutRequestSerializer,
+                          PaymentTransactionAdminSerializer,
                           PaymentTransactionStatusSerializer)
 from .services import payments
 from .services.providers import get_payment_provider
@@ -147,3 +152,50 @@ class PaymentWebhookView(APIView):
                 # No re-encolar: es una inconsistencia (incl. tx malformado), no un fallo transitorio.
                 return Response(status=status.HTTP_200_OK)
         return Response(status=status.HTTP_200_OK)
+
+
+class PaymentTransactionPagination(PageNumberPagination):
+    page_size = 25
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+
+class PaymentTransactionListView(ListAPIView):
+    """Listado de solo lectura de las PaymentTransaction de la organización del
+    gym_admin. Acceso EXCLUSIVO de gym_admin sobre su propia org: superadmin y el
+    resto de roles reciben 403 (el superadmin no debe ver los pagos de todos los
+    gimnasios). Paginado, orden por fecha desc, con filtros por estado y fecha."""
+    permission_classes = [IsAuthenticated]
+    serializer_class = PaymentTransactionAdminSerializer
+    pagination_class = PaymentTransactionPagination
+
+    def get_queryset(self):
+        user = self.request.user
+        if not (_is_gym_admin(user) and user.organization_id):
+            raise PermissionDenied('Solo el administrador del gimnasio puede ver las transacciones.')
+
+        qs = (PaymentTransaction.objects
+              .filter(organization_id=user.organization_id)
+              .select_related('user', 'plan', 'student_plan')
+              .order_by('-created_at', '-id'))
+
+        status_param = self.request.query_params.get('status')
+        if status_param:
+            valid = {choice[0] for choice in PaymentTransaction.STATUS_CHOICES}
+            if status_param not in valid:
+                raise DRFValidationError({'status': 'Estado inválido.'})
+            qs = qs.filter(status=status_param)
+
+        def _parse_date(value, field):
+            try:
+                return datetime.strptime(value, '%Y-%m-%d').date()
+            except ValueError:
+                raise DRFValidationError({field: 'Formato de fecha inválido (usa YYYY-MM-DD).'})
+
+        date_from = self.request.query_params.get('date_from')
+        if date_from:
+            qs = qs.filter(created_at__date__gte=_parse_date(date_from, 'date_from'))
+        date_to = self.request.query_params.get('date_to')
+        if date_to:
+            qs = qs.filter(created_at__date__lte=_parse_date(date_to, 'date_to'))
+        return qs

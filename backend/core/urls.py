@@ -7,6 +7,7 @@ from .views_payments import (
     PaymentCheckoutView,
     PaymentConnectView,
     PaymentOAuthCallbackView,
+    PaymentTransactionListView,
     PaymentTransactionStatusView,
     PaymentWebhookView,
 )
@@ -88,6 +89,8 @@ urlpatterns = [
     path('payments/oauth/callback/', PaymentOAuthCallbackView.as_view(), name='payments-oauth-callback'),
     path('payments/account/', PaymentAccountView.as_view(), name='payments-account'),
     path('payments/checkout/', PaymentCheckoutView.as_view(), name='payments-checkout'),
+    path('payments/transactions/', PaymentTransactionListView.as_view(),
+         name='payments-transactions-list'),
     path('payments/transactions/<uuid:pk>/status/', PaymentTransactionStatusView.as_view(),
          name='payments-transaction-status'),
     path('payments/webhook/', PaymentWebhookView.as_view(), name='payments-webhook'),
