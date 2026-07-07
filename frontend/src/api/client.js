@@ -643,6 +643,16 @@ export const paymentsApi = {
     const { data } = await api.get(`/payments/transactions/${id}/status/`)
     return data
   },
+  // gym_admin: listado paginado (server-side) de transacciones de su organización.
+  // Params: page, pageSize, status, dateFrom, dateTo. → { count, next, previous, results }
+  listTransactions: async ({ page = 1, pageSize = 25, status, dateFrom, dateTo } = {}) => {
+    const params = { page, page_size: pageSize }
+    if (status) params.status = status
+    if (dateFrom) params.date_from = dateFrom
+    if (dateTo) params.date_to = dateTo
+    const { data } = await api.get('/payments/transactions/', { params })
+    return data
+  },
 }
 
 export default api
