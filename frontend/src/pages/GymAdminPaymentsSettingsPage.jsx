@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import DashboardHeader from '../components/DashboardHeader'
+import ConfirmDialog from '../components/ConfirmDialog'
 import { paymentsApi } from '../api/client'
 import { firstApiError } from '../utils/format'
 
@@ -44,6 +45,8 @@ export default function GymAdminPaymentsSettingsPage() {
   const [account, setAccount] = useState(null)
   const [loading, setLoading] = useState(true)
   const [connecting, setConnecting] = useState(false)
+  const [confirmingDisconnect, setConfirmingDisconnect] = useState(false)
+  const [disconnecting, setDisconnecting] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
 
@@ -61,23 +64,20 @@ export default function GymAdminPaymentsSettingsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // 2) Cargar el estado de la conexión.
-  useEffect(() => {
-    let active = true
-    const load = async () => {
-      setLoading(true)
-      try {
-        const data = await paymentsApi.getAccount()
-        if (active) setAccount(data)
-      } catch (apiError) {
-        if (active) setError(firstApiError(apiError?.response?.data, 'No se pudo cargar el estado de la conexión.'))
-      } finally {
-        if (active) setLoading(false)
-      }
+  // 2) Cargar el estado de la conexión (reutilizable: montaje + refetch tras desconectar).
+  const loadAccount = useCallback(async () => {
+    setLoading(true)
+    try {
+      const data = await paymentsApi.getAccount()
+      setAccount(data)
+    } catch (apiError) {
+      setError(firstApiError(apiError?.response?.data, 'No se pudo cargar el estado de la conexión.'))
+    } finally {
+      setLoading(false)
     }
-    load()
-    return () => { active = false }
   }, [])
+
+  useEffect(() => { loadAccount() }, [loadAccount])
 
   const connected = account?.status === 'connected'
 
@@ -94,6 +94,25 @@ export default function GymAdminPaymentsSettingsPage() {
       setError(firstApiError(apiError?.response?.data, 'No se pudo iniciar la conexión con MercadoPago.'))
     }
     // Si el assign tiene éxito no reseteamos connecting: la página se descarga.
+  }
+
+  const handleDisconnect = async () => {
+    setDisconnecting(true)
+    setError('')
+    setNotice('')
+    try {
+      // La respuesta del endpoint ES el estado autoritativo de la cuenta (desconectada):
+      // la aplicamos directamente en vez de un segundo GET que, si falla, dejaría la UI
+      // mostrando "conectada" junto al banner de éxito (estado contradictorio).
+      const data = await paymentsApi.disconnect()
+      setAccount(data)   // → status 'disconnected' → sección "Aún no conectas"
+      setNotice('Desconectaste la cuenta de MercadoPago. Dejarás de recibir pagos hasta reconectar.')
+    } catch (apiError) {
+      setError(firstApiError(apiError?.response?.data, 'No se pudo desconectar la cuenta de MercadoPago.'))
+    } finally {
+      setDisconnecting(false)
+      setConfirmingDisconnect(false)
+    }
   }
 
   return (
@@ -147,10 +166,18 @@ export default function GymAdminPaymentsSettingsPage() {
               <button
                 type="button"
                 onClick={handleConnect}
-                disabled={connecting}
+                disabled={connecting || disconnecting}
                 className="rounded-xl border border-brand-line bg-transparent px-4 py-2 text-sm font-semibold text-brand-white transition hover:border-brand-orange hover:bg-brand-soft disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {connecting ? 'Redirigiendo…' : 'Reconectar cuenta'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmingDisconnect(true)}
+                disabled={connecting || disconnecting}
+                className="rounded-xl border border-brand-red/50 bg-transparent px-4 py-2 text-sm font-semibold text-red-200 transition hover:border-brand-red hover:bg-brand-red/10 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Desconectar cuenta
               </button>
               <p className="text-xs text-brand-muted">El token se renueva solo; reconecta únicamente si aparece un error de cobro.</p>
             </div>
@@ -180,6 +207,16 @@ export default function GymAdminPaymentsSettingsPage() {
           </div>
         </section>
       )}
+
+      <ConfirmDialog
+        open={confirmingDisconnect}
+        title="Desconectar MercadoPago"
+        description="Dejarás de recibir pagos hasta reconectar. No se borra tu historial de transacciones; podrás volver a conectar la misma cuenta cuando quieras."
+        confirmLabel="Sí, desconectar"
+        loading={disconnecting}
+        onConfirm={handleDisconnect}
+        onCancel={() => setConfirmingDisconnect(false)}
+      />
     </div>
   )
 }

@@ -117,6 +117,20 @@ def connect_callback(*, code, state) -> PaymentAccount:
     return account
 
 
+def disconnect_account(account) -> PaymentAccount:
+    """Desconecta la cuenta: la marca ``disconnected`` y borra los tokens OAuth cifrados.
+    NO borra la fila: se conserva el histórico y la reconexión posterior vía el
+    ``update_or_create`` de ``connect_callback`` vuelve a rellenar los tokens.
+    El scoping por organización es responsabilidad de la view que obtiene ``account``."""
+    account.status = PaymentAccount.STATUS_DISCONNECTED
+    account.access_token = None
+    account.refresh_token = None
+    account.token_expires_at = None
+    account.save(update_fields=['status', 'access_token', 'refresh_token',
+                                'token_expires_at', 'updated_at'])
+    return account
+
+
 def get_valid_access_token(*, account) -> str:
     expiring = (account.token_expires_at is None
                 or account.token_expires_at <= timezone.now() + REFRESH_MARGIN)
@@ -247,7 +261,10 @@ def process_payment_notification(*, tx_id, provider_payment_id):
         return None
     account = PaymentAccount.objects.filter(
         organization_id=tx.organization_id, provider=tx.provider).first()
-    if account is None:
+    # Cuenta ausente o desconectada (tokens vaciados): no se puede/ debe consultar a MP.
+    # Abortamos limpio (ack del webhook) en vez de intentar refrescar un token nulo, que
+    # con MP real da 400 → PaymentProviderError → 500 y bucle de reintentos del webhook.
+    if account is None or account.status != PaymentAccount.STATUS_CONNECTED:
         return None
     provider = get_payment_provider(tx.provider)
     access_token = get_valid_access_token(account=account)

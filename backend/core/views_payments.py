@@ -83,6 +83,24 @@ class PaymentAccountView(APIView):
         return Response(PaymentAccountSerializer(account).data)
 
 
+class PaymentDisconnectView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        if not (_is_superadmin(user) or _is_gym_admin(user)):
+            return Response({'detail': 'No tienes permisos para desconectar pagos.'},
+                            status=status.HTTP_403_FORBIDDEN)
+        # Mismo scoping que PaymentAccountView: SIEMPRE por la org del actor, jamás por
+        # un id recibido en el payload. Así el gym_admin solo puede tocar su propia cuenta.
+        account = PaymentAccount.objects.filter(
+            organization_id=user.organization_id, provider=settings.PAYMENTS_PROVIDER).first()
+        if account is None:
+            return Response({'status': 'disconnected', 'provider': settings.PAYMENTS_PROVIDER})
+        payments.disconnect_account(account)
+        return Response(PaymentAccountSerializer(account).data)
+
+
 class PaymentCheckoutView(APIView):
     permission_classes = [IsAuthenticated]
 

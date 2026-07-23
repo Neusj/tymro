@@ -633,6 +633,12 @@ export const paymentsApi = {
     const { data } = await api.post('/payments/connect/')
     return data
   },
+  // gym_admin/superadmin: desconecta la cuenta de la org (borra tokens, no la fila).
+  // → {status:'disconnected', provider}
+  disconnect: async () => {
+    const { data } = await api.post('/payments/disconnect/')
+    return data
+  },
   // student: crea PaymentTransaction + preference. Exactamente uno de planId
   // (comprar/renovar plan) o targetStudentPlanId (pagar matrícula pendiente).
   // → {transaction_id, redirect_url}

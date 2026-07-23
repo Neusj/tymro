@@ -884,8 +884,9 @@ class PaymentAccount(TimestampedModel):
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='payment_accounts')
     provider = models.CharField(max_length=30, default='mercadopago')
     provider_user_id = models.CharField(max_length=64)
-    access_token = EncryptedTextField()
-    refresh_token = EncryptedTextField()
+    # null tras desconectar: la fila se conserva (histórico + reconexión) pero sin tokens.
+    access_token = EncryptedTextField(null=True, blank=True)
+    refresh_token = EncryptedTextField(null=True, blank=True)
     # Strings opacos que devuelve el proveedor OAuth (MP): el scope es una lista
     # larga separada por espacios que supera varchar(255). Sin límite de longitud.
     public_key = models.TextField(null=True, blank=True)
