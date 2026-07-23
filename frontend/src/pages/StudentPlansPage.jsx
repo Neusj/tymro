@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { getMyMemberships, paymentsApi } from '../api/client'
+import useRefetchOnForeground from '../hooks/useRefetchOnForeground'
 import DashboardHeader from '../components/DashboardHeader'
 import DataTable from '../components/ui/DataTable'
 import ValueBadge from '../components/ui/ValueBadge'
@@ -74,6 +75,9 @@ export default function StudentPlansPage() {
   useEffect(() => {
     loadData()
   }, [])
+
+  // PWA: al volver del foco (p. ej. tras pagar en Checkout Pro) recarga los planes.
+  useRefetchOnForeground(loadData)
 
   const totals = useMemo(
     () => ({

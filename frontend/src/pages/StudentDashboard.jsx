@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { getMyPlan } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
+import useRefetchOnForeground from '../hooks/useRefetchOnForeground'
 import DashboardHeader from '../components/DashboardHeader'
 import EmptyState from '../components/EmptyState'
 import SectionCard from '../components/SectionCard'
@@ -23,26 +24,21 @@ export default function StudentDashboard() {
   const { user } = useAuth()
   const [myPlan, setMyPlan] = useState(null)
 
-  useEffect(() => {
-    let cancelled = false
-    const loadPlan = async () => {
-      try {
-        const data = await getMyPlan()
-        if (!cancelled) {
-          setMyPlan(data || null)
-        }
-      } catch {
-        if (!cancelled) {
-          setMyPlan(null)
-        }
-      }
-    }
-
-    loadPlan()
-    return () => {
-      cancelled = true
+  const loadPlan = useCallback(async () => {
+    try {
+      const data = await getMyPlan()
+      setMyPlan(data || null)
+    } catch {
+      setMyPlan(null)
     }
   }, [])
+
+  useEffect(() => {
+    loadPlan()
+  }, [loadPlan])
+
+  // PWA: al volver del foco (p. ej. tras pagar en Checkout Pro) re-pide el plan.
+  useRefetchOnForeground(loadPlan)
 
   const today = new Date().toISOString().slice(0, 10)
   const remaining = Math.max((myPlan?.total_classes || 0) - (myPlan?.classes_used || 0), 0)
