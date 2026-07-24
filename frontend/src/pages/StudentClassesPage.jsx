@@ -634,8 +634,12 @@ export default function StudentClassesPage({ mode = 'available' }) {
     [],
   )
 
-  const renderClassFilters = (filters, setFilters, options, initial = initialClassFilters) => (
-    <FilterPanel activeCount={countActiveFilters(filters, initial)} onClear={() => setFilters(initial)}>
+  // El baseline de "activos"/"Limpiar" es SIEMPRE el set vacío (initialClassFilters):
+  // así el rango por defecto (semana) cuenta como filtro activo → el botón "Limpiar"
+  // aparece y, al pulsarlo, quita TODOS los filtros incluido el rango (no vuelve a la
+  // semana). El default de montaje (semana) se fija sólo en el useState, no aquí.
+  const renderClassFilters = (filters, setFilters, options) => (
+    <FilterPanel activeCount={countActiveFilters(filters, initialClassFilters)} onClear={() => setFilters(initialClassFilters)}>
       <div className="space-y-3">
         <QuickChips
           items={[
@@ -754,7 +758,7 @@ export default function StudentClassesPage({ mode = 'available' }) {
                 { label: 'Próximas clases mías', value: availableKpis.upcomingMine },
               ]}
             />
-            {renderClassFilters(classFilters, setClassFilters, availableFilterOptions, initialAvailableClassFilters)}
+            {renderClassFilters(classFilters, setClassFilters, availableFilterOptions)}
             <div className="flex flex-wrap items-center gap-2 rounded-lg border border-brand-line bg-black/20 px-3 py-2 text-xs">
               <span className="text-brand-muted">Seleccionadas: {selectedAvailable.length}</span>
               <button

@@ -60,9 +60,12 @@ describe('StudentClassesPage — rango por defecto (#18)', () => {
   })
 })
 
+const DAY = 24 * 60 * 60 * 1000
+const isoIn = (ms) => new Date(Date.now() + ms).toISOString()
+
 // Una clase reservable dentro de la semana actual (para que pase el filtro por
 // defecto), sin reserva activa y con plan con saldo → botón "Reservar" habilitado.
-const FUTURE_ISO = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString()
+const FUTURE_ISO = new Date(Date.now() + 2 * DAY).toISOString()
 
 function seedReservableClass() {
   classesApi.list
@@ -133,5 +136,52 @@ describe('StudentClassesPage — confirmar antes de reservar (#24)', () => {
 
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     expect(enrollmentsApi.create).not.toHaveBeenCalled()
+  })
+})
+
+describe('StudentClassesPage — "Limpiar" quita TODOS los filtros incluido el rango (#18 fix)', () => {
+  beforeEach(() => {
+    // Vista escritorio: FilterPanel abierto (min-width→true) + tabla (max-width→false).
+    window.matchMedia = (query) => ({
+      matches: query.includes('min-width'),
+      addEventListener() {},
+      removeEventListener() {},
+      addListener() {},
+      removeListener() {},
+    })
+  })
+
+  it('una clase FUERA de la semana aparece tras "Limpiar" y el chip Semana se desactiva', async () => {
+    // Clase a 30 días: fuera de la ventana "semana" (default), así que arranca oculta.
+    classesApi.list
+      .mockResolvedValueOnce([
+        {
+          id: 201,
+          name: 'ClaseLejana',
+          status: 'scheduled',
+          start_datetime: isoIn(30 * DAY),
+          end_datetime: isoIn(30 * DAY + 60 * 60 * 1000),
+          capacity: 10,
+          enrollments_count: 0,
+          class_template: null,
+        },
+      ])
+      .mockResolvedValueOnce([])
+    getMyPlan.mockResolvedValue({ total_classes: 10, classes_used: 0 })
+
+    renderPage('available')
+    const user = userEvent.setup()
+    await waitFor(() => expect(classesApi.list).toHaveBeenCalled())
+
+    // Por defecto (semana) la clase a 30 días NO se muestra.
+    expect(screen.queryAllByText('ClaseLejana')).toHaveLength(0)
+
+    // "Limpiar" debe estar disponible (hay un filtro activo: la semana) y quitar
+    // TODOS los filtros, incluido el rango → la clase aparece.
+    await user.click(screen.getByRole('button', { name: /limpiar/i }))
+    expect((await screen.findAllByText('ClaseLejana')).length).toBeGreaterThan(0)
+
+    // Y el chip "Semana" queda inactivo tras limpiar.
+    expect(screen.getByRole('button', { name: 'Semana' })).not.toHaveClass('bg-brand-blue/20')
   })
 })
