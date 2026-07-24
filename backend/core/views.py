@@ -673,6 +673,36 @@ class PublicInviteValidateView(APIView):
         return Response(PublicOrganizationBrandingSerializer(organization, context={'request': request}).data)
 
 
+def send_verification_email(user):
+    """Envía el correo de confirmación de email al ``user``. Deriva la org de
+    ``user.organization``, arma el link de verificación con el subdominio público
+    de esa org (``organization_public_base_url``) y lo envía vía el backend de
+    correo (Resend/anymail en prod). Si el envío falla lo loguea y NO propaga: el
+    usuario ya existe y puede reintentar o pedir un reenvío."""
+    organization = user.organization
+    org_name = organization.name if organization else 'TYMRO'
+    uid = urlsafe_base64_encode(force_bytes(user.pk))
+    token = default_token_generator.make_token(user)
+    verify_link = f"{organization_public_base_url(organization)}/verify-email?uid={uid}&token={token}"
+    try:
+        send_mail(
+            subject=f'Confirma tu email — {org_name}',
+            message=(
+                f'¡Bienvenido/a a {org_name}!\n\n'
+                'Confirma tu email para activar tu cuenta y agendar tu clase de prueba gratis:\n'
+                f'{verify_link}\n\n'
+                'Si no fuiste tú, puedes ignorar este correo.'
+            ),
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[user.email],
+            fail_silently=False,
+        )
+    except Exception:
+        # El usuario ya se creó; si el correo de verificación falla, lo logueamos
+        # y dejamos que la vista responda éxito igual (puede pedir reenvío).
+        logger.exception('Fallo enviando email de verificación a %s', user.email)
+
+
 class PublicRegisterView(APIView):
     """Registro público de un prospecto. La organización se fija server-side
     desde el slug; el rol es siempre STUDENT. El payload no puede elegir org/rol."""
@@ -711,26 +741,7 @@ class PublicRegisterView(APIView):
         user.set_password(data['password'])
         user.save()
 
-        uid = urlsafe_base64_encode(force_bytes(user.pk))
-        token = default_token_generator.make_token(user)
-        verify_link = f"{organization_public_base_url(organization)}/verify-email?uid={uid}&token={token}"
-        try:
-            send_mail(
-                subject=f'Confirma tu email — {organization.name}',
-                message=(
-                    f'¡Bienvenido/a a {organization.name}!\n\n'
-                    'Confirma tu email para activar tu cuenta y agendar tu clase de prueba gratis:\n'
-                    f'{verify_link}\n\n'
-                    'Si no fuiste tú, puedes ignorar este correo.'
-                ),
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[user.email],
-                fail_silently=False,
-            )
-        except Exception:
-            # El usuario ya se creó; si el correo de verificación falla, lo logueamos
-            # y devolvemos éxito igual (puede reintentar / pedir reenvío).
-            logger.exception('Fallo enviando email de verificación a %s', user.email)
+        send_verification_email(user)
 
         return Response(
             {'detail': 'Cuenta creada. Te enviamos un email para confirmar tu cuenta.'},
@@ -781,9 +792,38 @@ class PublicVerifyEmailView(APIView):
         )
 
 
+class ResendVerificationView(APIView):
+    """Reenvía el correo de confirmación al usuario autenticado. Si su email ya
+    está verificado es no-op (200 sin enviar). Acotado por throttle
+    (scope 'resend_verification') contra spam de reenvíos."""
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'resend_verification'
+
+    def post(self, request):
+        user = request.user
+        if user.email_verified:
+            return Response({'detail': 'Tu email ya está confirmado.'})
+        send_verification_email(user)
+        return Response({'detail': 'Te reenviamos el correo de confirmación.'})
+
+
+TRIAL_WINDOW_DEFAULT_DAYS = 7
+
+
+def _trial_window_days(organization):
+    """Días de validez de la clase de prueba para la org (#19). Default 7 si no hay
+    config o si el valor guardado es inválido (<= 0)."""
+    days = getattr(organization, 'trial_validity_days', None)
+    if not days or days <= 0:
+        return TRIAL_WINDOW_DEFAULT_DAYS
+    return days
+
+
 class PublicTrialClassesView(APIView):
     """Lista las próximas clases elegibles para prueba con cupo, de la organización
-    del alumno autenticado."""
+    del alumno autenticado, dentro de la ventana de validez de la prueba."""
 
     permission_classes = [IsAuthenticated]
 
@@ -792,12 +832,17 @@ class PublicTrialClassesView(APIView):
         if not _is_student(user) or not user.organization_id:
             return Response([], status=status.HTTP_200_OK)
 
+        now = timezone.now()
+        window_end = now + timedelta(days=_trial_window_days(user.organization))
         queryset = (
             GymClass.objects.filter(
                 organization_id=user.organization_id,
                 is_trial_eligible=True,
                 status=GymClass.Status.SCHEDULED,
-                start_datetime__gt=timezone.now(),
+                start_datetime__gt=now,
+                # Ventana de validez de la prueba (#19): no se ofrecen clases más allá
+                # de la ventana configurada por la org (default 7 días).
+                start_datetime__lte=window_end,
             )
             .select_related('branch', 'teacher', 'class_type')
             .order_by('start_datetime')
@@ -845,6 +890,14 @@ class PublicTrialBookView(APIView):
             except GymClass.DoesNotExist:
                 return Response(
                     {'detail': 'Esa clase no está disponible para prueba.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Ventana de validez de la prueba (#19): no se puede agendar fuera de ella.
+            window_end = timezone.now() + timedelta(days=_trial_window_days(gym_class.organization))
+            if gym_class.start_datetime > window_end:
+                return Response(
+                    {'detail': 'Esa clase está fuera de la ventana para agendar tu clase de prueba.'},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
@@ -1099,16 +1152,52 @@ def _qr_preview_payload(student, organization_id):
     }
 
 
+def _teacher_qr_class_or_403(teacher, class_id):
+    """Autoriza a un profesor a exponer el QR SOLO en el contexto de una clase que
+    dicta él y que pertenece a SU propia organización. Devuelve la clase o levanta
+    403. El filtro por (id, organization_id, teacher_id) es aislante: una clase de
+    otra org (o de otro profe) simplemente no aparece → nunca se filtra cross-tenant
+    ni se autoriza una clase ajena."""
+    if not class_id:
+        raise PermissionDenied('Indica la clase para exponer el QR de asistencia.')
+    try:
+        class_id = int(class_id)
+    except (TypeError, ValueError):
+        # class_id malformado (no numérico): se trata como clase inexistente → 403,
+        # nunca un 500 por castear el PK.
+        raise PermissionDenied('Solo puedes exponer el QR de una clase que dictas en tu gimnasio.')
+    gym_class = GymClass.objects.filter(
+        id=class_id,
+        organization_id=teacher.organization_id,
+        teacher_id=teacher.id,
+    ).first()
+    if gym_class is None:
+        raise PermissionDenied('Solo puedes exponer el QR de una clase que dictas en tu gimnasio.')
+    return gym_class
+
+
 class AttendanceQrCurrentView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         user = request.user
-        if not _is_gym_admin(user) or not user.organization_id:
-            raise PermissionDenied('Solo Gym Admin puede generar QR de asistencia.')
-        payload = _attendance_qr_payload(request, user.organization)
-        payload.update(_attendance_screen_session_payload(request, user.organization))
-        return Response(payload)
+        if not user.organization_id:
+            raise PermissionDenied('Solo el staff del gimnasio puede generar el QR de asistencia.')
+
+        # gym_admin: genera el QR de su org + gestiona la sesión de pantalla (como hoy).
+        if _is_gym_admin(user):
+            payload = _attendance_qr_payload(request, user.organization)
+            payload.update(_attendance_screen_session_payload(request, user.organization))
+            return Response(payload)
+
+        # teacher: puede exponer el QR SOLO de una clase que dicta él, y siempre de
+        # su propia org (scoped por org). No recibe la gestión de la pantalla de
+        # recepción: solo el QR rotante para mostrarlo en su clase.
+        if _is_teacher(user):
+            _teacher_qr_class_or_403(user, request.query_params.get('class_id'))
+            return Response(_attendance_qr_payload(request, user.organization))
+
+        raise PermissionDenied('No tienes permiso para generar el QR de asistencia.')
 
 
 class AttendanceQrScreenView(APIView):

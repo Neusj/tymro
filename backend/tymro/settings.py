@@ -253,6 +253,8 @@ REST_FRAMEWORK = {
         'public_invite': '30/hour',
         # Confirmar email permite algún reintento.
         'public_verify': '10/hour',
+        # Reenviar el correo de confirmación envía un email -> acotado (calca password_reset).
+        'resend_verification': os.getenv('THROTTLE_RESEND_VERIFICATION', '3/hour'),
     },
 }
 

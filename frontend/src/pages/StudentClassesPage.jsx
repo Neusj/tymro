@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { classTemplatesApi, classesApi, enrollmentsApi, getMyPlan, recurringEnrollmentsApi } from '../api/client'
+import ConfirmDialog from '../components/ConfirmDialog'
 import DashboardHeader from '../components/DashboardHeader'
 import FilterDropdown from '../components/FilterDropdown'
 import FilterPanel from '../components/FilterPanel'
@@ -25,6 +26,14 @@ const initialClassFilters = {
   discipline: '',
   status: '',
   dateRange: '',
+}
+
+// Clases disponibles: por defecto se acota a la semana actual (no un rango abierto
+// que traería clases a meses/años vista). El historial NO usa este default: sus
+// clases son pasadas y 'week' (hoy→+7) las ocultaría.
+const initialAvailableClassFilters = {
+  ...initialClassFilters,
+  dateRange: 'week',
 }
 
 const initialReservationFilters = {
@@ -87,11 +96,13 @@ export default function StudentClassesPage({ mode = 'available' }) {
   const [notice, setNotice] = useState('')
   const [myPlan, setMyPlan] = useState(null)
 
-  const [classFilters, setClassFilters] = useState(initialClassFilters)
+  const [classFilters, setClassFilters] = useState(initialAvailableClassFilters)
   const [reservationFilters, setReservationFilters] = useState(initialReservationFilters)
   const [historyFilters, setHistoryFilters] = useState(initialClassFilters)
   const [selectedAvailableIds, setSelectedAvailableIds] = useState([])
   const [selectedReservationIds, setSelectedReservationIds] = useState([])
+  // Clase pendiente de confirmar antes de reservar (#24). null = sin diálogo abierto.
+  const [pendingReserve, setPendingReserve] = useState(null)
 
   const loadData = async () => {
     setLoading(true)
@@ -214,6 +225,16 @@ export default function StudentClassesPage({ mode = 'available' }) {
     } finally {
       setWorkingKey('')
     }
+  }
+
+  // Confirma la reserva pendiente (#24): reserva y cierra el diálogo al terminar.
+  const confirmPendingReserve = async () => {
+    if (!pendingReserve) {
+      return
+    }
+    const target = pendingReserve
+    await reserveClass(target)
+    setPendingReserve(null)
   }
 
   const subscribeOrReactivateRecurring = async (gymClass) => {
@@ -391,7 +412,7 @@ export default function StudentClassesPage({ mode = 'available' }) {
             <button
               type="button"
               disabled={!canReserve || workingKey === `reserve-${row.id}`}
-              onClick={() => reserveClass(row)}
+              onClick={() => setPendingReserve(row)}
               title={!hasPlanBalance ? 'Sin clases disponibles' : ''}
               className="rounded-lg border border-brand-blue bg-brand-blue/10 px-3 py-2 text-xs font-semibold text-brand-white disabled:opacity-60"
             >
@@ -432,7 +453,7 @@ export default function StudentClassesPage({ mode = 'available' }) {
                   <button
                     type="button"
                     disabled={!canReserveWithPlan || workingKey === `reserve-${row.id}`}
-                    onClick={() => reserveClass(row)}
+                    onClick={() => setPendingReserve(row)}
                     className="w-full rounded-lg border border-brand-blue px-2.5 py-1.5 text-left text-xs text-brand-white disabled:opacity-60"
                     title={!hasPlanBalance ? 'Sin clases disponibles' : ''}
                   >
@@ -613,8 +634,8 @@ export default function StudentClassesPage({ mode = 'available' }) {
     [],
   )
 
-  const renderClassFilters = (filters, setFilters, options) => (
-    <FilterPanel activeCount={countActiveFilters(filters, initialClassFilters)} onClear={() => setFilters(initialClassFilters)}>
+  const renderClassFilters = (filters, setFilters, options, initial = initialClassFilters) => (
+    <FilterPanel activeCount={countActiveFilters(filters, initial)} onClear={() => setFilters(initial)}>
       <div className="space-y-3">
         <QuickChips
           items={[
@@ -733,7 +754,7 @@ export default function StudentClassesPage({ mode = 'available' }) {
                 { label: 'Próximas clases mías', value: availableKpis.upcomingMine },
               ]}
             />
-            {renderClassFilters(classFilters, setClassFilters, availableFilterOptions)}
+            {renderClassFilters(classFilters, setClassFilters, availableFilterOptions, initialAvailableClassFilters)}
             <div className="flex flex-wrap items-center gap-2 rounded-lg border border-brand-line bg-black/20 px-3 py-2 text-xs">
               <span className="text-brand-muted">Seleccionadas: {selectedAvailable.length}</span>
               <button
@@ -791,6 +812,16 @@ export default function StudentClassesPage({ mode = 'available' }) {
           selectAllScope="filtered"
         />
       </section>
+
+      <ConfirmDialog
+        open={Boolean(pendingReserve)}
+        title="Confirmar reserva"
+        description="¿Seguro que quieres reservar esta clase? Se descontará una clase de tu plan."
+        confirmLabel="Reservar"
+        loading={Boolean(pendingReserve) && workingKey === `reserve-${pendingReserve.id}`}
+        onConfirm={confirmPendingReserve}
+        onCancel={() => setPendingReserve(null)}
+      />
     </div>
   )
 }

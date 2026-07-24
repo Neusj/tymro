@@ -113,6 +113,13 @@ export const authApi = {
     })
     return data
   },
+  // Reenvía el correo de confirmación al usuario autenticado (#26). Instancia
+  // `api` (con Authorization): el backend lo exige (IsAuthenticated) y responde
+  // 200 tanto si envía como si ya estaba verificado (no-op); 429 si topa el throttle.
+  resendVerification: async () => {
+    const { data } = await api.post('/resend-verification/')
+    return data
+  },
 }
 
 // Registro público de prospectos + clase de prueba gratis (links por gimnasio).

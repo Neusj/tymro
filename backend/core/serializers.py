@@ -100,6 +100,7 @@ class OrganizationSerializer(serializers.ModelSerializer):
             'attendance_screen_session_expires_at',
             'public_registration_enabled',
             'public_registration_url',
+            'trial_validity_days',
             'branches_count',
         ]
         read_only_fields = [

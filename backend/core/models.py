@@ -90,6 +90,12 @@ class Organization(TimestampedModel):
         default=generate_invite_token,
     )
     public_registration_enabled = models.BooleanField(default=True)
+    # Ventana de validez de la clase de prueba: cuántos días hacia adelante se puede
+    # agendar una prueba. Configurable por org; default 7 días (evita agendar a meses).
+    trial_validity_days = models.PositiveIntegerField(
+        default=7,
+        help_text='Días hacia adelante en que se puede agendar una clase de prueba.',
+    )
 
     class Meta:
         ordering = ['name']

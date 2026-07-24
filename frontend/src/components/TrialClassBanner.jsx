@@ -1,5 +1,58 @@
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
+import { authApi } from '../api/client'
+
+// Botón de reenvío del correo de confirmación (#26). POSTea a /resend-verification/
+// por la instancia axios AUTENTICADA (authApi). Máquina de estados sencilla:
+// idle → enviando → enviado; un 429 (throttle) muestra "ya enviamos uno recién".
+function ResendVerificationButton() {
+  const [status, setStatus] = useState('idle') // idle | sending | sent | rate_limited | error
+
+  const handleResend = async () => {
+    if (status === 'sending') {
+      return
+    }
+    setStatus('sending')
+    try {
+      await authApi.resendVerification()
+      setStatus('sent')
+    } catch (err) {
+      setStatus(err?.response?.status === 429 ? 'rate_limited' : 'error')
+    }
+  }
+
+  if (status === 'sent') {
+    return (
+      <p className="mt-3 text-xs font-semibold text-brand-white">
+        ✅ Te reenviamos el correo. Revisa tu bandeja de entrada (y spam).
+      </p>
+    )
+  }
+
+  return (
+    <div className="mt-3">
+      <button
+        type="button"
+        onClick={handleResend}
+        disabled={status === 'sending'}
+        className="inline-flex rounded-lg border border-brand-orange px-3 py-1.5 text-xs font-semibold text-brand-white disabled:opacity-60"
+      >
+        {status === 'sending' ? 'Enviando…' : 'Reenviar correo de confirmación'}
+      </button>
+      {status === 'rate_limited' && (
+        <p className="mt-2 text-xs text-brand-muted">
+          Ya enviamos uno recién. Revisa tu bandeja de entrada (y spam).
+        </p>
+      )}
+      {status === 'error' && (
+        <p className="mt-2 text-xs text-brand-muted">
+          No pudimos reenviarlo. Inténtalo de nuevo en un momento.
+        </p>
+      )}
+    </div>
+  )
+}
 
 // Punto de entrada a la clase de prueba gratis DESDE la app (no solo por el redirect
 // post-verificación): un alumno logueado o importado no tenía cómo llegar a /trial.
@@ -15,8 +68,7 @@ export default function TrialClassBanner() {
   }
 
   // Sin email verificado el backend no deja agendar: en vez del CTA se invita a
-  // confirmar el correo, reusando el mensaje del registro público. No hay endpoint
-  // de reenvío de verificación, así que esta variante es informativa.
+  // confirmar el correo y se ofrece reenviar el enlace de verificación (#26).
   if (!user.email_verified) {
     return (
       <div className="mb-5 rounded-xl border border-brand-orange/50 bg-brand-orange/10 px-4 py-3">
@@ -25,6 +77,7 @@ export default function TrialClassBanner() {
           Te enviamos un enlace para confirmar tu cuenta. Revisa tu bandeja de entrada (y spam);
           al confirmarlo podrás agendar tu clase de prueba gratis.
         </p>
+        <ResendVerificationButton />
       </div>
     )
   }
