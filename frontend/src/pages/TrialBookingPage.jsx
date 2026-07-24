@@ -20,7 +20,7 @@ function formatWhen(value) {
 }
 
 export default function TrialBookingPage() {
-  const { user, logout } = useAuth()
+  const { user, logout, refreshMe } = useAuth()
   const navigate = useNavigate()
   const [classes, setClasses] = useState([])
   const [loading, setLoading] = useState(true)
@@ -66,6 +66,10 @@ export default function TrialBookingPage() {
     try {
       await registrationApi.bookTrial(gymClass.id)
       setBooked(gymClass)
+      // La reserva marcó has_used_trial=true en el backend. Refrescamos la sesión
+      // para que TrialClassBanner desaparezca al volver a la app (fire-and-forget:
+      // un fallo del refresco no debe romper la confirmación ya lograda).
+      refreshMe().catch(() => {})
     } catch (err) {
       setError(err?.response?.data?.detail || 'No se pudo reservar la clase. Prueba con otra.')
     } finally {

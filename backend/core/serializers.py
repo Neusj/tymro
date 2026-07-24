@@ -258,7 +258,15 @@ class CustomUserSerializer(serializers.ModelSerializer):
             'organization_detail',
             'branch_detail',
             'password',
+            # Estado del alumno para el banner de "clase de prueba gratis" (frontend).
+            # SOLO LECTURA: este serializer también sirve al alta/edición de usuarios
+            # del admin, y estos flags los mueve solo el backend (verificación de
+            # email / reserva de la prueba). Un admin no puede negar la prueba ni
+            # falsear la verificación marcándolos a mano.
+            'email_verified',
+            'has_used_trial',
         ]
+        read_only_fields = ['email_verified', 'has_used_trial']
 
     def validate(self, attrs):
         """Integridad de datos del usuario. La decisión de qué rol puede asignar
