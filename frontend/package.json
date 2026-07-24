@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "icons": "node scripts/generate-icons.mjs"
+    "icons": "node scripts/generate-icons.mjs",
+    "splash": "node scripts/generate-splash.mjs"
   },
   "dependencies": {
     "@zxing/browser": "^0.2.0",

@@ -32,6 +32,10 @@ export const pwaOptions = {
   workbox: {
     // Precache del shell estático (JS/CSS/HTML/fuentes/imágenes con hash).
     globPatterns: ['**/*.{js,css,html,svg,png,ico,webp,woff,woff2}'],
+    // Los splash de iOS (apple-touch-startup-image) NO van al precache: son ~1 MB
+    // de cosméticos que iOS pide por HTTP al lanzar (no los sirve el SW al shell),
+    // así el precache no se infla ni los re-valida en cada update. Siguen en dist/.
+    globIgnores: ['splash/**'],
     // SPA: cualquier navegación offline cae al app-shell (index.html).
     navigateFallback: '/index.html',
     // No interceptar las rutas de la API ni media con el fallback de navegación.

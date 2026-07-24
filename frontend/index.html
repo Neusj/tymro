@@ -22,10 +22,109 @@
     <meta name="apple-mobile-web-app-title" content="TYMRO" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2" />
 
+    <!-- Splash de arranque en frío de iOS (apple-touch-startup-image). iOS muestra
+         estas imágenes al lanzar la PWA instalada ANTES de cargar el HTML, evitando
+         el blanco previo al splash de #root. Solo PORTRAIT (manifest orientation:
+         portrait). Cada media query es única por (device-width, device-height, dpr);
+         las imágenes se generan con `npm run splash` (scripts/generate-splash.mjs).
+         Android NO usa esto: su splash lo deriva del manifest. -->
+    <link rel="apple-touch-startup-image" media="(device-width: 440px) and (device-height: 956px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="/splash/iphone-1320x2868.png" />
+    <link rel="apple-touch-startup-image" media="(device-width: 402px) and (device-height: 874px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="/splash/iphone-1206x2622.png" />
+    <link rel="apple-touch-startup-image" media="(device-width: 430px) and (device-height: 932px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="/splash/iphone-1290x2796.png" />
+    <link rel="apple-touch-startup-image" media="(device-width: 393px) and (device-height: 852px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="/splash/iphone-1179x2556.png" />
+    <link rel="apple-touch-startup-image" media="(device-width: 428px) and (device-height: 926px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="/splash/iphone-1284x2778.png" />
+    <link rel="apple-touch-startup-image" media="(device-width: 390px) and (device-height: 844px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="/splash/iphone-1170x2532.png" />
+    <link rel="apple-touch-startup-image" media="(device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="/splash/iphone-1242x2688.png" />
+    <link rel="apple-touch-startup-image" media="(device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="/splash/iphone-828x1792.png" />
+    <link rel="apple-touch-startup-image" media="(device-width: 375px) and (device-height: 812px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="/splash/iphone-1125x2436.png" />
+    <link rel="apple-touch-startup-image" media="(device-width: 414px) and (device-height: 736px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="/splash/iphone-1242x2208.png" />
+    <link rel="apple-touch-startup-image" media="(device-width: 375px) and (device-height: 667px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="/splash/iphone-750x1334.png" />
+    <link rel="apple-touch-startup-image" media="(device-width: 320px) and (device-height: 568px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="/splash/iphone-640x1136.png" />
+
+    <!-- Splash de arranque en frío: estilos INLINE (no dependen del bundle CSS,
+         que llega tarde). system-ui evita esperar Google Fonts. El splash vive
+         dentro de #root y React lo descarta en el primer commit de createRoot;
+         no está atado a auth ni a ningún estado, así que nunca queda colgado. -->
+    <style>
+      #tymro-splash {
+        position: fixed;
+        inset: 0;
+        z-index: 2147483647;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 28px;
+        /* Fondo INLINE (#09090b) + glows de marca del mismo look del <body>. */
+        background:
+          radial-gradient(1200px circle at 12% -10%, rgba(249, 115, 22, 0.10), transparent 45%),
+          radial-gradient(1000px circle at 100% 0%, rgba(37, 99, 235, 0.10), transparent 40%),
+          #09090b;
+        font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+        padding:
+          env(safe-area-inset-top) env(safe-area-inset-right)
+          env(safe-area-inset-bottom) env(safe-area-inset-left);
+      }
+      #tymro-splash .tymro-splash-brand {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 14px;
+      }
+      #tymro-splash svg {
+        width: 76px;
+        height: 76px;
+        display: block;
+      }
+      #tymro-splash .tymro-splash-word {
+        font-size: 30px;
+        font-weight: 800;
+        letter-spacing: 0.14em;
+        color: #fafafa;
+      }
+      #tymro-splash .tymro-splash-spinner {
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        border: 3px solid rgba(255, 255, 255, 0.14);
+        border-top-color: #f97316;
+        animation: tymro-splash-spin 0.8s linear infinite;
+      }
+      @keyframes tymro-splash-spin {
+        to { transform: rotate(360deg); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #tymro-splash .tymro-splash-spinner { animation-duration: 2.4s; }
+      }
+    </style>
+
     <title>TYMRO</title>
   </head>
   <body class="bg-brand-black">
-    <div id="root"></div>
+    <div id="root">
+      <!-- Splash estático: se pinta ANTES del bundle JS y React lo reemplaza al
+           montar (createRoot descarta el contenido previo de #root). Sin JS, sin
+           red, sin fuentes externas. -->
+      <div id="tymro-splash" role="status" aria-label="Cargando TYMRO">
+        <div class="tymro-splash-brand">
+          <svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <defs>
+              <linearGradient id="tymro-splash-t" x1="256" y1="126" x2="256" y2="392" gradientUnits="userSpaceOnUse">
+                <stop offset="0" stop-color="#fdba74" />
+                <stop offset=".55" stop-color="#f97316" />
+                <stop offset="1" stop-color="#ea580c" />
+              </linearGradient>
+            </defs>
+            <g fill="url(#tymro-splash-t)">
+              <rect x="112" y="132" width="288" height="56" rx="10" />
+              <rect x="228" y="132" width="56" height="252" rx="10" />
+            </g>
+          </svg>
+          <div class="tymro-splash-word">TYMRO</div>
+        </div>
+        <div class="tymro-splash-spinner" aria-hidden="true"></div>
+      </div>
+    </div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
