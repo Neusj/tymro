@@ -21,6 +21,12 @@ services:
       # Base para armar los links públicos (registro de prueba) y los emails (verificación / reset).
       FRONTEND_URL: ${FRONTEND_URL:-https://tymroapp.com}
       TOKEN_TTL_HOURS: ${TOKEN_TTL_HOURS:-12}
+      # Proxies que apendean al X-Forwarded-For delante de gunicorn. Acá son DOS
+      # (cloudflared -> nginx del servicio frontend), a diferencia de Railway,
+      # que es single-service y tiene sólo el edge (default 1 en settings.py).
+      # Con el valor de prod, este stack contaría por la IP del contenedor de
+      # nginx —la misma para todos— y el throttle de login sería un cupo global.
+      NUM_PROXIES: ${NUM_PROXIES:-2}
       # EMAIL_BACKEND lo decide settings.py según DJANGO_DEBUG: consola en dev,
       # Resend (API HTTPS) en producción (DEBUG=False). NO lo fijes acá: este
       # compose también corre en QA/prod y un default a consola filtraría los

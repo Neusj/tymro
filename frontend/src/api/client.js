@@ -8,6 +8,19 @@ export const API_BASE_URL = import.meta.env.VITE_API_URL || import.meta.env.VITE
 // Con el corte, el error llega a la app y cada pantalla puede reaccionar.
 const REQUEST_TIMEOUT_MS = 10000
 
+// Overrides por request para endpoints que tardan legítimamente más que el
+// default. No se sube el default global: 10s sigue siendo lo correcto para el
+// resto, y aflojarlo para todos reviviría el problema que el timeout resuelve.
+// Login: en un cold start de Railway el servidor puede tardar bastante en
+// responder. Cortar a los 10s es peor que esperar, porque el intento YA se gastó
+// contra el throttle de login (5/min) y el token YA rotó server-side: el usuario
+// pierde la sesión que el backend acaba de emitir y a los pocos reintentos come
+// un 429 sin haber entrado nunca.
+const LOGIN_TIMEOUT_MS = 40000
+// Importador: validate parsea el XLSX completo y commit escribe fila por fila
+// dentro de una transacción, ambos antes de responder.
+const IMPORT_TIMEOUT_MS = 60000
+
 const api = axios.create({
   baseURL: API_BASE_URL,
   timeout: REQUEST_TIMEOUT_MS,
@@ -94,7 +107,7 @@ export const resolveMediaUrl = (url) => {
 
 export const authApi = {
   login: async (credentials) => {
-    const { data } = await api.post('/login/', credentials)
+    const { data } = await api.post('/login/', credentials, { timeout: LOGIN_TIMEOUT_MS })
     return data
   },
   logout: async () => {
@@ -525,11 +538,15 @@ export const importsApi = {
     return response
   },
   validate: async (entity, file) => {
-    const { data } = await api.post(`/imports/${entity}/validate/`, toFormData({ file }))
+    const { data } = await api.post(`/imports/${entity}/validate/`, toFormData({ file }), {
+      timeout: IMPORT_TIMEOUT_MS,
+    })
     return data
   },
   commit: async (entity, file, token) => {
-    const { data } = await api.post(`/imports/${entity}/commit/`, toFormData({ file, token }))
+    const { data } = await api.post(`/imports/${entity}/commit/`, toFormData({ file, token }), {
+      timeout: IMPORT_TIMEOUT_MS,
+    })
     return data
   },
 }

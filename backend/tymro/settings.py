@@ -238,6 +238,27 @@ REST_FRAMEWORK = {
         'rest_framework.throttling.AnonRateThrottle',
         'rest_framework.throttling.UserRateThrottle',
     ],
+    # Proxies de confianza que apendean al X-Forwarded-For delante de gunicorn.
+    # En Railway hay UNO: el edge. La imagen de prod es single-service
+    # (Dockerfile.prod): gunicorn sirve la API y el SPA vía WhiteNoise, así que
+    # NO hay nginx en el camino. El `frontend/nginx.conf` es sólo del stack
+    # docker-compose local/QA.
+    #
+    # Sin este valor DRF arma la clave del throttle con la cadena XFF COMPLETA,
+    # que el cliente controla: mandando un XFF distinto en cada intento, cada uno
+    # cae en una clave nueva y el 5/min de login no aplica nunca.
+    #
+    # Con 1, DRF toma la ÚLTIMA entrada, que siempre la escribe el edge: es
+    # correcto tanto si el edge apendea al XFF del cliente ("<falso>, <IP real>")
+    # como si lo reemplaza ("<IP real>"). Subirlo a 2 en esta topología sería
+    # peor que no tenerlo: tomaría la entrada que manda el cliente, dejando el
+    # bypass abierto y habilitando envenenar el cupo de una víctima mandando SU
+    # IP. Si algún día se mete un CDN o nginx delante, hay que subirlo.
+    #
+    # Configurable por entorno porque el conteo de hops NO es el mismo en todos
+    # lados: el stack docker-compose local sí tiene nginx delante (2). El default
+    # 1 es el de producción, que es el que no se puede equivocar.
+    'NUM_PROXIES': int(os.getenv('NUM_PROXIES', '1')),
     'DEFAULT_THROTTLE_RATES': {
         'anon': '60/min',
         'user': '1000/day',
