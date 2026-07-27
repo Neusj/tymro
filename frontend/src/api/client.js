@@ -2,17 +2,27 @@
 
 export const API_BASE_URL = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || '/api'
 
+// Toda petición corta a los 10s. Sin esto axios usa el default 0 = esperar
+// indefinidamente: una petición colgada (red caída, proxy sin responder) queda
+// a merced del timeout TCP del SO —minutos— y la UI se queda sin desenlace.
+// Con el corte, el error llega a la app y cada pantalla puede reaccionar.
+const REQUEST_TIMEOUT_MS = 10000
+
 const api = axios.create({
   baseURL: API_BASE_URL,
+  timeout: REQUEST_TIMEOUT_MS,
 })
 
 // Instancia separada para endpoints PÚBLICOS (registro de clase de prueba y
 // pantalla pública de asistencia). NUNCA adjunta Authorization ni tiene el
 // interceptor de 401→/login: así un token caducado guardado en localStorage no
 // puede provocar un 401 espurio ni expulsar al visitante anónimo. `setAuthToken`
-// no la toca (solo escribe en `api`).
-const publicApi = axios.create({
+// no la toca (solo escribe en `api`). Se exporta SOLO para poder verificar su
+// config (timeout) en tests: las llamadas siguen pasando por los módulos de
+// abajo (`registrationApi`, `attendanceQrApi`), no por la instancia directa.
+export const publicApi = axios.create({
   baseURL: API_BASE_URL,
+  timeout: REQUEST_TIMEOUT_MS,
 })
 
 // Claves de sesión (mismas que usa AuthContext).

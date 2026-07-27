@@ -3,11 +3,33 @@ import { useAuth } from '../auth/AuthContext'
 import { defaultRouteByRole } from '../utils/roles'
 
 export default function ProtectedRoute({ allowedRoles, children }) {
-  const { user, loading, isAuthenticated } = useAuth()
+  const { user, loading, isAuthenticated, bootstrapError, verifying, retryBootstrap } = useAuth()
   const location = useLocation()
 
   if (loading) {
     return <div className="flex min-h-screen items-center justify-center text-brand-muted">Cargando sesión...</div>
+  }
+
+  // No se pudo verificar la sesión por un fallo transitorio (timeout/red). No se
+  // expulsa al login —el token puede seguir siendo válido— pero tampoco se
+  // renderiza la app con el usuario cacheado: se ofrece reintentar.
+  if (bootstrapError) {
+    return (
+      <div className="flex min-h-screen items-center justify-center p-6">
+        <section className="card-surface w-full max-w-sm p-6 text-center">
+          <p className="font-display text-lg font-semibold text-brand-white">No pudimos verificar tu sesión</p>
+          <p className="mt-2 text-sm text-brand-muted">{bootstrapError}</p>
+          <button
+            type="button"
+            onClick={retryBootstrap}
+            disabled={verifying}
+            className="mt-5 rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {verifying ? 'Verificando…' : 'Reintentar'}
+          </button>
+        </section>
+      </div>
+    )
   }
 
   if (!isAuthenticated || !user) {

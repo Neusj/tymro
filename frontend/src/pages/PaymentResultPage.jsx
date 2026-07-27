@@ -41,6 +41,9 @@ export default function PaymentResultPage() {
   const [error, setError] = useState('')
   const [polling, setPolling] = useState(false)  // hay un poll agendado (ventana de auto-verificación)
   const [refreshing, setRefreshing] = useState(false) // hay una consulta en curso (poll o manual)
+  // Se agotó la ventana de auto-verificación sin estado final. El plan lo activa
+  // el webhook igual; la UI deja de girar y lo dice en vez de fingir que sigue.
+  const [exhausted, setExhausted] = useState(false)
   const timerRef = useRef(null)
   const pollsRef = useRef(0)
   const mountedRef = useRef(true)
@@ -51,25 +54,44 @@ export default function PaymentResultPage() {
     if (mode === 'initial') setLoading(true)
     else setRefreshing(true)
     setError('')
+
+    // Agenda el siguiente poll si queda cupo en la ventana; si no, la marca
+    // agotada. Va acá dentro (y no como función del componente) para no entrar
+    // en las deps de este useCallback: una identidad nueva por render haría
+    // que el efecto de abajo re-consultara en bucle.
+    const scheduleNextPoll = () => {
+      if (pollsRef.current >= MAX_POLLS) {
+        setPolling(false)
+        setExhausted(true)
+        return
+      }
+      pollsRef.current += 1
+      setPolling(true)
+      timerRef.current = setTimeout(() => fetchStatus('poll'), POLL_MS)
+    }
+
     try {
       const data = await paymentsApi.transactionStatus(tx)
       if (!mountedRef.current) return
       setTxData(data)
-      if (!TERMINAL.has(data.status) && pollsRef.current < MAX_POLLS) {
-        pollsRef.current += 1
-        setPolling(true)
-        timerRef.current = setTimeout(() => fetchStatus('poll'), POLL_MS)
-      } else {
+      if (TERMINAL.has(data.status)) {
         setPolling(false)
+        setExhausted(false)
+      } else {
+        scheduleNextPoll()
       }
     } catch (apiError) {
       if (!mountedRef.current) return
-      setPolling(false)
+      // 404 es definitivo (el pago no existe o no es del alumno): no se reintenta.
       if (apiError?.response?.status === 404) {
+        setPolling(false)
         setError('No encontramos este pago, o no te pertenece.')
-      } else {
-        setError(firstApiError(apiError?.response?.data, 'No se pudo consultar el estado del pago.'))
+        return
       }
+      // Timeout, red caída o 5xx: es transitorio. Antes esto mataba la cadena y
+      // dejaba al alumno que ya pagó sin desenlace; ahora la ventana sigue.
+      setError(firstApiError(apiError?.response?.data, 'No se pudo consultar el estado del pago.'))
+      scheduleNextPoll()
     } finally {
       if (!mountedRef.current) return
       if (mode === 'initial') setLoading(false)
@@ -90,6 +112,7 @@ export default function PaymentResultPage() {
   const handleRefresh = () => {
     if (timerRef.current) clearTimeout(timerRef.current)
     pollsRef.current = 0 // nueva ventana de polling
+    setExhausted(false)
     fetchStatus('manual')
   }
 
@@ -103,6 +126,22 @@ export default function PaymentResultPage() {
       <div className="mx-auto w-full max-w-lg">
         {loading ? (
           <div className="card-surface p-6 text-center text-sm text-brand-muted">Consultando el estado de tu pago…</div>
+        ) : exhausted && !txData ? (
+          // Se agotó la ventana y nunca se pudo leer el estado (p. ej. todos los
+          // intentos cortaron por timeout). No se le dice al alumno que su pago
+          // falló —no lo sabemos—: el webhook es la fuente de verdad.
+          <section className="card-surface p-6 text-center">
+            <p className="font-display text-lg font-semibold text-brand-white">Estamos confirmando tu pago</p>
+            <p className="mt-2 text-sm text-brand-muted">
+              Puede demorar unos minutos. No hace falta pagar de nuevo: apenas MercadoPago confirme, tu plan queda activo.
+            </p>
+            <div className="mt-5 flex flex-wrap justify-center gap-3">
+              <button type="button" onClick={handleRefresh} disabled={refreshing} className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60">
+                {refreshing ? 'Verificando…' : 'Actualizar'}
+              </button>
+              <Link to="/student/plans" className="rounded-xl border border-brand-line px-4 py-2 text-sm font-semibold text-brand-white transition hover:border-brand-orange hover:bg-brand-soft">Ver mis planes</Link>
+            </div>
+          </section>
         ) : !tx || (error && !txData) ? (
           <section className="card-surface p-6 text-center">
             <p className="font-display text-lg font-semibold text-brand-white">
@@ -135,6 +174,12 @@ export default function PaymentResultPage() {
                 <p className="mt-4 inline-flex items-center gap-2 text-xs text-brand-muted">
                   <span className="h-2 w-2 animate-pulse rounded-full bg-amber-400" />
                   Verificando la confirmación…
+                </p>
+              ) : exhausted ? (
+                // Ventana agotada: se corta el pulso y se explica, en vez de
+                // dejar una animación que sugiere que algo sigue pasando.
+                <p className="mt-4 text-xs text-brand-muted">
+                  Estamos confirmando tu pago, puede demorar unos minutos.
                 </p>
               ) : null}
 
