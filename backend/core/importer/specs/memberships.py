@@ -169,6 +169,10 @@ def _build_membership(values, organization):
     return StudentPlan(
         user=values['user'],
         plan=plan,
+        # Misma derivación que `activate_student_plan`: la sede queda registrada para
+        # los planes exclusivos y en NULL para los globales. Sin esto, onboardear por
+        # importador dejaba todas las membresías sin sucursal.
+        branch=plan.branch,
         start_date=start,
         end_date=end,
         total_classes=total,

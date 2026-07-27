@@ -4,7 +4,24 @@ from django.db import transaction
 from django.utils import timezone
 
 from ..models import ClassTemplate, GymClass, Holiday, RecurringEnrollment
-from .reservations import ReservationRuleError, reserve_student_in_class
+from .reservations import (
+    ReservationRuleError,
+    reserve_student_in_class,
+    revert_consumption_for_class,
+)
+
+
+def _delete_class_refunding_consumption(gym_class):
+    """Borra una instancia devolviendo antes su consumo al saldo del alumno.
+
+    `ConsumptionLog.class_instance` es CASCADE: borrar la clase a secas se lleva los
+    consumos sin decrementar `StudentPlan.classes_used`. Las guardas de este módulo
+    miran `Enrollment`, no `ConsumptionLog`, así que una clase sin inscripciones activas
+    pero con un consumo huérfano (lo deja `DELETE /api/enrollments/`) pasaba el filtro y
+    se borraba dejando saldo fantasma.
+    """
+    revert_consumption_for_class(gym_class)
+    gym_class.delete()
 
 
 TERMINAL_STATUSES = {
@@ -193,16 +210,16 @@ def apply_template_updates_to_future_instances(template, now=None):
 
         class_date = timezone.localtime(gym_class.start_datetime).date()
         if class_date < template.start_date:
-            gym_class.delete()
+            _delete_class_refunding_consumption(gym_class)
             continue
         if template.end_date and class_date > template.end_date:
-            gym_class.delete()
+            _delete_class_refunding_consumption(gym_class)
             continue
         if class_date.weekday() != template.weekday:
-            gym_class.delete()
+            _delete_class_refunding_consumption(gym_class)
             continue
         if is_holiday(class_date, organization=template.organization_id, branch=template.branch_id):
-            gym_class.delete()
+            _delete_class_refunding_consumption(gym_class)
             continue
 
         gym_class.name = template.name or gym_class.name
@@ -270,7 +287,11 @@ def delete_template_safely(template):
     if not can_delete:
         return {'deleted': False, 'reason': reason}
 
-    GymClass.objects.filter(class_template=template).delete()
+    # Instancia por instancia y no un `.delete()` en bloque: cada una tiene que devolver
+    # su consumo antes de que la cascada se lleve el ConsumptionLog. `can_delete_template`
+    # mira Enrollment, así que un consumo huérfano llega hasta acá.
+    for gym_class in GymClass.objects.filter(class_template=template):
+        _delete_class_refunding_consumption(gym_class)
     template.delete()
     return {'deleted': True}
 

@@ -467,6 +467,20 @@ class Plan(TimestampedModel):
         GIFTCARD = 'giftcard', 'Giftcard'
 
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='legacy_plans')
+    # Alcance del plan: NULL = GLOBAL (vale en toda la organización); con sucursal =
+    # EXCLUSIVO (solo cubre las clases de esa sede). `RESTRICT` y no `SET_NULL` a
+    # propósito: como NULL significa "todas las sedes", un SET_NULL convertiría un plan
+    # exclusivo en global al borrar la sucursal —la misma inversión de semántica que ya
+    # tenía `TeacherPaymentRule.branch`—. RESTRICT lo impide a nivel de DB pero deja
+    # pasar el borrado en cascada de la organización, donde el plan también se elimina.
+    branch = models.ForeignKey(
+        Branch,
+        on_delete=models.RESTRICT,
+        null=True,
+        blank=True,
+        related_name='exclusive_plans',
+        help_text='Vacío = plan global de la organización. Con sucursal = exclusivo de esa sede.',
+    )
     name = models.CharField(max_length=120)
     plan_type = models.CharField(max_length=20, choices=PlanType.choices)
     total_classes = models.IntegerField()
@@ -487,6 +501,17 @@ class Plan(TimestampedModel):
 class StudentPlan(TimestampedModel):
     user = models.ForeignKey('accounts.CustomUser', on_delete=models.CASCADE, related_name='student_plans')
     plan = models.ForeignKey(Plan, on_delete=models.CASCADE, related_name='student_plans')
+    # Sucursal en que se activó la membresía; se deriva del plan (NULL si el plan es
+    # global). Es un registro histórico: la restricción de reserva se evalúa contra
+    # `plan.branch`, que es la fuente de verdad del alcance. `SET_NULL` alcanza porque
+    # aquí NULL significa "sin sede registrada", no "todas las sedes".
+    branch = models.ForeignKey(
+        Branch,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='student_plans',
+    )
     start_date = models.DateField()
     end_date = models.DateField()
     total_classes = models.IntegerField()
@@ -538,6 +563,16 @@ class ConsumptionLog(TimestampedModel):
     user = models.ForeignKey('accounts.CustomUser', on_delete=models.CASCADE, related_name='consumption_logs')
     student_plan = models.ForeignKey(StudentPlan, on_delete=models.CASCADE, related_name='consumption_logs')
     class_instance = models.ForeignKey(GymClass, on_delete=models.CASCADE, related_name='consumption_logs')
+    # Sucursal donde se consumió la sesión; se deriva de `class_instance.branch`. Se
+    # desnormaliza para que el consumo conserve la sede aunque la clase cambie de
+    # sucursal después. NULL solo en filas anteriores a la migración de backfill.
+    branch = models.ForeignKey(
+        Branch,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='consumption_logs',
+    )
     consumed_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

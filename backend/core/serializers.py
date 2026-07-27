@@ -201,6 +201,29 @@ class BranchSerializer(serializers.ModelSerializer):
 
         attrs['name'] = normalized_name
 
+        # Mover una sucursal de organización dejaría atrás a sus dependientes, que
+        # conservan la organización vieja: el plan exclusivo pasaría a apuntar a una sede
+        # de otro tenant (y `PlanSerializer.branch_name` filtraría ese nombre), y la org
+        # destino quedaría sin poder borrarse por el RESTRICT de `Plan.branch`. Solo el
+        # superadmin llega hasta acá: al gym_admin ya se le forzó su propia organización.
+        if instance and instance.organization_id != organization.id:
+            dependents = {
+                'clases': instance.classes.exists(),
+                'series': instance.class_templates.exists(),
+                'planes exclusivos': instance.exclusive_plans.exists(),
+                'reglas de pago': instance.payment_rules.exists(),
+                'feriados': instance.holidays.exists(),
+            }
+            blocking = [label for label, exists in dependents.items() if exists]
+            if blocking:
+                raise serializers.ValidationError({
+                    'organization': (
+                        'No puedes mover esta sucursal a otra organización porque tiene '
+                        f'{", ".join(blocking)} asociados, que quedarían apuntando a un '
+                        'tenant distinto.'
+                    )
+                })
+
         return attrs
 
 
@@ -1292,6 +1315,7 @@ class MembershipPlanSerializer(serializers.ModelSerializer):
 
 class PlanSerializer(serializers.ModelSerializer):
     organization_name = serializers.CharField(source='organization.name', read_only=True)
+    branch_name = serializers.CharField(source='branch.name', read_only=True)
 
     class Meta:
         model = Plan
@@ -1299,6 +1323,8 @@ class PlanSerializer(serializers.ModelSerializer):
             'id',
             'organization',
             'organization_name',
+            'branch',
+            'branch_name',
             'name',
             'plan_type',
             'total_classes',
@@ -1328,6 +1354,15 @@ class PlanSerializer(serializers.ModelSerializer):
 
         if user and user.is_authenticated and user.role == User.Role.STUDENT:
             raise serializers.ValidationError({'detail': 'Los alumnos no pueden gestionar planes.'})
+
+        # `branch` define el alcance del plan (NULL = global, con sucursal = exclusivo).
+        # Debe pertenecer a la MISMA organización que el plan: aceptar una sucursal ajena
+        # ataría el plan de una org a la sede de otra (regla #1 de multitenancy).
+        branch = attrs.get('branch', getattr(instance, 'branch', None))
+        if branch and branch.organization_id != organization.id:
+            raise serializers.ValidationError(
+                {'branch': 'La sucursal no pertenece a la organización del plan.'}
+            )
 
         return attrs
 

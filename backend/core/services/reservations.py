@@ -1,4 +1,8 @@
+from collections import Counter
+
 from django.db import transaction
+from django.db.models import F, Value
+from django.db.models.functions import Greatest
 from django.utils import timezone
 
 from ..models import ConsumptionLog, Enrollment, GymClass, StudentPlan
@@ -46,6 +50,30 @@ def validate_student_plan_for_reservation(student, on_date=None):
     return student_plan
 
 
+def validate_plan_branch_for_class(student_plan, gym_class):
+    """Un plan EXCLUSIVO de una sucursal solo cubre las clases de esa sede.
+
+    El alcance lo manda `plan.branch` (NULL = plan global, vale en toda la organización),
+    no `student_plan.branch`, que es solo el registro histórico de dónde se activó la
+    membresía. Así, cambiar el alcance del plan del catálogo se refleja en las membresías
+    vigentes sin tener que migrarlas.
+
+    EXCEPCIÓN CONOCIDA: la clase de prueba reserva con `require_plan=False`, así que no
+    pasa por acá y un alumno con plan exclusivo puede agendar su prueba en otra sede. Es
+    deliberado —la prueba es gratis, no consume plan y está limitada a una por usuario
+    (`has_used_trial`)—, no un hueco de la regla.
+    """
+    plan = getattr(student_plan, 'plan', None)
+    plan_branch_id = getattr(plan, 'branch_id', None)
+    if not plan_branch_id:
+        return
+    if plan_branch_id != gym_class.branch_id:
+        raise ReservationRuleError(
+            f'Tu plan es exclusivo de {plan.branch.name} y no cubre las clases de esta sucursal.',
+            code='plan_branch_mismatch',
+        )
+
+
 def get_enrollment_student_plan(enrollment):
     consumption_log = (
         ConsumptionLog.objects.select_related('student_plan')
@@ -73,10 +101,13 @@ def consume_student_plan_for_enrollment(enrollment, student_plan):
     if enrollment.status != 'active':
         return False
 
+    # `branch` va en defaults y NO en la clave de búsqueda: es un dato derivado de la
+    # clase, no parte de la identidad del consumo.
     _, created = ConsumptionLog.objects.get_or_create(
         user=enrollment.student,
         class_instance=enrollment.gym_class,
         student_plan=student_plan,
+        defaults={'branch_id': enrollment.gym_class.branch_id},
     )
     if not created:
         return False
@@ -108,6 +139,50 @@ def rollback_consumption_for_enrollment(enrollment, student_plan=None):
         resolved_plan.classes_used -= 1
         resolved_plan.save(update_fields=['classes_used', 'updated_at'])
     return True
+
+
+@transaction.atomic
+def revert_consumption_for_class(gym_class):
+    """Devuelve al saldo de cada alumno los consumos de esta clase y borra sus logs.
+
+    Se usa ANTES de eliminar una clase: `ConsumptionLog.class_instance` es CASCADE, así
+    que el borrado se llevaría los logs sin tocar `StudentPlan.classes_used` y dejaría
+    clases consumidas fantasma.
+
+    A diferencia de `rollback_consumption_for_enrollment`, no aplica la política de
+    cancelación (`should_refund_consumption`, que solo devuelve el saldo si la clase
+    está cancelada o aún no empezó): si la clase desaparece del historial, su consumo
+    tiene que desaparecer con ella sin importar la fecha ni el estado de la inscripción.
+    Si no, el contador queda inflado sin log que lo respalde.
+
+    Devuelve la cantidad de consumos revertidos.
+    """
+    # Se materializan los ids UNA sola vez y se borra por id: contar y borrar sobre el
+    # mismo queryset lo reevaluaría dos veces, y un consumo insertado entre ambas
+    # sentencias se borraría sin haber sido contado (saldo fantasma, justo lo que esto
+    # viene a evitar).
+    rows = list(
+        ConsumptionLog.objects.filter(class_instance=gym_class)
+        .values_list('id', 'student_plan_id')
+    )
+    if not rows:
+        return 0
+
+    # Se agrupa por plan porque `ConsumptionLog` no tiene unique constraint sobre
+    # (user, class_instance, student_plan): pueden existir dos logs del MISMO plan para
+    # esta clase, y hay que devolver los dos consumos, no uno.
+    consumed_by_plan = Counter(plan_id for _, plan_id in rows)
+    ConsumptionLog.objects.filter(id__in=[log_id for log_id, _ in rows]).delete()
+
+    for plan_id, consumed in consumed_by_plan.items():
+        # Decremento en la base y no read-modify-write: si otra reserva concurrente
+        # suma su +1 sobre el mismo plan, no se pierde.
+        StudentPlan.objects.filter(id=plan_id).update(
+            classes_used=Greatest(F('classes_used') - consumed, Value(0)),
+            updated_at=timezone.now(),
+        )
+
+    return len(rows)
 
 
 def _validate_reservation_rules(*, student, gym_class, existing=None, require_plan=True):
@@ -146,7 +221,12 @@ def _validate_reservation_rules(*, student, gym_class, existing=None, require_pl
     if overlapping_enrollments.exists():
         raise ReservationRuleError('El alumno ya tiene otra clase reservada o confirmada en ese horario.', code='student_conflict')
 
-    return validate_student_plan_for_reservation(student) if require_plan else None
+    if not require_plan:
+        return None
+
+    student_plan = validate_student_plan_for_reservation(student)
+    validate_plan_branch_for_class(student_plan, gym_class)
+    return student_plan
 
 
 @transaction.atomic

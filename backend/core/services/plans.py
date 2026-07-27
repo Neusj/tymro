@@ -15,6 +15,9 @@ def activate_student_plan(*, student, plan, start_date, discount_percentage=None
         StudentPlan.objects.filter(user=student, is_active=True).update(is_active=False)
         return StudentPlan.objects.create(
             user=student, plan=plan,
+            # Registro histórico de la sede: se deriva del alcance del plan. Un plan
+            # global no tiene sede de activación, así que queda en NULL.
+            branch=plan.branch,
             start_date=start_date, end_date=end_date,
             total_classes=plan.total_classes,
             unlimited_classes=plan.unlimited_classes,

@@ -102,6 +102,7 @@ from .services.reservations import (
     get_active_student_plan,
     get_enrollment_student_plan,
     reserve_student_in_class,
+    revert_consumption_for_class,
     rollback_consumption_for_enrollment,
     should_refund_consumption,
     validate_student_plan_for_reservation,
@@ -1505,6 +1506,12 @@ class BranchViewSet(ModelViewSet):
                 'en vez de eliminarse porque borrarla convertiría esas reglas en reglas '
                 'para todas las sucursales.'
             )
+        if branch.exclusive_plans.exists():
+            return (
+                'La sucursal tiene planes exclusivos asociados: se desactivó en vez de '
+                'eliminarse porque borrarla convertiría esos planes en planes globales '
+                'de toda la organización.'
+            )
         return None
 
     def destroy(self, request, *args, **kwargs):
@@ -1996,13 +2003,19 @@ class GymClassViewSet(ModelViewSet):
 
     def perform_destroy(self, instance):
         user = self.request.user
-        if _is_superadmin(user):
+        if not (
+            _is_superadmin(user)
+            or (roles.is_org_admin(user) and instance.organization_id == user.organization_id)
+        ):
+            raise PermissionDenied('No tienes permisos para eliminar esta clase.')
+
+        # `ConsumptionLog.class_instance` es CASCADE: borrar la clase se llevaría los
+        # consumos SIN decrementar `StudentPlan.classes_used`, dejando al alumno con
+        # clases consumidas fantasma. Se devuelve el saldo primero, en la misma
+        # transacción que el borrado, para que nunca quede el contador inflado sin log.
+        with transaction.atomic():
+            revert_consumption_for_class(instance)
             instance.delete()
-            return
-        if roles.is_org_admin(user) and instance.organization_id == user.organization_id:
-            instance.delete()
-            return
-        raise PermissionDenied('No tienes permisos para eliminar esta clase.')
 
     @action(detail=True, methods=['get'], url_path='enrolled-students')
     def enrolled_students(self, request, pk=None):
@@ -2820,6 +2833,28 @@ class EnrollmentViewSet(ModelViewSet):
             student = student or user
         requested_status = serializer.validated_data.get('status', 'active')
         should_validate_plan = requested_status == 'active' or _is_teacher(user) or _is_student(user)
+        gym_class = serializer.validated_data.get('gym_class')
+
+        # La autorización va ANTES del atajo por estado. El atajo de `status != 'active'`
+        # se ejecutaba antes de las ramas por rol y de su PermissionDenied, y el único
+        # filtro restante (EnrollmentSerializer.validate) condiciona su check de
+        # organización a roles.is_org_admin: monitor y teacher no lo activaban y podían
+        # crear inscripciones en OTRA organización (regla #1). Este check cubre los dos
+        # caminos con la misma matriz que ya aplicaba la rama de status='active'.
+        if not (
+            _is_superadmin(user)
+            or (
+                gym_class is not None
+                and user.organization_id
+                and gym_class.organization_id == user.organization_id
+                and (
+                    roles.is_org_admin(user)
+                    or (_is_teacher(user) and gym_class.teacher_id == user.id)
+                    or _is_student(user)
+                )
+            )
+        ):
+            raise PermissionDenied('No tienes permisos para crear inscripciones.')
 
         with transaction.atomic():
             if requested_status != 'active':
@@ -2866,13 +2901,35 @@ class EnrollmentViewSet(ModelViewSet):
     def perform_update(self, serializer):
         user = self.request.user
         enrollment = self.get_object()
-        if _is_superadmin(user):
-            serializer.save()
-            return
-        if roles.is_org_admin(user) and enrollment.gym_class.organization_id == user.organization_id:
-            serializer.save()
-            return
-        raise PermissionDenied('No tienes permisos para editar inscripciones.')
+        if not (
+            _is_superadmin(user)
+            or (roles.is_org_admin(user) and enrollment.gym_class.organization_id == user.organization_id)
+        ):
+            raise PermissionDenied('No tienes permisos para editar inscripciones.')
+
+        # Los CAMBIOS DE ESTADO van por los servicios de reserva, no por un `save()`
+        # directo. `EnrollmentSerializer.validate` cubre organización, cupo, solape y
+        # duplicados, pero no plan activo, matrícula impaga, exclusividad de sucursal ni
+        # el consumo del plan. Sin esto, crear en 'cancelled' y PATCHear a 'active' era
+        # un bypass de dos llamadas: saltaba la restricción de sede y regalaba la clase.
+        new_status = serializer.validated_data.get('status', enrollment.status)
+        if new_status != enrollment.status:
+            if new_status == 'active':
+                try:
+                    serializer.instance = reserve_student_in_class(
+                        student=enrollment.student,
+                        gym_class=serializer.validated_data.get('gym_class', enrollment.gym_class),
+                        recurring_enrollment=enrollment.recurring_enrollment,
+                        require_plan=True,
+                    )
+                except ReservationRuleError as exc:
+                    raise ValidationError({'detail': exc.message})
+                return
+            if new_status == 'cancelled':
+                serializer.instance = cancel_enrollment_with_refund(enrollment)
+                return
+
+        serializer.save()
 
     def perform_destroy(self, instance):
         user = self.request.user
