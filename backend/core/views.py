@@ -1460,15 +1460,80 @@ class BranchViewSet(ModelViewSet):
 
         raise PermissionDenied('No tienes permisos para editar esta sucursal.')
 
-    def perform_destroy(self, instance):
-        user = self.request.user
-        if _is_superadmin(user):
-            instance.delete()
-            return
-        if _is_gym_admin(user) and instance.organization_id == user.organization_id:
-            instance.delete()
-            return
-        raise PermissionDenied('No tienes permisos para eliminar esta sucursal.')
+    @staticmethod
+    def _cascade_blocker(branch):
+        """Qué historial arrastraría el hard delete de esta sucursal, o None si es seguro.
+
+        `Branch` tiene tres FKs entrantes con CASCADE: `GymClass.branch`,
+        `ClassTemplate.branch` y `Holiday.branch`. Borrar las clases se lleva por delante
+        Enrollment / Attendance / ConsumptionLog, y los ConsumptionLog se van SIN
+        decrementar `StudentPlan.classes_used` (ese contador solo baja por
+        `rollback_consumption_for_enrollment`, que la cascada nunca ejecuta): el alumno
+        queda con clases consumidas fantasma. Las series arrastran además las
+        recurrencias de alumnos que `delete_template_safely` se niega a borrar, así que
+        mirar solo `classes` dejaría a la sucursal como puerta trasera de esa validación.
+
+        La cuarta comprobación NO es por cascada sino al revés: `TeacherPaymentRule.branch`
+        es SET_NULL, y en `_match_rule_for_class` una regla con `branch=NULL` es la regla
+        COMODÍN que aplica a todas las sedes. Borrar la sucursal no borra la regla: la
+        convierte en global, y una regla acotada a una sede pasa a pagar las clases de
+        todas las demás.
+
+        Las otras dos FKs SET_NULL —`CustomUser.branch` y `Person.branch`— se evaluaron y
+        se aceptan a propósito: ahí `NULL` significa "sin sede asignada", que es una
+        pérdida de dato menor y no una inversión de alcance. No son un olvido.
+        """
+        if branch.classes.exists():
+            return (
+                'La sucursal tiene clases asociadas: se desactivó en vez de eliminarse '
+                'para no corromper el historial de clases ni los saldos de los planes '
+                'de los alumnos.'
+            )
+        if branch.class_templates.exists():
+            return (
+                'La sucursal tiene series de clases asociadas: se desactivó en vez de '
+                'eliminarse para conservar el historial y las recurrencias de los alumnos.'
+            )
+        if branch.holidays.exists():
+            return (
+                'La sucursal tiene feriados propios: se desactivó en vez de eliminarse '
+                'para conservar su historial de configuración.'
+            )
+        if branch.payment_rules.exists():
+            return (
+                'La sucursal tiene reglas de pago a profesores asociadas: se desactivó '
+                'en vez de eliminarse porque borrarla convertiría esas reglas en reglas '
+                'para todas las sucursales.'
+            )
+        return None
+
+    def destroy(self, request, *args, **kwargs):
+        # Se sobreescribe `destroy` y no solo `perform_destroy` porque el soft-delete es
+        # una ESCRITURA que debe persistir junto a una respuesta de ERROR. Lanzar una
+        # APIException haría que DRF invocara `set_rollback()`: con `ATOMIC_REQUESTS`
+        # activo —o si algún día este método se envolviera en `transaction.atomic`— la
+        # desactivación se revertiría en silencio mientras la respuesta seguiría diciendo
+        # que se desactivó. Devolver un `Response` explícito no dispara ese rollback.
+        instance = self.get_object()  # ya scoped por get_queryset(): 404 si es de otra org
+
+        user = request.user
+        if not (
+            _is_superadmin(user)
+            or (_is_gym_admin(user) and instance.organization_id == user.organization_id)
+        ):
+            raise PermissionDenied('No tienes permisos para eliminar esta sucursal.')
+
+        # La guarda aplica también al superadmin: la cascada corrompe los saldos igual
+        # sin importar quién dispare el borrado.
+        blocker = self._cascade_blocker(instance)
+        if blocker:
+            if instance.is_active:
+                instance.is_active = False
+                instance.save(update_fields=['is_active', 'updated_at'])
+            return Response({'detail': blocker}, status=status.HTTP_400_BAD_REQUEST)
+
+        instance.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class UserViewSet(ModelViewSet):
