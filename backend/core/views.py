@@ -103,6 +103,7 @@ from .services.reservations import (
     get_enrollment_student_plan,
     reserve_student_in_class,
     revert_consumption_for_class,
+    revert_consumption_for_enrollment,
     rollback_consumption_for_enrollment,
     should_refund_consumption,
     validate_student_plan_for_reservation,
@@ -156,8 +157,12 @@ def _is_student(user):
     return _user_role(user) == User.Role.STUDENT
 
 
-def _sync_class_statuses(base_queryset=None):
-    queryset = base_queryset if base_queryset is not None else GymClass.objects.all()
+def _sync_class_statuses(base_queryset):
+    # El queryset es OBLIGATORIO a proposito: esta funcion ESCRIBE (status, is_active,
+    # closed_at, Attendance y TeacherPaymentRecord). Con un default global, un call site
+    # futuro que se olvide del argumento reintroduce en silencio la escritura sobre todas
+    # las organizaciones. Usar `_class_sync_scope(user)`.
+    queryset = base_queryset
     candidates = queryset.filter(status__in=[GymClass.Status.SCHEDULED, GymClass.Status.IN_PROGRESS])
     for gym_class in candidates:
         gym_class.refresh_status_from_schedule(save=True)
@@ -165,12 +170,102 @@ def _sync_class_statuses(base_queryset=None):
             calculate_teacher_payment(gym_class)
 
 
+def _as_id_list(raw_ids):
+    """(ids enteros, ids inválidos) de una lista que llegó por el body.
+
+    Los endpoints bulk solo validaban "lista no vacía" y pasaban el contenido crudo a
+    `filter(id__in=...)`: un valor no numérico levantaba `ValueError` fuera del manejo de
+    DRF y respondía 500.
+    """
+    ids, invalid = [], []
+    for raw in raw_ids:
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            invalid.append(raw)
+            continue
+        # Fuera del rango de bigint el `id__in` revienta en PostgreSQL (500). SQLite lo
+        # tolera, asi que la suite no lo detectaria.
+        if not -(2 ** 63) <= value < 2 ** 63:
+            invalid.append(raw)
+            continue
+        ids.append(value)
+    return ids, invalid
+
+
+def _org_scoped(queryset, user):
+    """Acota un queryset con FK directa `organization` a lo que este actor puede alcanzar.
+
+    Para las acciones `detail=False` que reciben ids en el body, donde `get_object()` no
+    interviene y por lo tanto el scoping tiene que ser explícito.
+    """
+    if _is_superadmin(user):
+        return queryset
+    if getattr(user, 'organization_id', None):
+        return queryset.filter(organization_id=user.organization_id)
+    return queryset.none()
+
+
+def _class_sync_scope(user):
+    """Clases que ESTE actor puede hacer sincronizar.
+
+    `_sync_class_statuses` parece un helper de listado pero ESCRIBE: persiste
+    `status`/`is_active`/`closed_at`, consolida `Attendance` y crea el
+    `TeacherPaymentRecord` del profe. Llamarla sin filtrar (`GymClass.objects.all()`)
+    dejaba que cualquier autenticado —un alumno, incluso— cerrara clases y materializara
+    los pagos de OTRAS organizaciones (regla #1: scoping antes de cualquier escritura).
+
+    El superadmin es rol de plataforma y sí abarca todo; un usuario sin organización no
+    sincroniza nada.
+    """
+    if _is_superadmin(user):
+        return GymClass.objects.all()
+    if getattr(user, 'organization_id', None):
+        return GymClass.objects.filter(organization_id=user.organization_id)
+    return GymClass.objects.none()
+
+
+def _is_own_class_teacher(user, gym_class):
+    """El profesor de ESTA clase, y de la misma organización que él.
+
+    `teacher_id == user.id` a secas no alcanza: `GymClass.teacher` es SET_NULL, así que una
+    clase conserva el `teacher_id` aunque después muevan al profesor a otra organización
+    (`PATCH /api/users/{id}/ {"organization": ...}` del superadmin). Con esa FK rancia, el
+    usuario leía y ESCRIBÍA en la organización que dejó atrás: cerrar la clase, cancelar
+    inscripciones, registrar asistencia y disparar el pago al profe. El scope del profesor
+    es la intersección de "mis clases" con "mi organización" (regla #1), nunca solo la FK.
+    """
+    return (
+        _is_teacher(user)
+        and gym_class.teacher_id == user.id
+        and bool(user.organization_id)
+        and gym_class.organization_id == user.organization_id
+    )
+
+
+def _is_own_org_student(user, enrollment):
+    """El alumno de ESTA inscripcion, y de la misma organizacion que ella.
+
+    Simetrico a `_is_own_class_teacher`: `enrollment.student_id == user.id` a secas no
+    alcanza porque `Enrollment.student` es CASCADE sobre el usuario, no sobre la
+    organizacion. Mover a un alumno de la org A a la org B le deja sus reservas de A vivas,
+    y desde B seguia leyendolas y escribiendolas (cancelar, borrar, y con el reverso de
+    consumo, descontar un `StudentPlan` de la organizacion que dejo).
+    """
+    return (
+        _is_student(user)
+        and enrollment.student_id == user.id
+        and bool(user.organization_id)
+        and enrollment.gym_class.organization_id == user.organization_id
+    )
+
+
 def _can_close_or_cancel(user, gym_class):
     if _is_superadmin(user):
         return True
     if roles.is_org_admin(user) and gym_class.organization_id == user.organization_id:
         return True
-    if _is_teacher(user) and gym_class.teacher_id == user.id:
+    if _is_own_class_teacher(user, gym_class):
         return True
     return False
 
@@ -295,7 +390,15 @@ def _get_active_student_plan(student, on_date=None):
     return get_active_student_plan(student, on_date=on_date)
 
 
-def _get_active_student_plan_map(student_ids, on_date=None):
+def _get_active_student_plan_map(student_ids, organization_id, on_date=None):
+    """Membresía vigente de cada alumno EN `organization_id`.
+
+    `organization_id` es obligatorio a propósito: filtrar solo por `user_id__in` mostraba
+    en el roster de una clase el saldo, el vencimiento y las alertas del plan que le vendió
+    OTRA organización (`StudentPlan.user` es CASCADE sobre el usuario, no sobre la org).
+    Además quedaba incoherente con el flujo de reserva, que sí acota por organización: el
+    roster decía "9 clases disponibles" y reservar fallaba con `plan_unavailable`.
+    """
     target_date = on_date or timezone.localdate()
     if not student_ids:
         return {}
@@ -303,6 +406,7 @@ def _get_active_student_plan_map(student_ids, on_date=None):
     active_plans = (
         StudentPlan.objects.filter(
             user_id__in=student_ids,
+            plan__organization_id=organization_id,
             is_active=True,
             start_date__lte=target_date,
             end_date__gte=target_date,
@@ -318,12 +422,21 @@ def _get_active_student_plan_map(student_ids, on_date=None):
     return plan_by_user
 
 
-def _get_latest_student_plan_map(student_ids):
+def _get_latest_student_plan_map(student_ids, organization_id):
+    """Última membresía de cada alumno en `organization_id` (vigente o no).
+
+    Mismo acotamiento que `_get_active_student_plan_map`, y acá era aún más amplio: no
+    filtraba ni por fecha ni por `is_active`, así que traía cualquier membresía histórica
+    de cualquier organización.
+    """
     if not student_ids:
         return {}
 
     plans = (
-        StudentPlan.objects.filter(user_id__in=student_ids)
+        StudentPlan.objects.filter(
+            user_id__in=student_ids,
+            plan__organization_id=organization_id,
+        )
         .select_related('plan')
         .order_by('user_id', '-end_date', '-start_date', '-id')
     )
@@ -430,8 +543,8 @@ def health_check(request):
 
 @api_view(['GET'])
 def dashboard_summary(request):
-    _sync_class_statuses()
     user = request.user
+    _sync_class_statuses(_class_sync_scope(user))
 
     if _is_superadmin(user):
         data = {
@@ -1852,7 +1965,16 @@ class HolidayViewSet(ModelViewSet):
                 raise PermissionDenied('No tienes permisos para este festivo.')
             if holiday.source_type == Holiday.SourceType.SYSTEM:
                 allowed_keys = {'is_active'}
-                changed_keys = set(serializer.validated_data.keys())
+                # Se comparan VALORES, no claves: `HolidaySerializer.validate` inyecta
+                # siempre `organization` y `branch` (persiste lo que decidió
+                # `Holiday.clean()`), así que contar las claves dejaba la guarda
+                # insatisfacible para cualquier PATCH; restarlas a ciegas, en cambio, dejaba
+                # pasar un cambio REAL de sucursal en un festivo de sistema con
+                # `scope=branch`, que es lo que decide qué sede saltea la generación.
+                changed_keys = {
+                    key for key, value in serializer.validated_data.items()
+                    if value != getattr(holiday, key, None)
+                }
                 if changed_keys.difference(allowed_keys):
                     raise PermissionDenied('Los festivos de sistema solo permiten activar o desactivar.')
             serializer.save(organization=user.organization)
@@ -1950,7 +2072,13 @@ class GymClassViewSet(ModelViewSet):
             return queryset
 
         if _is_teacher(user):
-            queryset = self.queryset.filter(teacher_id=user.id)
+            # Acotado también por organización: ver `_is_own_class_teacher`. Sin esto, una
+            # clase con `teacher_id` rancio se listaba y `_sync_class_statuses` (que
+            # ESCRIBE) corría sobre la organización que el profe ya dejó.
+            queryset = (
+                self.queryset.filter(teacher_id=user.id, organization_id=user.organization_id)
+                if user.organization_id else self.queryset.none()
+            )
             queryset = apply_common_filters(queryset)
             queryset = _apply_ordering(queryset, ordering, ordering_map, default_ordering)
             _sync_class_statuses(queryset)
@@ -2025,14 +2153,14 @@ class GymClassViewSet(ModelViewSet):
         if not (
             _is_superadmin(user)
             or ((roles.is_org_admin(user) or _is_monitor(user)) and gym_class.organization_id == user.organization_id)
-            or (_is_teacher(user) and gym_class.teacher_id == user.id)
+            or _is_own_class_teacher(user, gym_class)
         ):
             raise PermissionDenied('No tienes permisos para ver los alumnos inscritos en esta clase.')
 
         enrollments = gym_class.enrollments.filter(status='active').select_related('student')
         student_ids = list(enrollments.values_list('student_id', flat=True))
-        active_plan_by_student = _get_active_student_plan_map(student_ids)
-        latest_plan_by_student = _get_latest_student_plan_map(student_ids)
+        active_plan_by_student = _get_active_student_plan_map(student_ids, gym_class.organization_id)
+        latest_plan_by_student = _get_latest_student_plan_map(student_ids, gym_class.organization_id)
         today = timezone.localdate()
         attendance_by_student = {
             item.student_id: item
@@ -2084,7 +2212,7 @@ class GymClassViewSet(ModelViewSet):
         if not (
             _is_superadmin(user)
             or ((roles.is_org_admin(user) or _is_monitor(user)) and gym_class.organization_id == user.organization_id)
-            or (_is_teacher(user) and gym_class.teacher_id == user.id)
+            or _is_own_class_teacher(user, gym_class)
         ):
             raise PermissionDenied('No tienes permisos para listar alumnos inscribibles en esta clase.')
 
@@ -2095,8 +2223,8 @@ class GymClassViewSet(ModelViewSet):
             is_active=True,
         ).order_by('first_name', 'last_name', 'username')
         candidate_ids = list(candidates.values_list('id', flat=True))
-        active_plan_by_student = _get_active_student_plan_map(candidate_ids)
-        latest_plan_by_student = _get_latest_student_plan_map(candidate_ids)
+        active_plan_by_student = _get_active_student_plan_map(candidate_ids, gym_class.organization_id)
+        latest_plan_by_student = _get_latest_student_plan_map(candidate_ids, gym_class.organization_id)
         today = timezone.localdate()
 
         results = []
@@ -2137,7 +2265,11 @@ class GymClassViewSet(ModelViewSet):
         gym_class = self.get_object()
         user = request.user
 
-        if not (_is_superadmin(user) or (roles.is_org_admin(user) and gym_class.organization_id == user.organization_id) or (_is_teacher(user) and gym_class.teacher_id == user.id)):
+        if not (
+            _is_superadmin(user)
+            or (roles.is_org_admin(user) and gym_class.organization_id == user.organization_id)
+            or _is_own_class_teacher(user, gym_class)
+        ):
             raise PermissionDenied('No tienes permisos para registrar asistencia en esta clase.')
 
         gym_class.refresh_status_from_schedule(save=True)
@@ -2334,17 +2466,34 @@ class GymClassViewSet(ModelViewSet):
 
         if not isinstance(class_ids, list) or not class_ids:
             return Response({'detail': 'Debes enviar una lista de class_ids.'}, status=status.HTTP_400_BAD_REQUEST)
+        class_ids, invalid_ids = _as_id_list(class_ids)
+        if invalid_ids:
+            return Response({'detail': 'class_ids debe contener solo ids numéricos.'}, status=status.HTTP_400_BAD_REQUEST)
         if action_name not in ['cancel', 'complete_early']:
             return Response({'detail': 'La acción debe ser cancel o complete_early.'}, status=status.HTTP_400_BAD_REQUEST)
         if not comment:
             return Response({'detail': 'El comentario o motivo es obligatorio.'}, status=status.HTTP_400_BAD_REQUEST)
 
         user = request.user
-        queryset = GymClass.objects.filter(id__in=class_ids)
+        # Acotado por organización ANTES del bucle. El check por objeto ya negaba la
+        # escritura, pero la respuesta delataba la diferencia entre un id AJENO ("Sin
+        # permisos") y uno INEXISTENTE (ausente del summary): eso convertía el endpoint en
+        # un enumerador del espacio global de ids para cualquier autenticado. Con el
+        # queryset acotado, ambos casos caen en el mismo `not_found`.
+        queryset = _org_scoped(GymClass.objects.all(), user).filter(id__in=class_ids)
+        # Acotado a lo que `_can_close_or_cancel` aceptaria, no solo a la organizacion: si
+        # no, "Sin permisos" seguia distinguiendo un id existente de uno inexistente DENTRO
+        # de la propia org (un profe enumeraba las clases de sus colegas).
+        if _is_teacher(user):
+            queryset = queryset.filter(teacher_id=user.id)
+        elif not (_is_superadmin(user) or roles.is_org_admin(user)):
+            queryset = GymClass.objects.none()
+        reachable_ids = set()
         updated_ids = []
         skipped = []
 
         for gym_class in queryset:
+            reachable_ids.add(gym_class.id)
             if not _can_close_or_cancel(user, gym_class):
                 skipped.append({'id': gym_class.id, 'reason': 'Sin permisos'})
                 continue
@@ -2371,6 +2520,10 @@ class GymClassViewSet(ModelViewSet):
                 _register_teacher_payment_for_class(gym_class)
             updated_ids.append(gym_class.id)
 
+        skipped.extend(
+            {'id': class_id, 'reason': 'not_found'}
+            for class_id in class_ids if class_id not in reachable_ids
+        )
         return Response(
             {
                 'action': action_name,
@@ -2551,13 +2704,24 @@ class ClassTemplateViewSet(ModelViewSet):
             return Response({'detail': 'Accion invalida.'}, status=status.HTTP_400_BAD_REQUEST)
         if not isinstance(template_ids, list) or not template_ids:
             return Response({'detail': 'Debes enviar template_ids.'}, status=status.HTTP_400_BAD_REQUEST)
+        template_ids, invalid_ids = _as_id_list(template_ids)
+        if invalid_ids:
+            return Response({'detail': 'template_ids debe contener solo ids numéricos.'}, status=status.HTTP_400_BAD_REQUEST)
 
         user = request.user
-        templates = ClassTemplate.objects.filter(id__in=template_ids)
+        # Mismo motivo que en `bulk-close`: acotar por organización antes del bucle para no
+        # delatar qué ids existen en otros tenants.
+        templates = _org_scoped(ClassTemplate.objects.all(), user).filter(id__in=template_ids)
+        # Igual que en `bulk-close`: quien no puede gestionar NINGUNA plantilla no debe
+        # poder distinguir un id existente de uno inexistente.
+        if not (_is_superadmin(user) or roles.is_org_admin(user)):
+            templates = ClassTemplate.objects.none()
+        reachable_ids = set()
         summary = {'action': action_name, 'updated_ids': [], 'deleted_ids': [], 'skipped': []}
         comment = str(request.data.get('comment', '')).strip() or 'Cancelacion masiva de futuras'
 
         for template in templates:
+            reachable_ids.add(template.id)
             if not _can_manage_operational_resource(user, template.organization_id):
                 summary['skipped'].append({'id': template.id, 'reason': 'Sin permisos'})
                 continue
@@ -2597,12 +2761,19 @@ class ClassTemplateViewSet(ModelViewSet):
                 continue
 
             if action_name == 'delete':
+                # El id se guarda ANTES de borrar: `delete()` deja el pk en None y la
+                # respuesta reportaba `deleted_ids: [None]`.
+                template_id = template.id
                 result = delete_template_safely(template)
                 if result.get('deleted'):
-                    summary['deleted_ids'].append(template.id)
+                    summary['deleted_ids'].append(template_id)
                 else:
-                    summary['skipped'].append({'id': template.id, 'reason': result.get('reason', 'No se pudo eliminar')})
+                    summary['skipped'].append({'id': template_id, 'reason': result.get('reason', 'No se pudo eliminar')})
 
+        summary['skipped'].extend(
+            {'id': template_id, 'reason': 'not_found'}
+            for template_id in template_ids if template_id not in reachable_ids
+        )
         summary['updated_count'] = len(summary['updated_ids'])
         summary['deleted_count'] = len(summary['deleted_ids'])
         return Response(summary)
@@ -2655,7 +2826,14 @@ class RecurringEnrollmentViewSet(ModelViewSet):
         if (roles.is_org_admin(user) or _is_monitor(user)) and user.organization_id:
             return queryset.filter(class_template__organization_id=user.organization_id)
         if _is_student(user):
-            return queryset.filter(student_id=user.id)
+            # Mismo acotamiento por organizacion: la recurrencia cuelga de la plantilla,
+            # asi que la org sale de `class_template`.
+            if not user.organization_id:
+                return queryset.none()
+            return queryset.filter(
+                student_id=user.id,
+                class_template__organization_id=user.organization_id,
+            )
         return queryset.none()
 
     def perform_create(self, serializer):
@@ -2673,7 +2851,11 @@ class RecurringEnrollmentViewSet(ModelViewSet):
     def perform_update(self, serializer):
         user = self.request.user
         recurring_enrollment = self.get_object()
-        if _is_student(user) and recurring_enrollment.student_id != user.id:
+        if _is_student(user) and not (
+            recurring_enrollment.student_id == user.id
+            and user.organization_id
+            and recurring_enrollment.class_template.organization_id == user.organization_id
+        ):
             raise PermissionDenied('Solo puedes editar tus propias recurrencias.')
         if roles.is_org_admin(user) and recurring_enrollment.class_template.organization_id != user.organization_id:
             raise PermissionDenied('No tienes permisos para editar esta recurrencia.')
@@ -2711,7 +2893,11 @@ class RecurringEnrollmentViewSet(ModelViewSet):
         if roles.is_org_admin(user) and instance.class_template.organization_id == user.organization_id:
             instance.delete()
             return
-        if _is_student(user) and instance.student_id == user.id:
+        if _is_student(user) and (
+            instance.student_id == user.id
+            and user.organization_id
+            and instance.class_template.organization_id == user.organization_id
+        ):
             can_modify, reason = _student_can_manage_recurring(instance)
             if not can_modify:
                 raise PermissionDenied(reason)
@@ -2756,7 +2942,7 @@ class EnrollmentViewSet(ModelViewSet):
         reservation_kind = str(self.request.query_params.get('reservation_kind', '')).strip().lower()
         queryset = self.queryset
 
-        _sync_class_statuses(GymClass.objects.all())
+        _sync_class_statuses(_class_sync_scope(user))
 
         if gym_class_id:
             queryset = queryset.filter(gym_class_id=gym_class_id)
@@ -2784,9 +2970,21 @@ class EnrollmentViewSet(ModelViewSet):
         if (roles.is_org_admin(user) or _is_monitor(user)) and user.organization_id:
             return queryset.filter(gym_class__organization_id=user.organization_id)
         if _is_teacher(user):
-            return queryset.filter(gym_class__teacher_id=user.id)
+            # Acotado por organización además del profesor: ver `_is_own_class_teacher`.
+            if not user.organization_id:
+                return queryset.none()
+            return queryset.filter(
+                gym_class__teacher_id=user.id,
+                gym_class__organization_id=user.organization_id,
+            )
         if _is_student(user):
-            return queryset.filter(student_id=user.id)
+            # Acotado por organizacion ademas del alumno: ver `_is_own_org_student`.
+            if not user.organization_id:
+                return queryset.none()
+            return queryset.filter(
+                student_id=user.id,
+                gym_class__organization_id=user.organization_id,
+            )
         return queryset.none()
 
     @action(detail=False, methods=['get'], url_path='my')
@@ -2802,11 +3000,11 @@ class EnrollmentViewSet(ModelViewSet):
         enrollment = self.get_object()
         user = request.user
 
-        if _is_student(user) and enrollment.student_id != user.id:
+        if _is_student(user) and not _is_own_org_student(user, enrollment):
             raise PermissionDenied('Solo puedes cancelar tus propias reservas.')
         if roles.is_org_admin(user) and enrollment.gym_class.organization_id != user.organization_id:
             raise PermissionDenied('No tienes permisos para esta reserva.')
-        if _is_teacher(user) and enrollment.gym_class.teacher_id != user.id:
+        if _is_teacher(user) and not _is_own_class_teacher(user, enrollment.gym_class):
             raise PermissionDenied('Solo puedes cancelar inscripciones en tus propias clases.')
         if not (_is_superadmin(user) or roles.is_org_admin(user) or _is_teacher(user) or _is_student(user)):
             raise PermissionDenied('No tienes permisos para cancelar esta reserva.')
@@ -2849,7 +3047,7 @@ class EnrollmentViewSet(ModelViewSet):
                 and gym_class.organization_id == user.organization_id
                 and (
                     roles.is_org_admin(user)
-                    or (_is_teacher(user) and gym_class.teacher_id == user.id)
+                    or _is_own_class_teacher(user, gym_class)
                     or _is_student(user)
                 )
             )
@@ -2875,7 +3073,7 @@ class EnrollmentViewSet(ModelViewSet):
 
             if _is_teacher(user):
                 gym_class = serializer.validated_data.get('gym_class')
-                if not gym_class or gym_class.teacher_id != user.id:
+                if not gym_class or not _is_own_class_teacher(user, gym_class):
                     raise PermissionDenied('Solo puedes inscribir alumnos en tus propias clases.')
                 try:
                     enrollment = reserve_student_in_class(student=student, gym_class=gym_class, require_plan=True)
@@ -2931,16 +3129,34 @@ class EnrollmentViewSet(ModelViewSet):
 
         serializer.save()
 
+    def _destroy_with_refund(self, instance):
+        """Borrar una inscripción tiene que llevarse su consumo.
+
+        `ConsumptionLog` no cuelga de `Enrollment`, así que el borrado no lo cascadea: el
+        log sobrevivía y `classes_used` quedaba inflado (alumno cobrado sin reserva, y
+        consumo huérfano que ciega las guardas de borrado de clases y series).
+        """
+        with transaction.atomic():
+            revert_consumption_for_enrollment(instance)
+            instance.delete()
+
     def perform_destroy(self, instance):
         user = self.request.user
         if _is_superadmin(user):
-            instance.delete()
+            self._destroy_with_refund(instance)
             return
         if roles.is_org_admin(user) and instance.gym_class.organization_id == user.organization_id:
-            instance.delete()
+            self._destroy_with_refund(instance)
             return
-        if _is_student(user) and instance.student_id == user.id:
-            instance.delete()
+        if _is_own_org_student(user, instance):
+            # DELETE no puede ser la puerta trasera de la acción `cancel`: sin este
+            # check el alumno se saltaba STUDENT_CANCEL_DEADLINE_HOURS borrando la
+            # reserva en vez de cancelarla, y con el reverso del consumo encima ahora
+            # además recuperaría el saldo. Misma política que `cancel_reservation`.
+            can_cancel, reason = _student_can_cancel_enrollment(instance)
+            if not can_cancel:
+                raise ValidationError({'detail': reason})
+            self._destroy_with_refund(instance)
             return
         raise PermissionDenied('No tienes permisos para eliminar inscripciones.')
 
@@ -3037,6 +3253,9 @@ class MembershipPlanViewSet(ModelViewSet):
             StudentPlan.objects.select_related('plan', 'user')
             .filter(
                 user=request.user,
+                # La membresia es de quien la vendio (`plan.organization`). Sin este filtro,
+                # un alumno movido de organizacion seguia viendo el plan de la anterior.
+                plan__organization_id=request.user.organization_id,
                 is_active=True,
                 start_date__lte=today,
                 end_date__gte=today,
@@ -3239,7 +3458,14 @@ class TeacherPaymentRecordViewSet(ModelViewSet):
         elif (_is_gym_admin(user) or _is_monitor(user)) and user.organization_id:
             queryset = queryset.filter(class_instance__organization_id=user.organization_id)
         elif _is_teacher(user):
-            queryset = queryset.filter(teacher_id=user.id)
+            # Un pago calculado sobre una clase de otra organización (FK de profesor
+            # rancia) no es del profe: ver `_is_own_class_teacher`.
+            if not user.organization_id:
+                return queryset.none()
+            queryset = queryset.filter(
+                teacher_id=user.id,
+                class_instance__organization_id=user.organization_id,
+            )
         else:
             return queryset.none()
 

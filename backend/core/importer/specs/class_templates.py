@@ -58,10 +58,18 @@ def _template_rules(values, organization):
     # Solape del profesor contra el horario y las clases YA existentes (misma
     # lógica que ClassTemplate.clean); los solapes entre filas del archivo los
     # atrapa el full_clean del commit.
+    #
+    # Ambos querysets van acotados a `organization`: sin eso barrían toda la plataforma y,
+    # si el profesor tenía horarios en otra organización (FK de profesor "rancia"), el
+    # preview del importador respondía "ya tiene clases que se cruzan" — un bit de la
+    # agenda de otro gimnasio por fila, y una fila legítima bloqueada por un dato que el
+    # actor no puede ver ni corregir. Mismo criterio que
+    # `core/services/recurrence.py::_has_teacher_conflict`.
     teacher = values.get('teacher')
     if teacher is not None and start_time is not None and end_time is not None:
         weekday = values.get('weekday')
         queryset = ClassTemplate.objects.filter(
+            organization=organization,
             teacher=teacher,
             weekday=weekday,
             is_active=True,
@@ -84,6 +92,7 @@ def _template_rules(values, organization):
 
         weekday_for_db = ((weekday + 1) % 7) + 1
         class_query = GymClass.objects.filter(
+            organization=organization,
             teacher=teacher,
             start_datetime__week_day=weekday_for_db,
             start_datetime__time__lt=end_time,

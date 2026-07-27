@@ -756,6 +756,12 @@ class ClassTemplate(TimestampedModel):
             raise ValidationError({'capacity': 'La capacidad debe ser mayor a cero.'})
         if self.teacher and self.teacher.role != 'teacher':
             raise ValidationError({'teacher': 'El usuario seleccionado no es profesor.'})
+        # Del profesor se validaba solo el ROL, no la organización. Las instancias que la
+        # serie genera NO vuelven a pasar por `GymClassSerializer` (que sí lo valida), así
+        # que un profe ajeno acá terminaba dictando clases de esta organización y
+        # arrastraba su `TeacherPaymentRecord` cruzando el borde.
+        if self.teacher and self.organization_id and self.teacher.organization_id != self.organization_id:
+            raise ValidationError({'teacher': 'El profesor no pertenece a la organizacion indicada.'})
         if self.branch and self.organization_id and self.branch.organization_id != self.organization_id:
             raise ValidationError({'branch': 'La sucursal no pertenece a la organizacion indicada.'})
         if self.class_type and self.organization_id and self.class_type.organization_id != self.organization_id:
@@ -766,7 +772,13 @@ class ClassTemplate(TimestampedModel):
         if not self.teacher:
             return
 
+        # Acotado por organizacion: sin esto el solape barria TODA la plataforma. Como
+        # la FK de profesor es SET_NULL, una persona movida de organizacion deja su
+        # agenda vieja viva, y el chequeo la encontraba: denegaba una creacion legitima
+        # y el mensaje de error confirmaba que en ese horario hay algo en la otra
+        # organizacion (oraculo). Mismo criterio que recurrence._has_teacher_conflict.
         queryset = ClassTemplate.objects.filter(
+            organization_id=self.organization_id,
             teacher=self.teacher,
             weekday=self.weekday,
             is_active=True,
@@ -787,6 +799,7 @@ class ClassTemplate(TimestampedModel):
 
         weekday_for_db = ((self.weekday + 1) % 7) + 1
         class_query = GymClass.objects.filter(
+            organization_id=self.organization_id,
             teacher=self.teacher,
             start_datetime__week_day=weekday_for_db,
             start_datetime__time__lt=self.end_time,

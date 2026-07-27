@@ -104,8 +104,13 @@ def _membership_rules(values, organization):
             from core.models import StudentPlan
 
             user = values.get('user')
+            # Acotado a la organizacion del import: la membresia es de quien la vendio
+            # (`plan.organization`). Sin el filtro, una membresia activa de OTRA
+            # organizacion bloqueaba una fila legitima y delataba su existencia.
             if isinstance(user, CustomUser) and (
-                StudentPlan.objects.filter(user=user, is_active=True)
+                StudentPlan.objects.filter(
+                    user=user, plan__organization_id=organization.id, is_active=True,
+                )
                 .exclude(start_date=start).exists()
             ):
                 errors.append(RowError(
@@ -149,7 +154,11 @@ def _build_membership(values, organization):
     # En validate (sin transacción) no corre: select_for_update exige atomic.
     if connection.in_atomic_block and is_active:
         CustomUser.objects.select_for_update().get(pk=values['user'].pk)
-        if (StudentPlan.objects.filter(user=values['user'], is_active=True)
+        if (StudentPlan.objects.filter(
+                    user=values['user'],
+                    plan__organization_id=organization.id,
+                    is_active=True,
+                )
                 .exclude(start_date=start).exists()):
             raise IntegrityError('el alumno recibió otra membresía activa en paralelo')
 
@@ -260,7 +269,7 @@ MEMBERSHIPS = register(EntityImportSpec(
         ),
     ),
     natural_key=('user', 'start_date'),
-    org_field='user__organization',
+    org_field='plan__organization',
     # Upsert: una membresía existente (mismo alumno + misma fecha de inicio) se
     # actualiza en vez de omitirse. Sin filtro is_active en el dedup: el histórico
     # inactivo también cuenta como existente (idempotencia al re-importar).

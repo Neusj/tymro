@@ -217,6 +217,13 @@ def create_checkout(*, organization, user, plan=None, target_student_plan=None):
 
 def apply_provider_payment(*, tx, payment):
     """Núcleo idempotente. Debe llamarse por webhook y por reconcile."""
+    # El mismatch de organización NO puede escapar del atomic: haría rollback del `tx.save()`
+    # y la transacción quedaría igual que un checkout abandonado (`pending`, sin
+    # `provider_payment_id`) sobre un pago YA COBRADO. Peor: `reconcile_payments` exige
+    # `provider_payment_id__isnull=False`, o sea justo el campo que el rollback borra, así
+    # que el pago quedaba irrecuperable. Se registra la señal, se comitea, y se levanta
+    # DESPUÉS del bloque.
+    plan_org_mismatch = None
     with db_transaction.atomic():
         tx = PaymentTransaction.objects.select_for_update().get(pk=tx.pk)
         if tx.processed_at is not None:
@@ -238,20 +245,35 @@ def apply_provider_payment(*, tx, payment):
         if payment.status == PaymentStatus.APPROVED:
             if payment.amount != tx.amount:
                 raise PaymentIntegrityError(f'monto {payment.amount} != esperado {tx.amount}')
-            from .plans import activate_student_plan
+            from .plans import PlanOrganizationMismatch, activate_student_plan
             if tx.plan_id:
-                sp = activate_student_plan(student=tx.user, plan=tx.plan,
-                                           start_date=timezone.localdate())
-                tx.student_plan = sp
+                try:
+                    sp = activate_student_plan(student=tx.user, plan=tx.plan,
+                                               start_date=timezone.localdate())
+                except PlanOrganizationMismatch as exc:
+                    # El alumno cambió de organización entre el checkout y la aprobación:
+                    # activar el plan crearía una membresía que ningún endpoint muestra ni
+                    # consume. Se deja la tx COBRADA y SIN `processed_at` para que quede
+                    # visible y recuperable, y se aborta después del atomic.
+                    plan_org_mismatch = str(exc)
+                    tx.status_detail = f'{payment.status_detail or ""} | plan_org_mismatch'.strip(' |')
+                else:
+                    tx.student_plan = sp
             elif tx.target_student_plan_id:
                 sp = tx.target_student_plan
                 sp.enrollment_fee_paid_at = timezone.now()
                 sp.save(update_fields=['enrollment_fee_paid_at', 'updated_at'])
                 tx.student_plan = sp
-            tx.processed_at = timezone.now()
+            if plan_org_mismatch is None:
+                tx.processed_at = timezone.now()
 
         tx.save()
-        return tx
+
+    if plan_org_mismatch is not None:
+        # PaymentIntegrityError y no otra: es una inconsistencia, no un fallo transitorio.
+        # La vista del webhook la ackea con 200 y no re-encola.
+        raise PaymentIntegrityError(plan_org_mismatch)
+    return tx
 
 
 def process_payment_notification(*, tx_id, provider_payment_id):

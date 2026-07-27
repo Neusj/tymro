@@ -1,4 +1,4 @@
-from collections import Counter
+from collections import defaultdict
 
 from django.db import transaction
 from django.db.models import F, Value
@@ -23,10 +23,20 @@ class ReservationRuleError(Exception):
 
 
 def get_active_student_plan(student, on_date=None):
+    """Membresía vigente del alumno EN SU ORGANIZACIÓN.
+
+    Filtrar solo por `user` no alcanza: `StudentPlan.user` es CASCADE sobre el usuario, no
+    sobre la organización, así que mover a un alumno de la org A a la org B le deja las
+    membresías de A vivas y apuntando al plan de A. Sin el filtro, ese alumno reservaba
+    clases de la org B consumiendo —y descontando— un plan que la org A le vendió.
+
+    La organización la manda `plan.organization`: es quien vendió la membresía.
+    """
     target_date = on_date or timezone.localdate()
     return (
         StudentPlan.objects.filter(
             user=student,
+            plan__organization_id=student.organization_id,
             is_active=True,
             start_date__lte=target_date,
             end_date__gte=target_date,
@@ -141,40 +151,55 @@ def rollback_consumption_for_enrollment(enrollment, student_plan=None):
     return True
 
 
-@transaction.atomic
-def revert_consumption_for_class(gym_class):
-    """Devuelve al saldo de cada alumno los consumos de esta clase y borra sus logs.
+def _revert_consumption_logs(log_queryset):
+    """Borra los logs del queryset y devuelve cada consumo al saldo de su plan.
 
-    Se usa ANTES de eliminar una clase: `ConsumptionLog.class_instance` es CASCADE, así
-    que el borrado se llevaría los logs sin tocar `StudentPlan.classes_used` y dejaría
-    clases consumidas fantasma.
-
-    A diferencia de `rollback_consumption_for_enrollment`, no aplica la política de
-    cancelación (`should_refund_consumption`, que solo devuelve el saldo si la clase
-    está cancelada o aún no empezó): si la clase desaparece del historial, su consumo
-    tiene que desaparecer con ella sin importar la fecha ni el estado de la inscripción.
-    Si no, el contador queda inflado sin log que lo respalde.
+    Es el reverso INCONDICIONAL: no aplica la política de cancelación
+    (`should_refund_consumption`, que solo devuelve el saldo si la clase está cancelada
+    o aún no empezó). Se usa cuando el registro que respaldaba el consumo desaparece del
+    historial, y entonces el consumo tiene que desaparecer con él sin importar la fecha:
+    la invariante a sostener es `classes_used == count(ConsumptionLog)`. Un log que
+    sobrevive a su respaldo es un consumo huérfano —saldo fantasma— y además ciega las
+    guardas de borrado, que miran `Enrollment`.
 
     Devuelve la cantidad de consumos revertidos.
+
+    Es seguro ante dos reversos concurrentes del MISMO consumo (doble click en
+    `DELETE /api/enrollments/{id}/` o en `DELETE /api/classes/{id}/`): el saldo se
+    devuelve solo por las filas que este DELETE borró de verdad. `Greatest(..., 0)` no
+    alcanza como red —solo tapa el caso `classes_used == 1`—, así que el conteo NO puede
+    salir del snapshot del SELECT.
     """
     # Se materializan los ids UNA sola vez y se borra por id: contar y borrar sobre el
     # mismo queryset lo reevaluaría dos veces, y un consumo insertado entre ambas
     # sentencias se borraría sin haber sido contado (saldo fantasma, justo lo que esto
-    # viene a evitar).
-    rows = list(
-        ConsumptionLog.objects.filter(class_instance=gym_class)
-        .values_list('id', 'student_plan_id')
-    )
+    # viene a evitar). `select_for_update` serializa a los competidores en el SELECT: el
+    # perdedor lo reevalúa al liberarse el lock y ya no ve los logs borrados (no-op en
+    # SQLite, que igual serializa las escrituras; la red real es el rowcount de abajo).
+    rows = list(log_queryset.select_for_update().values_list('id', 'student_plan_id'))
     if not rows:
         return 0
 
     # Se agrupa por plan porque `ConsumptionLog` no tiene unique constraint sobre
     # (user, class_instance, student_plan): pueden existir dos logs del MISMO plan para
-    # esta clase, y hay que devolver los dos consumos, no uno.
-    consumed_by_plan = Counter(plan_id for _, plan_id in rows)
-    ConsumptionLog.objects.filter(id__in=[log_id for log_id, _ in rows]).delete()
+    # la misma clase, y hay que devolver los dos consumos, no uno.
+    ids_by_plan = defaultdict(list)
+    for log_id, plan_id in rows:
+        ids_by_plan[plan_id].append(log_id)
 
-    for plan_id, consumed in consumed_by_plan.items():
+    reverted = 0
+    for plan_id, log_ids in ids_by_plan.items():
+        # El saldo baja por lo que el DELETE realmente se llevó, no por lo que el SELECT
+        # había visto: si otra transacción ya borró estos logs, `consumed` es 0 y no se
+        # devuelve un saldo que ya devolvió ella.
+        # Del rowcount se toma SOLO el de ConsumptionLog: el total de `delete()` incluiría
+        # los objetos cascadeados si algún día algo cuelga del log, y ese número no es
+        # cantidad de consumos.
+        _, deleted_by_model = ConsumptionLog.objects.filter(id__in=log_ids).delete()
+        consumed = deleted_by_model.get(ConsumptionLog._meta.label, 0)
+        if not consumed:
+            continue
+        reverted += consumed
         # Decremento en la base y no read-modify-write: si otra reserva concurrente
         # suma su +1 sobre el mismo plan, no se pierde.
         StudentPlan.objects.filter(id=plan_id).update(
@@ -182,7 +207,44 @@ def revert_consumption_for_class(gym_class):
             updated_at=timezone.now(),
         )
 
-    return len(rows)
+    return reverted
+
+
+@transaction.atomic
+def revert_consumption_for_class(gym_class):
+    """Devuelve al saldo de cada alumno los consumos de esta clase y borra sus logs.
+
+    Se usa ANTES de eliminar una clase: `ConsumptionLog.class_instance` es CASCADE, así
+    que el borrado se llevaría los logs sin tocar `StudentPlan.classes_used` y dejaría
+    clases consumidas fantasma.
+    """
+    return _revert_consumption_logs(ConsumptionLog.objects.filter(class_instance=gym_class))
+
+
+@transaction.atomic
+def revert_consumption_for_enrollment(enrollment):
+    """Devuelve el saldo del consumo de ESTA inscripción y borra su log.
+
+    Se usa ANTES de eliminar una inscripción. `ConsumptionLog` no tiene FK a
+    `Enrollment` —cuelga de (user, class_instance, student_plan)—, así que el borrado de
+    la inscripción no lo cascadea: el log sobrevive y `classes_used` queda inflado. El
+    alumno queda cobrado sin reserva y el log huérfano ciega las guardas de borrado de
+    clases y de series, que miran `Enrollment`.
+
+    La identificación por (alumno, clase) es exacta: `Enrollment` es
+    `unique_together('gym_class', 'student')`, así que esos logs son de esta inscripción
+    y de ninguna otra.
+
+    A diferencia de `rollback_consumption_for_enrollment` —el camino de CANCELAR, que
+    mantiene el registro y por eso sí respeta la ventana de reembolso y exige
+    status='active'—, acá el reverso es incondicional: ver `_revert_consumption_logs`.
+    """
+    return _revert_consumption_logs(
+        ConsumptionLog.objects.filter(
+            user_id=enrollment.student_id,
+            class_instance_id=enrollment.gym_class_id,
+        )
+    )
 
 
 def _validate_reservation_rules(*, student, gym_class, existing=None, require_plan=True):
@@ -209,9 +271,13 @@ def _validate_reservation_rules(*, student, gym_class, existing=None, require_pl
     if active_count.count() >= gym_class.capacity:
         raise ReservationRuleError('La clase ya alcanzó su capacidad máxima.', code='class_full')
 
+    # Acotado a la organizacion de la clase: un alumno movido de organizacion conserva
+    # sus reservas activas de la anterior, y el solape las encontraba. Bloqueaba una reserva
+    # legitima y delataba que en ese horario hay algo en el otro gimnasio.
     overlapping_enrollments = Enrollment.objects.filter(
         student=student,
         status='active',
+        gym_class__organization_id=gym_class.organization_id,
         gym_class__status__in=[GymClass.Status.SCHEDULED, GymClass.Status.IN_PROGRESS],
         gym_class__start_datetime__lt=gym_class.end_datetime,
         gym_class__end_datetime__gt=gym_class.start_datetime,

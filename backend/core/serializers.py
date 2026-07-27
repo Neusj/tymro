@@ -457,11 +457,33 @@ class PersonSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         request = self.context.get('request')
         user = getattr(request, 'user', None)
+        instance = getattr(self, 'instance', None)
         # Para no-superadmin la organización la fuerza el ViewSet (perform_create/
         # update). Ignoramos cualquier 'organization' del payload para evitar
         # escritura cross-tenant.
         if user and user.is_authenticated and user.role != User.Role.SUPERADMIN:
             attrs.pop('organization', None)
+
+        # Forzar la organización NO alcanzaba: la persona quedaba en la org del actor
+        # pero colgada de una sucursal de OTRA. `Person.branch` es SET_NULL, así que el
+        # borde también se cruza al borrar la sede ajena, y `branch_name` devolvía el
+        # nombre de esa sede en la respuesta.
+        organization = attrs.get('organization', getattr(instance, 'organization', None))
+        if organization is None and user and user.is_authenticated:
+            organization = user.organization
+        branch = attrs.get('branch', getattr(instance, 'branch', None))
+        if organization is None:
+            # Superadmin creando sin `organization`: es rol de plataforma, no tiene org
+            # propia de la cual derivarla. Sin este caso, con `branch` el check de abajo se
+            # salteaba entero (la sucursal ajena entraba sin validar) y sin `branch` la
+            # fila llegaba a la base y moría en el NOT NULL con un 500.
+            raise serializers.ValidationError(
+                {'organization': 'Debes indicar la organización de la persona.'}
+            )
+        if branch and branch.organization_id != organization.id:
+            raise serializers.ValidationError(
+                {'branch': 'La sucursal no pertenece a la organización de la persona.'}
+            )
         return attrs
 
 
@@ -638,6 +660,17 @@ class HolidaySerializer(serializers.ModelSerializer):
             model_instance.clean()
         except DjangoValidationError as exc:
             raise serializers.ValidationError(exc.message_dict or {'detail': exc.messages})
+
+        # `Holiday.clean()` NORMALIZA además de validar (global ⇒ sin organización ni
+        # sucursal; por organización ⇒ sin sucursal), pero lo hacía sobre esta instancia
+        # desechable: `save()` usa `validated_data`, así que la normalización se perdía y
+        # quedaban filas imposibles. Un global con organización se filtraba a todos los
+        # tenants (`get_queryset` expone `Q(scope=GLOBAL)` sin filtro de organización), y
+        # un feriado por organización con una sucursal ajena escribía una FK cross-tenant
+        # que, por el CASCADE de `Holiday.branch`, le bloqueaba a la otra organización el
+        # borrado de su propia sede. Se persiste lo que `clean()` decidió.
+        attrs['organization'] = model_instance.organization
+        attrs['branch'] = model_instance.branch
         return attrs
 
 
@@ -790,9 +823,14 @@ class EnrollmentSerializer(serializers.ModelSerializer):
             if active_count.count() >= gym_class.capacity:
                 raise serializers.ValidationError({'gym_class': 'La clase ya alcanzó su capacidad máxima.'})
 
+            # El simetrico para el ALUMNO: `Enrollment.student` es CASCADE sobre el
+            # usuario, no sobre la organizacion, asi que un alumno movido conserva sus
+            # reservas viejas y el solape las encontraba (reserva legitima bloqueada +
+            # oraculo de la agenda ajena).
             overlapping_enrollments = Enrollment.objects.filter(
                 student=student,
                 status='active',
+                gym_class__organization_id=gym_class.organization_id,
                 gym_class__status__in=[GymClass.Status.SCHEDULED, GymClass.Status.IN_PROGRESS],
             ).filter(
                 Q(
@@ -964,7 +1002,11 @@ class GymClassSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({'capacity': 'La capacidad debe ser mayor que cero.'})
 
         if start_datetime and end_datetime and teacher:
+            # Acotado por organizacion, igual que en `ClassTemplate.clean()`: la
+            # agenda de un profesor movido de organizacion no puede bloquear —ni delatar—
+            # la creacion de una clase en la organizacion nueva.
             conflicting_classes = GymClass.objects.filter(
+                organization_id=organization.id,
                 teacher=teacher,
             ).exclude(status=GymClass.Status.CANCELLED).filter(
                 _overlap_filter(start_datetime, end_datetime)
