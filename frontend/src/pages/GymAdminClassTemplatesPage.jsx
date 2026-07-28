@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { branchesApi, classTemplatesApi, classTypesApi, disciplinesApi, usersApi } from '../api/client'
+import { useAuth } from '../auth/AuthContext'
 import BulkActionModal from '../components/BulkActionModal'
 import DashboardHeader from '../components/DashboardHeader'
 import DataTable from '../components/ui/DataTable'
 import ValueBadge from '../components/ui/ValueBadge'
+import { canManageAdmin } from '../utils/roles'
 
 const initialForm = {
   name: '',
@@ -46,6 +48,11 @@ function firstApiError(detail) {
 }
 
 export default function GymAdminClassTemplatesPage() {
+  const { user } = useAuth()
+  // Borrar una serie es solo de gym_admin/superadmin (el backend le da 403 al manager por
+  // las dos vias, ver ClassTemplateViewSet). Sin esto el manager veia un boton y una accion
+  // masiva que siempre fallaban.
+  const canDeleteSeries = canManageAdmin(user?.role)
   const [form, setForm] = useState(initialForm)
   const [editingId, setEditingId] = useState(null)
   const [templates, setTemplates] = useState([])
@@ -292,19 +299,21 @@ export default function GymAdminClassTemplatesPage() {
             >
               Reactivar futuras canceladas
             </button>
-            <button
-              type="button"
-              disabled={workingId === row.id}
-              onClick={() => deleteTemplate(row)}
-              className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 disabled:opacity-60"
-            >
-              Eliminar
-            </button>
+            {canDeleteSeries ? (
+              <button
+                type="button"
+                disabled={workingId === row.id}
+                onClick={() => deleteTemplate(row)}
+                className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 disabled:opacity-60"
+              >
+                Eliminar
+              </button>
+            ) : null}
           </>
         ),
       },
     ],
-    [workingId],
+    [workingId, canDeleteSeries],
   )
 
   return (
@@ -464,7 +473,9 @@ export default function GymAdminClassTemplatesPage() {
           { value: 'cancel_future_instances', label: 'Cancelar clases futuras', description: 'Cancela instancias futuras ya generadas.' },
           { value: 'reactivate_future_cancelled', label: 'Reactivar futuras canceladas', description: 'Intenta reactivar futuras canceladas validando seguridad.' },
           { value: 'generate_pending', label: 'Generar rango pendiente', description: 'Genera clases faltantes dentro del rango de serie sin duplicar.' },
-          { value: 'delete', label: 'Eliminar series seguras', description: 'Elimina solo series sin actividad bloqueante.' },
+          ...(canDeleteSeries
+            ? [{ value: 'delete', label: 'Eliminar series seguras', description: 'Elimina solo series sin actividad bloqueante.' }]
+            : []),
         ]}
         requiresCommentActions={['cancel_future_instances']}
         defaultAction="generate_pending"

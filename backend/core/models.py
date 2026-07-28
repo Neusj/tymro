@@ -466,6 +466,12 @@ class Plan(TimestampedModel):
         TRIAL = 'trial', 'Trial'
         GIFTCARD = 'giftcard', 'Giftcard'
 
+    # Tipos que el gimnasio asigna a mano y NO se venden en línea. Fuente única de verdad:
+    # la usan `create_checkout` (rechaza la compra) y el catálogo del alumno en
+    # `MembershipPlanViewSet.get_queryset` (los saca de la vitrina). Estaban duplicados como
+    # literales en el servicio de pagos y en el frontend, y por eso divergieron.
+    NOT_PURCHASABLE_ONLINE = frozenset({PlanType.TRIAL, PlanType.GIFTCARD})
+
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='legacy_plans')
     # Alcance del plan: NULL = GLOBAL (vale en toda la organización); con sucursal =
     # EXCLUSIVO (solo cubre las clases de esa sede). `RESTRICT` y no `SET_NULL` a

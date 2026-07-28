@@ -246,6 +246,12 @@ def test_bulk_endpoints_do_not_touch_another_org(api_client, world, actor):
         resp = api_client.post('/api/class-templates/bulk-action/', {
             'action': bulk_action, 'template_ids': [world['template_a'].id], 'comment': 'hack',
         }, format='json')
+        # `delete` como manager es 403 y no 200: la política de borrado de serie es solo
+        # gym_admin, y el rechazo por ROL llega antes de mirar los ids (ver
+        # `test_series_delete_policy.py`). El resto sigue el contrato bulk: 200 + skipped.
+        if bulk_action == 'delete' and actor == 'manager_b':
+            assert resp.status_code == 403, resp.content
+            continue
         assert resp.status_code == 200, resp.content
         assert resp.json()['updated_ids'] == [], (bulk_action, resp.content)
         assert resp.json()['deleted_ids'] == [], (bulk_action, resp.content)

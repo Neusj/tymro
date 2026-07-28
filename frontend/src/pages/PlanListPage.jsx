@@ -185,7 +185,15 @@ export default function PlanListPage({
       setDeleting(null)
       await loadData()
     } catch (apiError) {
-      setError(firstApiError(apiError?.response?.data, 'No se pudo eliminar el plan.'))
+      // El 400 de la guarda de cascada viene ACOMPANADO de una escritura: el backend
+      // desactiva el plan (is_active=false) y lo dice en el mensaje. Sin recargar aca, la
+      // tabla seguia mostrando "Activo" mientras el aviso decia que se habia desactivado.
+      const message = firstApiError(apiError?.response?.data, 'No se pudo eliminar el plan.')
+      setDeleting(null)
+      // El setError va DESPUES del loadData a proposito: loadData arranca con setError('')
+      // y borraria el motivo, dejando al admin con el plan desactivado y sin explicacion.
+      await loadData()
+      setError(message)
     } finally {
       setSaving(false)
     }

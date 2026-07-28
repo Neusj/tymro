@@ -171,11 +171,11 @@ def _sync_class_statuses(base_queryset):
 
 
 def _as_id_list(raw_ids):
-    """(ids enteros, ids inválidos) de una lista que llegó por el body.
+    """(ids enteros, ids inválidos) de una lista de ids que llegó del cliente.
 
     Los endpoints bulk solo validaban "lista no vacía" y pasaban el contenido crudo a
     `filter(id__in=...)`: un valor no numérico levantaba `ValueError` fuera del manejo de
-    DRF y respondía 500.
+    DRF y respondía 500. Sirve igual para un id suelto de query param (`[valor]`).
     """
     ids, invalid = [], []
     for raw in raw_ids:
@@ -1593,9 +1593,10 @@ class BranchViewSet(ModelViewSet):
         convierte en global, y una regla acotada a una sede pasa a pagar las clases de
         todas las demás.
 
-        Las otras dos FKs SET_NULL —`CustomUser.branch` y `Person.branch`— se evaluaron y
-        se aceptan a propósito: ahí `NULL` significa "sin sede asignada", que es una
-        pérdida de dato menor y no una inversión de alcance. No son un olvido.
+        Las otras FKs SET_NULL —`CustomUser.branch`, `Person.branch`, `StudentPlan.branch`
+        y `ConsumptionLog.branch`— se evaluaron y se aceptan a propósito: ahí `NULL`
+        significa "sin sede registrada", que es una pérdida de dato menor y no una
+        inversión de alcance. No son un olvido.
         """
         if branch.classes.exists():
             return (
@@ -2604,17 +2605,30 @@ class ClassTemplateViewSet(ModelViewSet):
             return
         raise PermissionDenied('No tienes permisos para editar esta plantilla.')
 
-    def perform_destroy(self, instance):
-        user = self.request.user
-        if _can_manage_operational_resource(user, instance.organization_id):
-            delete_result = delete_template_safely(instance)
-            if delete_result.get('deleted'):
-                return
-            raise PermissionDenied(delete_result.get('reason') or 'No se pudo eliminar esta serie.')
-        raise PermissionDenied('No tienes permisos para eliminar esta plantilla.')
+    # `perform_destroy` NO se define a propósito: `destroy` está sobreescrito y nunca lo
+    # invocaría, así que existía como código muerto declarando una TERCERA política de
+    # borrado (permitía manager) distinta de las dos reales. La política de borrado de
+    # serie es única y vive acá abajo: `_can_manage_org_resource` (gym_admin/superadmin).
 
     def destroy(self, request, *args, **kwargs):
         template = self.get_object()
+        # Borrar una serie destruye historial (`delete_template_safely` arrastra las clases
+        # generadas), así que queda en gym_admin/superadmin: el manager NO, por ninguna vía
+        # —ni acá ni por `bulk-action`—. Al manager le quedan desactivar, cancelar futuras y
+        # regenerar, que no borran la fila.
+        #
+        # OJO: "no borra la fila" no es lo mismo que "inocuo". Quedan dos huecos conocidos:
+        # 1. Las dos cancelaciones masivas del manager se comportan al REVÉS entre sí:
+        #    `classes/bulk-close` con `action='cancel'` devuelve el consumo, y
+        #    `class-templates/bulk-action` con `cancel_future_instances` NO —hace un
+        #    `queryset.update()` en bloque (`cancel_future_instances_for_template`)—. Como
+        #    tampoco cancela las `Enrollment`, quedan `active` sobre una clase `CANCELLED`:
+        #    el alumno recupera el saldo SOLO si cancela su reserva a mano. No es
+        #    irreversible, es que el silencio lo paga el alumno.
+        # 2. `DELETE /api/classes/{id}/` sigue abierto al manager (vía `roles.is_org_admin`),
+        #    así que puede borrar las instancias de la serie una por una. Ese borrado sí es
+        #    íntegro (pasa por `revert_consumption_for_class`), pero destruye el mismo
+        #    historial que esta guarda protege.
         if not _can_manage_org_resource(request.user, template.organization_id):
             raise PermissionDenied('No tienes permisos para eliminar esta plantilla.')
         can_delete, reason = can_delete_template(template)
@@ -2697,18 +2711,29 @@ class ClassTemplateViewSet(ModelViewSet):
 
     @action(detail=False, methods=['post'], url_path='bulk-action')
     def bulk_action(self, request):
+        user = request.user
         action_name = str(request.data.get('action', '')).strip()
         template_ids = request.data.get('template_ids') or []
 
         if action_name not in {'activate', 'deactivate', 'delete', 'cancel_future_instances', 'reactivate_future_cancelled', 'generate_pending'}:
             return Response({'detail': 'Accion invalida.'}, status=status.HTTP_400_BAD_REQUEST)
+        # Misma política que `destroy`: borrar series es de gym_admin/superadmin. Era la vía
+        # por la que el manager SÍ borraba (la selección múltiple del frontend pasa por acá),
+        # y contradecía al `destroy` que se lo negaba. El rechazo es de la petición COMPLETA
+        # y antes de mirar los ids: un `skipped` fila por fila delataría qué series existen.
+        # `roles.can_manage_admin` y no `_can_manage_org_resource(user, user.organization_id)`:
+        # ese helper compara la org contra sí misma, así que colapsaba a un check de rol
+        # disfrazado de check de tenant. La matriz de roles vive en `accounts/roles.py`
+        # (fuente única de verdad); el acotamiento por organización lo hacen `_org_scoped`
+        # y el predicado por objeto de más abajo.
+        if action_name == 'delete' and not roles.can_manage_admin(user):
+            raise PermissionDenied('Solo un administrador del gimnasio puede eliminar series.')
         if not isinstance(template_ids, list) or not template_ids:
             return Response({'detail': 'Debes enviar template_ids.'}, status=status.HTTP_400_BAD_REQUEST)
         template_ids, invalid_ids = _as_id_list(template_ids)
         if invalid_ids:
             return Response({'detail': 'template_ids debe contener solo ids numéricos.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        user = request.user
         # Mismo motivo que en `bulk-close`: acotar por organización antes del bucle para no
         # delatar qué ids existen en otros tenants.
         templates = _org_scoped(ClassTemplate.objects.all(), user).filter(id__in=template_ids)
@@ -2720,9 +2745,17 @@ class ClassTemplateViewSet(ModelViewSet):
         summary = {'action': action_name, 'updated_ids': [], 'deleted_ids': [], 'skipped': []}
         comment = str(request.data.get('comment', '')).strip() or 'Cancelacion masiva de futuras'
 
+        # El borrado usa la política estrecha (gym_admin/superadmin) y el resto de las
+        # acciones la operativa (incluye manager). Redundante con el gate de más arriba
+        # para `delete`, y a propósito: si ese gate se toca, el bucle sigue siendo correcto.
+        can_manage = (
+            _can_manage_org_resource if action_name == 'delete'
+            else _can_manage_operational_resource
+        )
+
         for template in templates:
             reachable_ids.add(template.id)
-            if not _can_manage_operational_resource(user, template.organization_id):
+            if not can_manage(user, template.organization_id):
                 summary['skipped'].append({'id': template.id, 'reason': 'Sin permisos'})
                 continue
 
@@ -3172,10 +3205,32 @@ class MembershipPlanViewSet(ModelViewSet):
         organization_id = self.request.query_params.get('organization_id')
         if _is_superadmin(user):
             if organization_id:
-                base_queryset = base_queryset.filter(organization_id=organization_id)
+                # Mismo criterio que `_as_id_list` con los ids del body: un valor no
+                # numérico es un 400 de forma, no un 500 por ValueError crudo del ORM.
+                ids, invalid = _as_id_list([organization_id])
+                if invalid:
+                    raise ValidationError({'organization_id': 'Debe ser un id numérico.'})
+                base_queryset = base_queryset.filter(organization_id=ids[0])
             return base_queryset
         if (_is_gym_admin(user) or _is_student(user) or _is_monitor(user)) and user.organization_id:
-            return base_queryset.filter(organization_id=user.organization_id)
+            base_queryset = base_queryset.filter(organization_id=user.organization_id)
+            if _is_student(user):
+                # `is_public`/`is_active` son la vitrina del alumno y el filtro vivía SOLO
+                # en el frontend (StudentBuyPlanPage.jsx): precios internos, convenios y
+                # planes ya retirados se leían con un `curl`. El checkout sí validaba
+                # (`views_payments.py`), así que lo abierto era la LECTURA. Va en
+                # `get_queryset` y no en la acción de listado a propósito: así el detalle
+                # (`/api/plans/{id}/`) también responde 404, que hace falta porque el id
+                # es autoincremental y adivinable.
+                # `gym_admin`/`superadmin` siguen viendo todo (lo administran) y `manager`
+                # ni llega: `FinancialResourcePermission` le da 403.
+                # La tercera condición replica la que faltaba del front: los planes trial y
+                # giftcard nacen con `is_public=True` (default del modelo) pero no se compran
+                # en línea —`create_checkout` los rechaza—, así que tampoco van en la vitrina.
+                base_queryset = base_queryset.filter(is_public=True, is_active=True).exclude(
+                    plan_type__in=Plan.NOT_PURCHASABLE_ONLINE,
+                )
+            return base_queryset
         return base_queryset.none()
 
     def perform_create(self, serializer):
@@ -3198,13 +3253,64 @@ class MembershipPlanViewSet(ModelViewSet):
             return
         serializer.save()
 
-    def perform_destroy(self, instance):
-        user = self.request.user
-        if not (_is_superadmin(user) or _is_gym_admin(user)):
+    @staticmethod
+    def _cascade_blocker(plan):
+        """Qué historial arrastraría el hard delete de este plan, o None si es seguro.
+
+        `StudentPlan.plan` es CASCADE: borrar el plan se lleva TODAS las membresías
+        vendidas y, en cascada (`ConsumptionLog.student_plan`), el historial de consumo
+        que respalda `classes_used`. Peor: las `Enrollment` no cuelgan del plan —cuelgan
+        de la clase y del alumno— así que sobreviven en estado `active` respaldadas por
+        una membresía que ya no existe. Y de paso era el atajo para saltarse la guarda de
+        `remove_membership`, que se niega a quitar una membresía con `classes_used > 0`
+        hasta que exista una política de devolución.
+
+        La segunda comprobación NO es por cascada sino por SET_NULL:
+        `PaymentTransaction.plan`. Borrar el plan no borra el cobro, lo deja sin decir QUÉ
+        se compró. Un pago aprobado normalmente ya activó su membresía y la primera guarda
+        alcanza; el hueco es el cobrado-sin-activar (ver `test_payment_plan_org_mismatch`),
+        que es justo el que hay que poder auditar. Un checkout abandonado —sin
+        `provider_payment_id`, o sea sin plata de por medio— no bloquea nada.
+        """
+        if plan.student_plans.exists():
+            return (
+                'El plan tiene membresías de alumnos asociadas: se desactivó en vez de '
+                'eliminarse para no corromper el historial de consumo ni dejar '
+                'inscripciones activas sin membresía que las respalde.'
+            )
+        if plan.payment_transactions.filter(provider_payment_id__isnull=False).exists():
+            return (
+                'El plan tiene pagos cobrados asociados: se desactivó en vez de '
+                'eliminarse para que esos cobros conserven el historial de qué se compró.'
+            )
+        return None
+
+    def destroy(self, request, *args, **kwargs):
+        # Se sobreescribe `destroy` y no `perform_destroy` por el mismo motivo que en
+        # `BranchViewSet.destroy`: el soft-delete es una ESCRITURA que acompaña a una
+        # respuesta de ERROR, y una APIException haría que DRF invocara `set_rollback()`,
+        # revirtiendo la desactivación mientras la respuesta seguiría diciendo que se
+        # desactivó. Devolver un `Response` explícito no dispara ese rollback.
+        instance = self.get_object()  # ya scoped por get_queryset(): 404 si es de otra org
+
+        user = request.user
+        if not (
+            _is_superadmin(user)
+            or (_is_gym_admin(user) and instance.organization_id == user.organization_id)
+        ):
             raise PermissionDenied('No tienes permisos para eliminar planes.')
-        if _is_gym_admin(user) and instance.organization_id != user.organization_id:
-            raise PermissionDenied('No puedes eliminar planes de otra organización.')
+
+        # La guarda aplica también al superadmin: la cascada corrompe el historial igual
+        # sin importar quién dispare el borrado.
+        blocker = self._cascade_blocker(instance)
+        if blocker:
+            if instance.is_active:
+                instance.is_active = False
+                instance.save(update_fields=['is_active', 'updated_at'])
+            return Response({'detail': blocker}, status=status.HTTP_400_BAD_REQUEST)
+
         instance.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(detail=False, methods=['post'], url_path='assign')
     def assign(self, request):
@@ -3316,7 +3422,17 @@ class MembershipPlanViewSet(ModelViewSet):
         if not membership:
             return Response({'detail': 'Membresia no encontrada para este plan.'}, status=status.HTTP_404_NOT_FOUND)
 
-        if (membership.classes_used or 0) > 0:
+        # Se miran las DOS cosas, y el historial primero. `classes_used` es un contador
+        # DERIVADO y escribible: el importador lo declara `updatable`, así que una
+        # re-importación con las 'Clases restantes' mal puestas lo baja a 0 dejando los
+        # ConsumptionLog vivos. Con la guarda solo sobre el contador, ese descuadre abría
+        # un bypass de dos pasos —quitar la membresía (cascadeando sus logs) y después
+        # borrar el plan, que ya no tenía membresías— que anulaba la guarda de
+        # `_cascade_blocker` sin un solo error de por medio.
+        # El contador se conserva como segunda condición y no se reemplaza: una membresía
+        # onboardeada por importador tiene saldo arrastrado y CERO logs a propósito
+        # (el consumo es anterior al sistema), y ahí el contador es lo único que protege.
+        if membership.consumption_logs.exists() or (membership.classes_used or 0) > 0:
             return Response(
                 {
                     'detail': 'No se puede quitar esta membresia porque ya tiene clases utilizadas. Define una politica de devolucion primero.'

@@ -10,7 +10,7 @@ from django.core import signing
 from django.db import transaction as db_transaction
 from django.utils import timezone
 
-from core.models import PaymentAccount, PaymentTransaction
+from core.models import PaymentAccount, PaymentTransaction, Plan
 from .providers import PaymentProviderError, get_payment_provider
 from .providers.base import BackUrls, CheckoutItem, PaymentStatus
 from .public_urls import organization_public_base_url
@@ -174,7 +174,7 @@ def create_checkout(*, organization, user, plan=None, target_student_plan=None):
     if plan is not None:
         if plan.organization_id != organization.id:
             raise CheckoutError('El plan no pertenece a la organización.')
-        if plan.plan_type in ('trial', 'giftcard'):
+        if plan.plan_type in Plan.NOT_PURCHASABLE_ONLINE:
             raise CheckoutError('Este plan no se puede comprar en línea.')
         discount = plan.discount_percentage or 0
         plan_amount = _clp(max(float(plan.price) * (1 - discount / 100), 0))
