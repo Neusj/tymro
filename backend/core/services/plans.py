@@ -14,11 +14,177 @@ historial de lo anterior tiene que quedar intacto porque es lo que respalda los 
 los `ConsumptionLog` ya emitidos. Si la UI necesita mostrar "renovar", es una etiqueta
 sobre este mismo POST, no otro endpoint ni otra semántica.
 """
-from datetime import timedelta
+from dataclasses import dataclass
+from datetime import date, timedelta
+from typing import Optional
 
 from django.db import transaction
 
 from core.models import StudentPlan
+
+
+# Umbrales de aviso de vencimiento, en días. FUENTE ÚNICA: estaban duplicados como
+# literales en `StudentPlanSerializer.get_expiry_alert_level` y en `_plan_status_payload`
+# del roster, o sea las dos mitades de la misma feature podían divergir sin que nada lo
+# detectara. Mismo criterio que `Plan.NOT_PURCHASABLE_ONLINE`: si el número vive en un solo
+# lugar, no hay nada que sincronizar.
+#
+# El MAPEO de estos umbrales a nivel de alerta y a texto sigue en cada presentador, no acá:
+# consolidar la presentación es 7.3.
+EXPIRY_SOON_DAYS = 5
+EXPIRY_WARNING_DAYS = 12
+
+
+class PlanStatus:
+    """Estados derivados de una membresía. Vocabulario definido en el backend.
+
+    Los cinco primeros son los que ya existían repartidos entre el serializer y el roster.
+    `EXHAUSTED` y `ENROLLMENT_FEE_UNPAID` son nuevos acá: hasta ahora esas dos condiciones
+    solo se evaluaban dentro del validador de reservas, que las convertía en una excepción
+    en vez de en un estado, así que ningún lector podía distinguir "vigente" de "vigente
+    pero sin clases".
+    """
+
+    NO_PLAN = 'no_plan'
+    EXPIRED = 'expired'
+    UPCOMING = 'upcoming'
+    INACTIVE = 'inactive'
+    EXHAUSTED = 'exhausted'
+    ENROLLMENT_FEE_UNPAID = 'enrollment_fee_unpaid'
+    ACTIVE = 'active'
+
+
+# Código de negocio del bloqueo. Coincide con los `code` que ya devolvía
+# `ReservationRuleError` para que el estado unificado pueda alimentar al validador de
+# reservas sin cambiarle a la API los códigos de error que el frontend ya maneja.
+REASON_PLAN_UNAVAILABLE = 'plan_unavailable'
+REASON_ENROLLMENT_FEE_UNPAID = 'enrollment_fee_unpaid'
+
+_LABELS = {
+    PlanStatus.NO_PLAN: 'Sin plan',
+    PlanStatus.EXPIRED: 'Vencido',
+    PlanStatus.UPCOMING: 'Por iniciar',
+    PlanStatus.INACTIVE: 'Inactivo',
+    PlanStatus.EXHAUSTED: 'Sin clases disponibles',
+    PlanStatus.ENROLLMENT_FEE_UNPAID: 'Matrícula impaga',
+    PlanStatus.ACTIVE: 'Vigente',
+}
+
+
+@dataclass(frozen=True)
+class StudentPlanState:
+    """Estado derivado de UNA membresía en UNA fecha. Inmutable: es una lectura."""
+
+    status: str
+    label: str
+    reason_code: Optional[str]
+    days_to_expiry: Optional[int]
+    remaining_classes: Optional[int]
+    is_usable: bool
+
+    @property
+    def passes_valid_on(self):
+        """Espejo exacto de `StudentPlanQuerySet.valid_on`: ventana de fechas + `is_active`.
+
+        Las dos mitades del predicado tienen que coincidir: si esto se separa de `valid_on`,
+        vuelve la incoherencia entre lo que el queryset selecciona y lo que el estado dice.
+        `EXHAUSTED` y `ENROLLMENT_FEE_UNPAID` pasan `valid_on` —el filtro no mira saldo ni
+        matrícula—; `INACTIVE` no, porque tiene el flag apagado.
+        """
+        return self.status in _PASSES_VALID_ON_STATUSES
+
+
+_PASSES_VALID_ON_STATUSES = frozenset({
+    PlanStatus.ACTIVE,
+    PlanStatus.EXHAUSTED,
+    PlanStatus.ENROLLMENT_FEE_UNPAID,
+})
+
+# Proyección al vocabulario que la API YA expone (`validity_status` del serializer y
+# `plan_status` del roster). Los dos estados nuevos colapsan a `active` a propósito: son
+# refinamientos de "vigente" y publicarlos rompería a los consumidores actuales, que tratan
+# todo lo que no es `active` como vencido. Exponerlos —y con qué nombre— es 7.3.
+_WIRE_STATUS = {
+    PlanStatus.EXHAUSTED: PlanStatus.ACTIVE,
+    PlanStatus.ENROLLMENT_FEE_UNPAID: PlanStatus.ACTIVE,
+}
+
+
+def wire_validity_status(state: 'StudentPlanState'):
+    """`(status, label)` del estado en el vocabulario público actual."""
+    status = _WIRE_STATUS.get(state.status, state.status)
+    return status, _LABELS[status]
+
+
+def _remaining_classes(student_plan):
+    if student_plan.unlimited_classes:
+        return None
+    return max((student_plan.total_classes or 0) - (student_plan.classes_used or 0), 0)
+
+
+def _state(status, *, days_to_expiry=None, remaining_classes=None):
+    usable = status == PlanStatus.ACTIVE
+    if usable:
+        reason_code = None
+    elif status == PlanStatus.ENROLLMENT_FEE_UNPAID:
+        reason_code = REASON_ENROLLMENT_FEE_UNPAID
+    else:
+        reason_code = REASON_PLAN_UNAVAILABLE
+    return StudentPlanState(
+        status=status,
+        label=_LABELS[status],
+        reason_code=reason_code,
+        days_to_expiry=days_to_expiry,
+        remaining_classes=remaining_classes,
+        is_usable=usable,
+    )
+
+
+def describe_student_plan(student_plan: Optional[StudentPlan], on_date: date) -> StudentPlanState:
+    """Estado derivado de `student_plan` en `on_date`. FUENTE ÚNICA del predicado.
+
+    Reemplaza a las cinco copias del predicado que había en el backend y les suma las dos
+    mitades que solo vivían dentro de `validate_student_plan_for_reservation`: el saldo y la
+    matrícula.
+
+    ORDEN DE PRECEDENCIA (importa): las FECHAS deciden primero y `is_active` después. Es el
+    orden que ya usaban los dos presentadores, y es el único que hace que el estado no
+    dependa del sentido que cada escritor le dio al flag —`activate_student_plan` lo deja en
+    True para siempre porque significa "no fue reemplazada", y el importador lo deriva de
+    `end_date >= hoy` porque para él significa "está vigente"—. Con las fechas adelante, una
+    membresía vencida es `EXPIRED` sin importar cómo quedó el flag; dentro de la ventana, el
+    flag conserva su único sentido defendible: "dada de baja".
+
+    `on_date` es OBLIGATORIO: ver `StudentPlanQuerySet.valid_on`.
+
+    NO decide CUÁL membresía mirar cuando el alumno tiene varias vigentes; eso es #9.
+    """
+    if student_plan is None:
+        return _state(PlanStatus.NO_PLAN)
+
+    days_to_expiry = None
+    if student_plan.end_date:
+        days_to_expiry = (student_plan.end_date - on_date).days
+    remaining = _remaining_classes(student_plan)
+
+    def build(status):
+        return _state(status, days_to_expiry=days_to_expiry, remaining_classes=remaining)
+
+    if student_plan.end_date and student_plan.end_date < on_date:
+        return build(PlanStatus.EXPIRED)
+    if student_plan.start_date and student_plan.start_date > on_date:
+        return build(PlanStatus.UPCOMING)
+    if not student_plan.is_active:
+        return build(PlanStatus.INACTIVE)
+    if not student_plan.unlimited_classes and (student_plan.classes_used or 0) >= (student_plan.total_classes or 0):
+        return build(PlanStatus.EXHAUSTED)
+    if (
+        student_plan.enrollment_fee
+        and student_plan.enrollment_fee > 0
+        and not student_plan.enrollment_fee_paid_at
+    ):
+        return build(PlanStatus.ENROLLMENT_FEE_UNPAID)
+    return build(PlanStatus.ACTIVE)
 
 
 class PlanOrganizationMismatch(Exception):

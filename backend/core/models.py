@@ -504,6 +504,36 @@ class Plan(TimestampedModel):
         return self.name
 
 
+class StudentPlanQuerySet(models.QuerySet):
+    """Fuente única de la mitad TEMPORAL del predicado de vigencia.
+
+    El bloque `is_active=True + start_date__lte + end_date__gte` estaba escrito tres veces
+    —`get_active_student_plan`, `_get_active_student_plan_map` y `my_memberships`— y las
+    copias ya habían divergido en el origen de la organización y en el desempate. Vive acá
+    como queryset, y no como property del modelo, porque los tres consumidores lo usan
+    dentro de un `filter()` y necesitan encadenarlo sobre su propio scope.
+
+    La otra mitad del predicado —saldo y matrícula— NO está acá: no se puede expresar en
+    un `filter()` sin duplicar la regla de `unlimited_classes`, y además produce estados
+    distinguibles ("agotado" no es lo mismo que "vencido"). Vive en
+    `core.services.plans.describe_student_plan`, que consume este queryset.
+    """
+
+    def valid_on(self, on_date):
+        """Membresías cuya ventana cubre `on_date` y que no fueron dadas de baja.
+
+        `on_date` es OBLIGATORIO a propósito. El default implícito a "hoy" es lo que hace
+        que una reserva para una clase futura se valide contra la vigencia de hoy y
+        descuente saldo para clases posteriores al `end_date` (#9): sin default, el
+        llamador tiene que declarar contra qué fecha evalúa.
+        """
+        return self.filter(
+            is_active=True,
+            start_date__lte=on_date,
+            end_date__gte=on_date,
+        )
+
+
 class StudentPlan(TimestampedModel):
     user = models.ForeignKey('accounts.CustomUser', on_delete=models.CASCADE, related_name='student_plans')
     plan = models.ForeignKey(Plan, on_delete=models.CASCADE, related_name='student_plans')
@@ -566,6 +596,13 @@ class StudentPlan(TimestampedModel):
         help_text='Fecha de vencimiento de la matrícula. Por defecto un año desde la creación.',
     )
     is_active = models.BooleanField(default=True)
+
+    # `from_queryset` y NO un override de `get_queryset()`: el manager tiene que seguir
+    # devolviendo TODAS las filas. `plan.student_plans` (related manager) resuelve por
+    # `_default_manager`, y la guarda de borrado en cascada de planes cuenta membresías por
+    # ahí; un manager que filtrara volvería esa cuenta parcial y dejaría pasar el borrado.
+    # Lo único que agrega es el método `valid_on`, explícito en cada llamador.
+    objects = models.Manager.from_queryset(StudentPlanQuerySet)()
 
     class Meta:
         # SIN constraint de unicidad sobre (user, organization) a propósito: un alumno

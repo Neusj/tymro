@@ -118,9 +118,12 @@ class PaymentCheckoutView(APIView):
         else:
             # Acotado tambien por la organizacion que vendio la membresia: `create_checkout`
             # ya lo rechaza, pero el scoping tiene que dar el 404 sin depender de esa red.
+            # Por la COLUMNA `organization` y no por el join `plan__organization`, igual que
+            # el resto de los lectores. OJO: `create_checkout` (services/payments.py) todavia
+            # valida `sp.plan.organization_id`, o sea la red de atras sigue mirando el join.
             target = get_object_or_404(StudentPlan, id=req.validated_data['target_student_plan_id'],
                                        user=user,
-                                       plan__organization_id=user.organization_id)
+                                       organization_id=user.organization_id)
         try:
             tx, url = payments.create_checkout(organization=user.organization, user=user,
                                                plan=plan, target_student_plan=target)

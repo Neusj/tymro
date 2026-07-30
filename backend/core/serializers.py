@@ -33,6 +33,12 @@ from .models import (
     TeacherPaymentRule,
     TrialFollowupConfiguration,
 )
+from .services.plans import (
+    EXPIRY_SOON_DAYS,
+    EXPIRY_WARNING_DAYS,
+    describe_student_plan,
+    wire_validity_status,
+)
 from .services.recurrence import create_enrollments_for_recurring_subscription
 
 User = get_user_model()
@@ -1481,20 +1487,27 @@ class StudentPlanSerializer(serializers.ModelSerializer):
         full_name = f'{obj.user.first_name} {obj.user.last_name}'.strip()
         return full_name or obj.user.username
 
+    def _state(self, obj):
+        """Estado derivado de la membresia, resuelto por la FUENTE UNICA del predicado.
+
+        Antes este serializer reimplementaba el predicado (fechas + `is_active`) en
+        `get_validity_status` y de ahi derivaban los otros tres campos. Ahora lo resuelve
+        `describe_student_plan`, la misma funcion que usan el roster y el validador de
+        reservas, asi que las tres vistas no pueden volver a divergir.
+        """
+        return describe_student_plan(obj, timezone.localdate())
+
     def _days_to_expiry(self, obj):
-        if not obj or not obj.end_date:
-            return None
-        return (obj.end_date - timezone.localdate()).days
+        # Lo calcula el estado, no este serializer: era el mismo `end_date - hoy` escrito dos
+        # veces (aca y en `_plan_status_payload` del roster).
+        return self._state(obj).days_to_expiry
 
     def get_validity_status(self, obj):
-        today = timezone.localdate()
-        if obj.end_date and obj.end_date < today:
-            return 'expired'
-        if obj.start_date and obj.start_date > today:
-            return 'upcoming'
-        if not obj.is_active:
-            return 'inactive'
-        return 'active'
+        # `wire_validity_status` proyecta al vocabulario que la API ya expone: los estados
+        # nuevos (`exhausted`, `enrollment_fee_unpaid`) colapsan a `active` porque son
+        # refinamientos de "vigente" y publicarlos rompe a los consumidores actuales, que
+        # tratan todo lo que no es `active` como vencido. Exponerlos es 7.3.
+        return wire_validity_status(self._state(obj))[0]
 
     def get_days_to_expiry(self, obj):
         return self._days_to_expiry(obj)
@@ -1509,9 +1522,9 @@ class StudentPlanSerializer(serializers.ModelSerializer):
         days = self._days_to_expiry(obj)
         if days is None:
             return 'neutral'
-        if days <= 5:
+        if days <= EXPIRY_SOON_DAYS:
             return 'danger'
-        if days <= 12:
+        if days <= EXPIRY_WARNING_DAYS:
             return 'warning'
         return 'safe'
 

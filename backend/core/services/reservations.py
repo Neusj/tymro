@@ -6,6 +6,11 @@ from django.db.models.functions import Greatest
 from django.utils import timezone
 
 from ..models import ConsumptionLog, Enrollment, GymClass, StudentPlan
+from .plans import (
+    REASON_ENROLLMENT_FEE_UNPAID,
+    REASON_PLAN_UNAVAILABLE,
+    describe_student_plan,
+)
 
 
 TERMINAL_CLASS_STATUSES = {
@@ -30,7 +35,12 @@ def get_active_student_plan(student, on_date=None):
     membresías de A vivas y apuntando al plan de A. Sin el filtro, ese alumno reservaba
     clases de la org B consumiendo —y descontando— un plan que la org A le vendió.
 
-    La organización la manda `plan.organization`: es quien vendió la membresía.
+    La organización la manda la COLUMNA `StudentPlan.organization` —copia de
+    `plan.organization` hecha al vender—, no el join `plan__organization`. No es lo mismo:
+    `Plan` no tiene `clean()` y nada revalida las membresías que cuelgan de él, así que
+    mover un plan de organización se llevaba con él las ventas históricas y el alumno se
+    quedaba sin plan vigente. La columna se queda con el vendedor, que es la semántica
+    declarada. De paso saca el join del camino caliente de la reserva.
     """
     # TODO #9: múltiples activas, definir imputación de consumo. Un alumno puede tener
     # varias membresías vigentes a la vez en la misma organización (p. ej. 4 BJJ + 8
@@ -42,28 +52,38 @@ def get_active_student_plan(student, on_date=None):
     return (
         StudentPlan.objects.filter(
             user=student,
-            plan__organization_id=student.organization_id,
-            is_active=True,
-            start_date__lte=target_date,
-            end_date__gte=target_date,
+            organization_id=student.organization_id,
         )
+        .valid_on(target_date)
         .order_by('-start_date', '-id')
         .first()
     )
 
 
 def validate_student_plan_for_reservation(student, on_date=None):
-    student_plan = get_active_student_plan(student, on_date=on_date)
-    if not student_plan:
-        raise ReservationRuleError('No tienes clases disponibles o plan activo', code='plan_unavailable')
-    if not student_plan.unlimited_classes and student_plan.classes_used >= student_plan.total_classes:
-        raise ReservationRuleError('No tienes clases disponibles o plan activo', code='plan_unavailable')
-    if student_plan.enrollment_fee and student_plan.enrollment_fee > 0 and not student_plan.enrollment_fee_paid_at:
+    """La membresía con la que el alumno puede reservar, o `ReservationRuleError`.
+
+    El saldo y la matrícula ya no se evalúan acá: los resuelve `describe_student_plan`, que
+    es la misma fuente que usan el roster y el serializer. Antes eran las dos únicas mitades
+    del predicado que existían en un solo lugar —este—, y por eso el roster podía ofrecer
+    clases que la reserva después rechazaba.
+
+    Los mensajes y los `code` no cambian: `reason_code` reproduce los mismos valores que esta
+    función ya devolvía (`plan_unavailable` / `enrollment_fee_unpaid`), que el frontend maneja.
+    """
+    target_date = on_date or timezone.localdate()
+    student_plan = get_active_student_plan(student, on_date=target_date)
+    state = describe_student_plan(student_plan, target_date)
+    if state.is_usable:
+        return student_plan
+    if state.reason_code == REASON_ENROLLMENT_FEE_UNPAID:
         raise ReservationRuleError(
             'Debes pagar la matrícula de tu plan antes de reservar.',
-            code='enrollment_fee_unpaid',
+            code=REASON_ENROLLMENT_FEE_UNPAID,
         )
-    return student_plan
+    raise ReservationRuleError(
+        'No tienes clases disponibles o plan activo', code=REASON_PLAN_UNAVAILABLE
+    )
 
 
 def validate_plan_branch_for_class(student_plan, gym_class):

@@ -94,6 +94,13 @@ from .services.recurrence import (
     reactivate_future_cancelled_instances_for_template,
 )
 from .services.class_dashboard import get_class_dashboard_summary
+from .services.plans import (
+    EXPIRY_SOON_DAYS,
+    EXPIRY_WARNING_DAYS,
+    PlanStatus,
+    describe_student_plan,
+    wire_validity_status,
+)
 from .services.public_urls import organization_public_base_url
 from .services.reservations import (
     ReservationRuleError,
@@ -399,6 +406,9 @@ def _get_active_student_plan_map(student_ids, organization_id, on_date=None):
     OTRA organización (`StudentPlan.user` es CASCADE sobre el usuario, no sobre la org).
     Además quedaba incoherente con el flujo de reserva, que sí acota por organización: el
     roster decía "9 clases disponibles" y reservar fallaba con `plan_unavailable`.
+
+    Se acota por la COLUMNA `organization` y no por el join `plan__organization`: ver
+    `get_active_student_plan`, que es la misma decisión y tiene que dar el mismo resultado.
     """
     target_date = on_date or timezone.localdate()
     if not student_ids:
@@ -407,11 +417,9 @@ def _get_active_student_plan_map(student_ids, organization_id, on_date=None):
     active_plans = (
         StudentPlan.objects.filter(
             user_id__in=student_ids,
-            plan__organization_id=organization_id,
-            is_active=True,
-            start_date__lte=target_date,
-            end_date__gte=target_date,
+            organization_id=organization_id,
         )
+        .valid_on(target_date)
         .select_related('plan')
         .order_by('user_id', '-start_date', '-id')
     )
@@ -436,7 +444,7 @@ def _get_latest_student_plan_map(student_ids, organization_id):
     plans = (
         StudentPlan.objects.filter(
             user_id__in=student_ids,
-            plan__organization_id=organization_id,
+            organization_id=organization_id,
         )
         .select_related('plan')
         .order_by('user_id', '-end_date', '-start_date', '-id')
@@ -449,68 +457,85 @@ def _get_latest_student_plan_map(student_ids, organization_id):
     return plan_by_user
 
 
-def _plan_status_payload(student_plan, today=None):
-    if not student_plan:
-        return {
-            'plan_status': 'no_plan',
-            'plan_status_label': 'Sin plan',
-            'plan_days_to_expiry': None,
-            'plan_expiry_alert_level': 'neutral',
-            'plan_expiry_alert_message': 'Sin plan vigente',
-        }
+def _plan_status_payload(state):
+    """Presentacion del estado de la membresia para el roster.
 
-    target_date = today or timezone.localdate()
-    days_to_expiry = None
-    if student_plan.end_date:
-        days_to_expiry = (student_plan.end_date - target_date).days
-
-    if student_plan.end_date and student_plan.end_date < target_date:
-        return {
-            'plan_status': 'expired',
-            'plan_status_label': 'Vencido',
-            'plan_days_to_expiry': days_to_expiry,
-            'plan_expiry_alert_level': 'expired',
-            'plan_expiry_alert_message': 'Vencido',
-        }
-
-    if student_plan.start_date and student_plan.start_date > target_date:
-        return {
-            'plan_status': 'upcoming',
-            'plan_status_label': 'Por iniciar',
-            'plan_days_to_expiry': days_to_expiry,
-            'plan_expiry_alert_level': 'safe',
-            'plan_expiry_alert_message': 'Por iniciar',
-        }
-
-    is_vigente = bool(student_plan.is_active)
-    if is_vigente:
-        if days_to_expiry is None:
-            alert_level = 'neutral'
-            message = 'Sin fecha de vencimiento'
-        elif days_to_expiry <= 5:
-            alert_level = 'danger'
-            message = 'Vence pronto'
-        elif days_to_expiry <= 12:
-            alert_level = 'warning'
-            message = 'Por vencer'
-        else:
-            alert_level = 'safe'
-            message = f'{days_to_expiry} dias vigentes'
-        return {
-            'plan_status': 'active',
-            'plan_status_label': 'Vigente',
-            'plan_days_to_expiry': days_to_expiry,
-            'plan_expiry_alert_level': alert_level,
-            'plan_expiry_alert_message': message,
-        }
-
-    return {
-        'plan_status': 'inactive',
-        'plan_status_label': 'Inactivo',
-        'plan_days_to_expiry': days_to_expiry,
-        'plan_expiry_alert_level': 'neutral',
-        'plan_expiry_alert_message': 'No vigente',
+    El PREDICADO ya no vive aca: lo resuelve `describe_student_plan`, la misma fuente que usa
+    el serializer y el validador de reservas, y esta funcion recibe el resultado ya calculado.
+    Lo que queda es el mapeo a nivel de alerta y a texto, que sigue siendo propio de esta
+    pantalla (consolidarlo con el del serializer es 7.3). Los umbrales salen de la constante
+    compartida, no de literales.
+    """
+    status, label = wire_validity_status(state)
+    payload = {
+        'plan_status': status,
+        'plan_status_label': label,
+        'plan_days_to_expiry': state.days_to_expiry,
     }
+
+    if status == PlanStatus.NO_PLAN:
+        return {**payload, 'plan_expiry_alert_level': 'neutral',
+                'plan_expiry_alert_message': 'Sin plan vigente'}
+    if status == PlanStatus.EXPIRED:
+        return {**payload, 'plan_expiry_alert_level': 'expired',
+                'plan_expiry_alert_message': 'Vencido'}
+    if status == PlanStatus.UPCOMING:
+        return {**payload, 'plan_expiry_alert_level': 'safe',
+                'plan_expiry_alert_message': 'Por iniciar'}
+    if status == PlanStatus.INACTIVE:
+        return {**payload, 'plan_expiry_alert_level': 'neutral',
+                'plan_expiry_alert_message': 'No vigente'}
+
+    days_to_expiry = state.days_to_expiry
+    if days_to_expiry is None:
+        alert_level = 'neutral'
+        message = 'Sin fecha de vencimiento'
+    elif days_to_expiry <= EXPIRY_SOON_DAYS:
+        alert_level = 'danger'
+        message = 'Vence pronto'
+    elif days_to_expiry <= EXPIRY_WARNING_DAYS:
+        alert_level = 'warning'
+        message = 'Por vencer'
+    else:
+        alert_level = 'safe'
+        message = f'{days_to_expiry} dias vigentes'
+    return {**payload, 'plan_expiry_alert_level': alert_level,
+            'plan_expiry_alert_message': message}
+
+
+def _resolve_roster_student_plan(student_id, active_by_student, latest_by_student):
+    """La UNICA membresia que el roster describe para este alumno.
+
+    El saldo y la etiqueta salian de dos mapas distintos y con orden distinto
+    (`-start_date` vs `-end_date`), asi que con dos membresias vigentes —4 BJJ + 8
+    kickboxing, el caso que el modelo soporta a proposito— el roster mostraba el saldo de una
+    con el vencimiento de la otra. Se elige UNA fila y todo se deriva de ella.
+
+    Se prefiere la vigente y se cae a la ultima solo para poder etiquetar "Vencido" cuando no
+    hay ninguna vigente; eso conserva exactamente el criterio de seleccion anterior.
+
+    TODO #9: cual de las N vigentes es LA membresia del alumno sigue sin definirse. Este
+    `or` hereda el desempate arbitrario de `_get_active_student_plan_map` (`-start_date`), el
+    mismo que `get_active_student_plan` usa para descontar el consumo. Definir la regla de
+    imputacion (por disciplina, eleccion del alumno, o la que vence antes) es parte de #9.
+    """
+    return active_by_student.get(student_id) or latest_by_student.get(student_id)
+
+
+def _roster_plan_balance(student_plan, state):
+    """`(available_classes, has_available_classes, unlimited_classes)` de LA MISMA fila.
+
+    Solo se informa saldo cuando la fila elegida pasa `valid_on`: una membresia vencida
+    conserva clases sin usar en la columna, pero ofrecerlas contradiria al flujo de reserva,
+    que la rechaza. Es la misma incoherencia que ya se habia cerrado del lado de la
+    organizacion ("9 clases disponibles" y reservar fallaba).
+    """
+    if student_plan is None or not state.passes_valid_on:
+        return 0, False, False
+    if student_plan.unlimited_classes:
+        return None, True, True
+    remaining = state.remaining_classes
+    return remaining, remaining > 0, False
 
 
 def _validate_student_plan_for_reservation(student):
@@ -2216,18 +2241,12 @@ class GymClassViewSet(ModelViewSet):
         for enrollment in enrollments:
             student = enrollment.student
             attendance = attendance_by_student.get(student.id)
-            student_plan = active_plan_by_student.get(student.id)
-            latest_plan = latest_plan_by_student.get(student.id)
-            remaining_classes = 0
-            has_available = False
-            if student_plan:
-                if student_plan.unlimited_classes:
-                    remaining_classes = None
-                    has_available = True
-                else:
-                    remaining_classes = max((student_plan.total_classes or 0) - (student_plan.classes_used or 0), 0)
-                    has_available = remaining_classes > 0
-            plan_status = _plan_status_payload(latest_plan, today=today)
+            student_plan = _resolve_roster_student_plan(
+                student.id, active_plan_by_student, latest_plan_by_student
+            )
+            state = describe_student_plan(student_plan, today)
+            remaining_classes, has_available, unlimited = _roster_plan_balance(student_plan, state)
+            plan_status = _plan_status_payload(state)
             full_name = f'{student.first_name} {student.last_name}'.strip()
             results.append(
                 {
@@ -2242,7 +2261,7 @@ class GymClassViewSet(ModelViewSet):
                     'attendance_checked_at': attendance.checked_at if attendance else None,
                     'available_classes': remaining_classes,
                     'has_available_classes': has_available,
-                    'unlimited_classes': bool(student_plan.unlimited_classes) if student_plan else False,
+                    'unlimited_classes': unlimited,
                     **plan_status,
                 }
             )
@@ -2276,18 +2295,12 @@ class GymClassViewSet(ModelViewSet):
         for student in candidates:
             if student.id in active_enrolled_ids:
                 continue
-            student_plan = active_plan_by_student.get(student.id)
-            latest_plan = latest_plan_by_student.get(student.id)
-            remaining_classes = 0
-            has_available = False
-            if student_plan:
-                if student_plan.unlimited_classes:
-                    remaining_classes = None
-                    has_available = True
-                else:
-                    remaining_classes = max((student_plan.total_classes or 0) - (student_plan.classes_used or 0), 0)
-                    has_available = remaining_classes > 0
-            plan_status = _plan_status_payload(latest_plan, today=today)
+            student_plan = _resolve_roster_student_plan(
+                student.id, active_plan_by_student, latest_plan_by_student
+            )
+            state = describe_student_plan(student_plan, today)
+            remaining_classes, has_available, unlimited = _roster_plan_balance(student_plan, state)
+            plan_status = _plan_status_payload(state)
             full_name = f'{student.first_name} {student.last_name}'.strip()
             results.append(
                 {
@@ -2298,7 +2311,7 @@ class GymClassViewSet(ModelViewSet):
                     'branch_id': student.branch_id,
                     'available_classes': remaining_classes,
                     'has_available_classes': has_available,
-                    'unlimited_classes': bool(student_plan.unlimited_classes) if student_plan else False,
+                    'unlimited_classes': unlimited,
                     **plan_status,
                 }
             )
@@ -3403,13 +3416,13 @@ class MembershipPlanViewSet(ModelViewSet):
             StudentPlan.objects.select_related('plan', 'user')
             .filter(
                 user=request.user,
-                # La membresia es de quien la vendio (`plan.organization`). Sin este filtro,
-                # un alumno movido de organizacion seguia viendo el plan de la anterior.
-                plan__organization_id=request.user.organization_id,
-                is_active=True,
-                start_date__lte=today,
-                end_date__gte=today,
+                # La membresia es de quien la vendio, y eso lo dice la COLUMNA
+                # `organization` (copia hecha al vender), no el join `plan__organization`.
+                # Sin este filtro, un alumno movido de organizacion seguia viendo el plan
+                # de la anterior.
+                organization_id=request.user.organization_id,
             )
+            .valid_on(today)
             .order_by('end_date', '-start_date', '-id')
         )
         serializer = StudentPlanSerializer(queryset, many=True)
@@ -3427,9 +3440,13 @@ class MembershipPlanViewSet(ModelViewSet):
                 .order_by('-is_active', '-start_date', '-id')
             )
         elif _is_gym_admin(user):
+            # Se acota por `organization` (la organizacion que VENDIO la membresia) y no por
+            # `user__organization_id`: la organizacion del usuario cambia cuando el alumno se
+            # muda de gimnasio, y entonces el gym que cobro la venta dejaba de verla en su
+            # propio plan. La columna no se mueve con el alumno.
             memberships_queryset = (
                 StudentPlan.objects.select_related('user', 'plan')
-                .filter(plan_id=plan.id, user__role=User.Role.STUDENT, user__organization_id=user.organization_id)
+                .filter(plan_id=plan.id, user__role=User.Role.STUDENT, organization_id=user.organization_id)
                 .order_by('-is_active', '-start_date', '-id')
             )
         else:
@@ -3450,13 +3467,16 @@ class MembershipPlanViewSet(ModelViewSet):
                 .first()
             )
         elif _is_gym_admin(user):
+            # Misma correccion que en `memberships`: si el scope fuera `user__organization_id`,
+            # mover al alumno de gimnasio dejaria la membresia inalcanzable para el unico
+            # tenant con derecho a tocarla.
             membership = (
                 StudentPlan.objects.select_related('user', 'plan')
                 .filter(
                     id=membership_id,
                     plan_id=plan.id,
                     user__role=User.Role.STUDENT,
-                    user__organization_id=user.organization_id,
+                    organization_id=user.organization_id,
                 )
                 .first()
             )
