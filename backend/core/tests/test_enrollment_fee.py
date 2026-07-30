@@ -34,6 +34,7 @@ def _plan_with_fee(org, user, fee, paid=False, due_at=None):
     )
     sp = StudentPlan(
         user=user, plan=plan, start_date=today, end_date=today + timedelta(days=30),
+        organization_id=plan.organization_id,
         total_classes=8, classes_used=0, final_price=40000, enrollment_fee=fee,
     )
     if paid:

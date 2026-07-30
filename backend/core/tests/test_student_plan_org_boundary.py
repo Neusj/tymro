@@ -47,6 +47,7 @@ def _membership(student, plan, classes_used=1, active=True):
     today = timezone.localdate()
     return StudentPlan.objects.create(
         user=student, plan=plan, start_date=today - timedelta(days=1),
+        organization_id=plan.organization_id,
         end_date=today + timedelta(days=30), total_classes=10,
         classes_used=classes_used, final_price=30000, is_active=active,
     )
@@ -138,8 +139,11 @@ def test_roster_still_shows_the_plan_of_its_own_org(api_client, moved_student):
 # ---------------------------------------------------------------------------
 
 def test_assigning_a_plan_does_not_deactivate_another_orgs_membership(api_client, moved_student):
-    """La invariante "una sola membresía activa" es POR ORGANIZACIÓN. Si no, el admin de
-    la org B desactiva la membresía que vendió la org A."""
+    """Asignar no puede tocar la membresía que vendió otra organización.
+
+    Cuando `activate_student_plan` desactivaba las vigentes del alumno, esto se sostenía
+    acotando ese `update` por organización —sin el filtro, el admin de la org B apagaba la
+    membresía de la org A—. Hoy se sostiene por algo más fuerte: no desactiva ninguna."""
     plan_b = _plan(moved_student['org_b'], 'Pack de B')
     _login(api_client, moved_student['admin_b'])
 
@@ -155,8 +159,19 @@ def test_assigning_a_plan_does_not_deactivate_another_orgs_membership(api_client
     )
 
 
-def test_assigning_a_plan_still_replaces_the_membership_of_its_own_org(api_client, moved_student):
-    """Regresión: dentro de la MISMA organización la invariante sigue valiendo."""
+def test_assigning_a_plan_does_not_close_the_previous_membership_of_its_own_org(
+    api_client, moved_student,
+):
+    """Invierte el comportamiento que este test exigía antes.
+
+    Asignar un plan desactivaba las membresías vigentes del alumno en esa organización, y
+    este test lo daba por correcto ("la anterior debe cerrarse"). Es un bug: un alumno
+    puede tener varios planes contratados a la vez en la misma organización (dos
+    disciplinas), así que asignarle uno nuevo no puede apagarle el que está usando.
+
+    La garantía cross-org del test de arriba sigue valiendo, y ahora por una razón más
+    simple: asignar no desactiva NADA, ni de la propia org ni de otra.
+    """
     plan_b = _plan(moved_student['org_b'], 'Pack de B')
     previous_b = _membership(moved_student['student'], _plan(moved_student['org_b'], 'Pack viejo de B'))
     _login(api_client, moved_student['admin_b'])
@@ -168,8 +183,11 @@ def test_assigning_a_plan_still_replaces_the_membership_of_its_own_org(api_clien
 
     assert resp.status_code == 201, resp.content
     previous_b.refresh_from_db()
-    assert previous_b.is_active is False, 'la membresía anterior de la MISMA org debe cerrarse'
+    assert previous_b.is_active is True, 'la membresía anterior de la MISMA org sigue vigente'
     assert StudentPlan.objects.get(id=resp.json()['id']).is_active is True
+    assert StudentPlan.objects.filter(
+        user=moved_student['student'], organization=moved_student['org_b'], is_active=True,
+    ).count() == 2
 
 
 def test_activate_student_plan_refuses_a_plan_of_another_org(moved_student):

@@ -61,6 +61,7 @@ def _give_plan(org, user, total, price, unlimited=False):
     )
     return StudentPlan.objects.create(
         user=user, plan=plan, start_date=today, end_date=today + timedelta(days=30),
+        organization_id=plan.organization_id,
         total_classes=total, unlimited_classes=unlimited, classes_used=0, final_price=price,
     )
 

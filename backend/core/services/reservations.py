@@ -32,6 +32,12 @@ def get_active_student_plan(student, on_date=None):
 
     La organización la manda `plan.organization`: es quien vendió la membresía.
     """
+    # TODO #9: múltiples activas, definir imputación de consumo. Un alumno puede tener
+    # varias membresías vigentes a la vez en la misma organización (p. ej. 4 BJJ + 8
+    # kickboxing), y este `.first()` devuelve una ARBITRARIA —la de `start_date` más
+    # reciente—, así que la reserva puede descontarle la clase al plan equivocado. Definir
+    # la regla de imputación (por disciplina del plan, elección del alumno, o la que vence
+    # antes) es parte de #9 (reservas); no se resuelve acá.
     target_date = on_date or timezone.localdate()
     return (
         StudentPlan.objects.filter(

@@ -57,6 +57,7 @@ def _class_with_consumption(setup):
     )
     student_plan = StudentPlan.objects.create(
         user=setup['student'], plan=plan, start_date=today, end_date=today + timedelta(days=30),
+        organization_id=plan.organization_id,
         total_classes=10, classes_used=1, final_price=30000,
     )
     Enrollment.objects.create(gym_class=gym_class, student=setup['student'], status='active')

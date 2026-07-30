@@ -507,6 +507,30 @@ class Plan(TimestampedModel):
 class StudentPlan(TimestampedModel):
     user = models.ForeignKey('accounts.CustomUser', on_delete=models.CASCADE, related_name='student_plans')
     plan = models.ForeignKey(Plan, on_delete=models.CASCADE, related_name='student_plans')
+    # Organización que VENDIÓ la membresía. Es una copia de `plan.organization`, no una
+    # dimensión nueva: se desnormaliza para que la organización de una membresía no
+    # dependa de seguir el join `plan__organization`. La leen las guardas multitenant del
+    # motor de importación (`org_field='organization'`) y `clean()` la mantiene en sincronía
+    # con el plan.
+    #
+    # NO existe para imponer unicidad. Un alumno puede tener varias membresías activas a la
+    # vez en esta misma organización (dos disciplinas) —ver el `Meta` más abajo: no hay
+    # constraint sobre (user, organization) y no debe agregarse—.
+    #
+    # `PROTECT` y no CASCADE: perder la organización de una membresía histórica corrompe
+    # el dinero (`final_price`, matrícula) y el consumo (`ConsumptionLog` cuelga de acá).
+    # El borrado de una organización con membresías tiene que ser una decisión explícita,
+    # no un efecto colateral.
+    #
+    # OJO: la fuente de verdad es `plan.organization`, JAMÁS `user.organization`. Un
+    # alumno movido de organización conserva vivas las membresías que le vendió la
+    # anterior (`user` es CASCADE sobre el usuario, no sobre la org); derivar de ahí las
+    # movería de tenant.
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.PROTECT,
+        related_name='student_plans',
+    )
     # Sucursal en que se activó la membresía; se deriva del plan (NULL si el plan es
     # global). Es un registro histórico: la restricción de reserva se evalúa contra
     # `plan.branch`, que es la fuente de verdad del alcance. `SET_NULL` alcanza porque
@@ -544,10 +568,27 @@ class StudentPlan(TimestampedModel):
     is_active = models.BooleanField(default=True)
 
     class Meta:
+        # SIN constraint de unicidad sobre (user, organization) a propósito: un alumno
+        # puede tener VARIAS membresías activas al mismo tiempo en la misma organización
+        # —contratar dos disciplinas, p. ej. un plan de 4 BJJ más uno de 8 kickboxing—.
+        # Cada contratación es su propia fila y ninguna desplaza a las otras.
         ordering = ['-start_date']
 
     def __str__(self):
         return f'{self.user} - {self.plan}'
+
+    def clean(self):
+        # `organization` es una copia de `plan.organization`, y nada en el esquema obliga a
+        # que sigan iguales. Importa porque las guardas multitenant del importador pasaron
+        # a leer esta columna (`org_field='organization'`): si se desincronizara, la org B
+        # podría reclamar —y reactivar— una membresía que vendió la org A y que el resto
+        # del código sigue mostrando como de A. El importador llama `full_clean()` en el
+        # create y en el update, así que la guarda cubre el upsert; el admin también.
+        super().clean()
+        if self.plan_id and self.organization_id != self.plan.organization_id:
+            raise ValidationError(
+                {'organization': 'La organización debe ser la misma que la del plan.'}
+            )
 
     def save(self, *args, **kwargs):
         # created_at (auto_now_add) es NULL hasta DESPUÉS del INSERT: por eso el

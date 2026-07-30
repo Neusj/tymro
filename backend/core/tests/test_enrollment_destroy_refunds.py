@@ -69,6 +69,7 @@ def _student_plan(setup, student=None, classes_used=0):
     )
     return StudentPlan.objects.create(
         user=student or setup['student'], plan=plan,
+        organization_id=plan.organization_id,
         start_date=today - timedelta(days=1), end_date=today + timedelta(days=30),
         total_classes=10, classes_used=classes_used, final_price=30000,
     )

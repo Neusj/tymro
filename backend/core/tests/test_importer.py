@@ -1116,6 +1116,7 @@ def test_memberships_inactive_membership_does_not_block(api_client, admin_a, mem
     # Membresía VENCIDA/inactiva previa: no debe bloquear la importación.
     StudentPlan.objects.create(
         user=membership_setup['student'], plan=membership_setup['plan'],
+        organization_id=membership_setup['plan'].organization_id,
         start_date=datetime.date(2025, 1, 1), end_date=datetime.date(2025, 1, 31),
         total_classes=8, classes_used=8, is_active=False,
     )
@@ -1346,6 +1347,7 @@ def test_memberships_guard_blocks_second_active(api_client, admin_a, membership_
     today = timezone.localdate()
     StudentPlan.objects.create(
         user=membership_setup['student'], plan=membership_setup['plan'],
+        organization_id=membership_setup['plan'].organization_id,
         start_date=today, end_date=today + datetime.timedelta(days=29),
         total_classes=8, classes_used=0, is_active=True,
     )
@@ -1354,6 +1356,59 @@ def test_memberships_guard_blocks_second_active(api_client, admin_a, membership_
     body = api_client.post('/api/imports/memberships/validate/', {'file': upload}, format='multipart').json()
     assert body['can_commit'] is False
     assert 'ya tiene una membresía activa' in body['rows'][0]['errors'][0]['message']
+
+
+def test_memberships_import_stamps_organization(api_client, admin_a, org_a, membership_setup):
+    """La membresía onboardeada tiene que quedar con su `organization` propia (7.1),
+    derivada del plan igual que en `activate_student_plan`."""
+    from django.utils import timezone
+    from core.models import StudentPlan
+
+    login(api_client, 'admin_a')
+    start = timezone.localdate().isoformat()
+    resp = import_entity(api_client, 'memberships',
+                         [['maria@gym.cl', '', 'Plan 8 clases', start, '', 5]], MEMBERSHIP_HEADERS)
+    assert resp.status_code == 201, resp.content
+
+    membership = StudentPlan.objects.get(user=membership_setup['student'])
+    assert membership.organization_id == membership_setup['plan'].organization_id
+    assert membership.organization_id == org_a.id
+
+
+def test_memberships_upsert_reactivation_keeps_organization(api_client, admin_a, org_a,
+                                                            membership_setup):
+    """Camino de REACTIVACIÓN del importador (`_commit_update`): `updatable_fields`
+    incluye `is_active`, así que una re-importación puede volver activa una membresía
+    inactiva. Es la tercera puerta de escritura —además de `activate_student_plan` y del
+    create del importador— y también tiene que dejar la organización correcta."""
+    import datetime
+
+    from django.utils import timezone
+    from core.models import StudentPlan
+
+    today = timezone.localdate()
+    # Misma clave natural (alumno + fecha de inicio) que la fila que se importará,
+    # pero vencida: queda inactiva.
+    stale = StudentPlan.objects.create(
+        user=membership_setup['student'], plan=membership_setup['plan'],
+        organization=membership_setup['plan'].organization,
+        start_date=today, end_date=today - datetime.timedelta(days=5),
+        total_classes=8, classes_used=8, is_active=False,
+    )
+
+    login(api_client, 'admin_a')
+    resp = import_entity(api_client, 'memberships',
+                         [['maria@gym.cl', '', 'Plan 8 clases', today.isoformat(), '', 5]],
+                         MEMBERSHIP_HEADERS)
+    assert resp.status_code == 201, resp.content
+    assert resp.json()['updated'] == 1
+    assert resp.json()['created'] == 0
+
+    stale.refresh_from_db()
+    assert stale.is_active is True, 'la re-importación debe reactivar la membresía'
+    assert stale.classes_used == 3
+    assert stale.organization_id == org_a.id
+    assert StudentPlan.objects.filter(user=membership_setup['student']).count() == 1
 
 
 # ---------------------------------------------------------------- F5: Horario recurrente

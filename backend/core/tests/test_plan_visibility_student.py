@@ -155,6 +155,7 @@ def test_student_keeps_seeing_a_membership_bought_on_a_now_hidden_plan(api_clien
     today = timezone.localdate()
     StudentPlan.objects.create(
         user=setup['student'], plan=setup['retired'], start_date=today,
+        organization_id=setup['retired'].organization_id,
         end_date=today + timedelta(days=30), total_classes=10, final_price=30000,
     )
     _login(api_client, 'alu')
@@ -175,6 +176,7 @@ def test_a_membership_assigned_by_hand_stays_visible_to_its_owner(api_client, se
     today = timezone.localdate()
     StudentPlan.objects.create(
         user=setup['student'], plan=setup[plan_key], start_date=today,
+        organization_id=setup[plan_key].organization_id,
         end_date=today + timedelta(days=30), total_classes=10, final_price=30000,
     )
     _login(api_client, 'alu')
@@ -194,6 +196,7 @@ def test_my_plan_still_resolves_when_the_plan_was_retired(api_client, setup):
     today = timezone.localdate()
     StudentPlan.objects.create(
         user=setup['student'], plan=setup['retired'], start_date=today,
+        organization_id=setup['retired'].organization_id,
         end_date=today + timedelta(days=30), total_classes=10, final_price=30000,
     )
     _login(api_client, 'alu')

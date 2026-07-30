@@ -70,6 +70,7 @@ def _sold_membership(setup):
     today = timezone.localdate()
     student_plan = StudentPlan.objects.create(
         user=setup['student'], plan=setup['plan'], start_date=today,
+        organization_id=setup['plan'].organization_id,
         end_date=today + timedelta(days=30), total_classes=10, classes_used=1,
         final_price=30000,
     )
@@ -290,6 +291,7 @@ def test_removing_every_membership_frees_the_plan_for_deletion(api_client, setup
     today = timezone.localdate()
     membership = StudentPlan.objects.create(
         user=setup['student'], plan=setup['plan'], start_date=today,
+        organization_id=setup['plan'].organization_id,
         end_date=today + timedelta(days=30), total_classes=10, classes_used=0,
         final_price=30000,
     )
@@ -353,6 +355,7 @@ def test_an_imported_membership_with_carried_balance_stays_protected(api_client,
     today = timezone.localdate()
     imported = StudentPlan.objects.create(
         user=setup['student'], plan=setup['plan'], start_date=today,
+        organization_id=setup['plan'].organization_id,
         end_date=today + timedelta(days=30), total_classes=10, classes_used=3,
         final_price=30000,
     )
@@ -377,6 +380,7 @@ def test_a_student_who_paid_can_still_reserve_on_a_soft_deleted_plan(api_client,
     today = timezone.localdate()
     StudentPlan.objects.create(
         user=setup['student'], plan=setup['plan'], start_date=today,
+        organization_id=setup['plan'].organization_id,
         end_date=today + timedelta(days=30), total_classes=10, classes_used=0,
         final_price=30000,
     )

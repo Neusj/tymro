@@ -185,6 +185,7 @@ def moved_student(make_organization, make_user):
     )
     StudentPlan.objects.create(
         user=student, plan=plan_b, start_date=today - timedelta(days=1),
+        organization_id=plan_b.organization_id,
         end_date=today + timedelta(days=60), total_classes=10, classes_used=0,
         final_price=30000, is_active=True,
     )

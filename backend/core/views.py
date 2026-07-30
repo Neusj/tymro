@@ -12,6 +12,7 @@ from django.core import signing
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.mail import send_mail
 from django.db import models, transaction
+from django.db.models import ProtectedError
 from django.utils import timezone
 from django.utils.encoding import force_bytes, force_str
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
@@ -1488,6 +1489,49 @@ class OrganizationViewSet(ModelViewSet):
         if not _is_superadmin(self.request.user):
             raise PermissionDenied('Solo superadmin puede eliminar organizaciones.')
         instance.delete()
+
+    def destroy(self, request, *args, **kwargs):
+        """Guarda contra el `ProtectedError` de `StudentPlan.organization`.
+
+        Desde 0030 la membresía tiene FK propia a la organización con `PROTECT`, así que
+        la vieja cascada Organization → Plan → StudentPlan → ConsumptionLog ya no corre:
+        borrar la organización se llevaba en silencio el historial de consumo y los
+        precios cobrados. Sin esta guarda el intento sale como 500 con el ProtectedError
+        crudo; acá se traduce a un 400 que dice qué lo bloquea. Mismo criterio que
+        `BranchViewSet.destroy` y `MembershipPlanViewSet.destroy`.
+        """
+        instance = self.get_object()
+        if not _is_superadmin(request.user):
+            raise PermissionDenied('Solo superadmin puede eliminar organizaciones.')
+
+        sold = StudentPlan.objects.filter(organization_id=instance.id).count()
+        if sold:
+            return Response(
+                {
+                    'detail': (
+                        f'La organización tiene {sold} membresías vendidas: no se puede '
+                        'eliminar sin destruir el historial de consumo y los precios '
+                        'cobrados que las respaldan.'
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            return super().destroy(request, *args, **kwargs)
+        except ProtectedError:
+            # Red de fondo, por dos motivos. El conteo de arriba y el DELETE no comparten
+            # lock: entre medio, un webhook de pago puede activar una membresía. Y la lista
+            # de bloqueadores está cableada a StudentPlan —hoy es el único PROTECT hacia
+            # Organization—, así que el próximo que se agregue volvería a dar 500.
+            return Response(
+                {
+                    'detail': (
+                        'La organización tiene datos que no se pueden eliminar en '
+                        'cascada. Revisá sus membresías antes de borrarla.'
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
     @action(detail=True, methods=['post'], url_path='set-public-registration')
     def set_public_registration(self, request, pk=None):

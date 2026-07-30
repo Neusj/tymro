@@ -42,6 +42,7 @@ def test_serializer_activated_student_plan_true_cuando_activo_plan(org, student)
                                total_classes=8, unlimited_classes=False, duration_days=30,
                                price=20000.0)
     sp = StudentPlan.objects.create(user=student, plan=plan, start_date=date(2026, 7, 1),
+                                    organization_id=plan.organization_id,
                                     end_date=date(2026, 7, 31), total_classes=8)
     tx = PaymentTransaction.objects.create(
         organization=org, user=student, plan=plan, amount=20000, currency='CLP',
@@ -61,6 +62,7 @@ def test_serializer_nombre_cae_a_username_y_concepto_matricula(org, student):
                                total_classes=8, unlimited_classes=False, duration_days=30,
                                price=20000.0)
     sp = StudentPlan.objects.create(user=student, plan=plan, start_date=date(2026, 7, 1),
+                                    organization_id=plan.organization_id,
                                     end_date=date(2026, 7, 31), total_classes=8)
     tx = PaymentTransaction.objects.create(
         organization=org, user=student, amount=5000, enrollment_fee_amount=5000,

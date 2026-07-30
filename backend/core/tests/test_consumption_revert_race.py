@@ -64,6 +64,7 @@ def consumed(make_organization, make_user):
     # bug pasa desapercibido.
     student_plan = StudentPlan.objects.create(
         user=student, plan=plan, start_date=today - timedelta(days=1),
+        organization_id=plan.organization_id,
         end_date=today + timedelta(days=30), total_classes=10, classes_used=3,
         final_price=30000,
     )

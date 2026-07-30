@@ -257,6 +257,7 @@ class Command(BaseCommand):
                 StudentPlan.objects.update_or_create(
                     user=student, plan=plan,
                     defaults={
+                        'organization_id': plan.organization_id,
                         'start_date': today - timedelta(days=5),
                         'end_date': today + timedelta(days=25),
                         'total_classes': plan.total_classes,
@@ -304,6 +305,7 @@ class Command(BaseCommand):
                 user=student,
                 plan=plan,
                 defaults={
+                    'organization_id': plan.organization_id,
                     'start_date': today - timedelta(days=5),
                     'end_date': today + timedelta(days=25),
                     'total_classes': plan.total_classes,
@@ -550,7 +552,7 @@ class Command(BaseCommand):
         )
         StudentPlan.objects.filter(user=no_balance).delete()
         StudentPlan.objects.create(
-            user=no_balance, plan=plan,
+            user=no_balance, plan=plan, organization_id=plan.organization_id,
             start_date=today - timedelta(days=5), end_date=today + timedelta(days=25),
             total_classes=5, classes_used=5, is_active=True,
         )
@@ -563,7 +565,7 @@ class Command(BaseCommand):
         )
         StudentPlan.objects.filter(user=unpaid).delete()
         StudentPlan.objects.create(
-            user=unpaid, plan=plan,
+            user=unpaid, plan=plan, organization_id=plan.organization_id,
             start_date=today - timedelta(days=5), end_date=today + timedelta(days=25),
             total_classes=12, classes_used=0, is_active=True,
             enrollment_fee=25000, enrollment_fee_paid_at=None,
@@ -633,7 +635,8 @@ class Command(BaseCommand):
             )
             StudentPlan.objects.filter(user=u).delete()
             sp = StudentPlan.objects.create(
-                user=u, plan=plan_obj, start_date=today - timedelta(days=2),
+                user=u, plan=plan_obj, organization_id=plan_obj.organization_id,
+                start_date=today - timedelta(days=2),
                 end_date=today + timedelta(days=28), total_classes=total,
                 unlimited_classes=unlimited, classes_used=0, final_price=price, is_active=True,
             )

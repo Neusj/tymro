@@ -60,6 +60,7 @@ def _plan_with_consumptions(setup, gym_classes):
     )
     student_plan = StudentPlan.objects.create(
         user=setup['student'], plan=plan, start_date=today - timedelta(days=5),
+        organization_id=plan.organization_id,
         end_date=today + timedelta(days=30), total_classes=10,
         classes_used=len(gym_classes), final_price=30000,
     )
@@ -162,6 +163,7 @@ def test_delete_class_does_not_touch_other_students_plans(api_client, setup, mak
     today = timezone.localdate()
     plan_b = StudentPlan.objects.create(
         user=other, plan=plan_a.plan, start_date=today - timedelta(days=5),
+        organization_id=plan_a.plan.organization_id,
         end_date=today + timedelta(days=30), total_classes=10, classes_used=1,
         final_price=30000,
     )

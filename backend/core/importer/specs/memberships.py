@@ -10,8 +10,8 @@ Convenciones espejo del flujo "Asignar plan" (core/views.py assign):
 - final_price = precio del plan con su descuento por defecto.
 - Solo alumnos y planes ACTIVOS de la organización.
 
-StudentPlan no tiene organization propia: se acota vía user__organization
-(por eso este spec usa build_instance; el registry lo exige).
+StudentPlan tiene organization propia desde 0030 (copia de plan.organization).
+Se sigue usando build_instance porque el resto de los campos son derivados.
 
 Dedup: un alumno con membresía ACTIVA (en BD o más arriba en el archivo) se
 omite — el importador nunca desactiva ni modifica membresías existentes; para
@@ -109,7 +109,7 @@ def _membership_rules(values, organization):
             # organizacion bloqueaba una fila legitima y delataba su existencia.
             if isinstance(user, CustomUser) and (
                 StudentPlan.objects.filter(
-                    user=user, plan__organization_id=organization.id, is_active=True,
+                    user=user, organization_id=organization.id, is_active=True,
                 )
                 .exclude(start_date=start).exists()
             ):
@@ -156,7 +156,7 @@ def _build_membership(values, organization):
         CustomUser.objects.select_for_update().get(pk=values['user'].pk)
         if (StudentPlan.objects.filter(
                     user=values['user'],
-                    plan__organization_id=organization.id,
+                    organization_id=organization.id,
                     is_active=True,
                 )
                 .exclude(start_date=start).exists()):
@@ -178,6 +178,10 @@ def _build_membership(values, organization):
     return StudentPlan(
         user=values['user'],
         plan=plan,
+        # Misma fuente que `activate_student_plan`: la organización del PLAN. El motor
+        # verifica que coincida con la del actor (`_commit_create`), así que un plan de
+        # otra org —que el lookup de FK ya filtra— nunca llegaría hasta acá.
+        organization_id=plan.organization_id,
         # Misma derivación que `activate_student_plan`: la sede queda registrada para
         # los planes exclusivos y en NULL para los globales. Sin esto, onboardear por
         # importador dejaba todas las membresías sin sucursal.
@@ -269,7 +273,11 @@ MEMBERSHIPS = register(EntityImportSpec(
         ),
     ),
     natural_key=('user', 'start_date'),
-    org_field='plan__organization',
+    # Columna propia desde 0030: los tres guardas del motor (dedup, `_commit_create` y
+    # `_commit_update`) chequean la organización de la FILA en vez de seguir el join a
+    # `plan__organization`. Es más estricto —ve lo que quedó guardado, no lo que el plan
+    # implica— y de paso saca el join del dedup.
+    org_field='organization',
     # Upsert: una membresía existente (mismo alumno + misma fecha de inicio) se
     # actualiza en vez de omitirse. Sin filtro is_active en el dedup: el histórico
     # inactivo también cuenta como existente (idempotencia al re-importar).

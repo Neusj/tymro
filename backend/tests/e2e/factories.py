@@ -48,6 +48,7 @@ def give_student_plan(user, plan, total_classes, price, fee=0, paid=False,
     sp = StudentPlan(
         user=user,
         plan=plan,
+        organization_id=plan.organization_id,
         start_date=today,
         end_date=today + timedelta(days=30),
         total_classes=total_classes,

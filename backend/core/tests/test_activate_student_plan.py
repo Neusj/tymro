@@ -34,12 +34,16 @@ def test_activate_applies_discount(plan, make_user):
     assert sp.discount_percentage == 50
 
 
-def test_activate_deactivates_previous(plan, make_user):
+def test_activate_keeps_the_previous_membership_active(plan, make_user):
+    """Invierte el comportamiento anterior. `activate_student_plan` desactivaba las
+    membresías vigentes del alumno antes de crear la nueva, y eso era un bug: un alumno
+    puede tener varios planes contratados a la vez (dos disciplinas), así que contratar
+    uno nuevo no puede apagarle los que está usando."""
     org, p = plan
     student = make_user('stu3', organization=org, role='student')
     first = activate_student_plan(student=student, plan=p, start_date=date(2026, 6, 1))
     second = activate_student_plan(student=student, plan=p, start_date=date(2026, 7, 1))
     first.refresh_from_db()
-    assert first.is_active is False
+    assert first.is_active is True
     assert second.is_active is True
-    assert StudentPlan.objects.filter(user=student, is_active=True).count() == 1
+    assert StudentPlan.objects.filter(user=student, is_active=True).count() == 2

@@ -91,6 +91,7 @@ def world(make_organization, make_user):
     )
     membership_a = StudentPlan.objects.create(
         user=student_a, plan=plan_a, start_date=timezone.localdate() - timedelta(days=1),
+        organization_id=plan_a.organization_id,
         end_date=timezone.localdate() + timedelta(days=30), total_classes=10,
         final_price=30000,
     )

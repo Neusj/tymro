@@ -110,6 +110,7 @@ def test_enrollment_fee_payment_marks_paid(make_organization, make_user):
     plan = Plan.objects.create(organization=org, name='M', plan_type='monthly', total_classes=1,
                                unlimited_classes=False, duration_days=30, price=1000.0)
     sp = StudentPlan.objects.create(user=student, plan=plan, start_date='2026-07-01',
+                                    organization_id=plan.organization_id,
                                     end_date='2026-07-30', total_classes=1,
                                     enrollment_fee=Decimal('20000'))
     tx, _ = payments.create_checkout(organization=org, user=student, target_student_plan=sp)
