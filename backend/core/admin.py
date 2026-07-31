@@ -10,7 +10,9 @@ from .models import (
     Holiday,
     MembershipPlan,
     Organization,
+    OrganizationExpiryNotificationConfig,
     Plan,
+    PlanExpiryNotification,
     Person,
     RecurringEnrollment,
     StudentPlan,
@@ -43,3 +45,45 @@ class TrialFollowupConfigurationAdmin(admin.ModelAdmin):
     list_filter = ('is_active',)
     search_fields = ('organization__name',)
     readonly_fields = ('created_at', 'updated_at')
+
+
+@admin.register(OrganizationExpiryNotificationConfig)
+class OrganizationExpiryNotificationConfigAdmin(admin.ModelAdmin):
+    """Único lugar donde se encienden los avisos de vencimiento (7.4: sin API ni UI).
+
+    El `ModelForm` corre `full_clean()`, así que la validación de
+    `reminder_days_before` —enteros positivos, sin repetir, dentro del tope— aplica acá.
+    """
+
+    list_display = ('organization', 'reminder_days_before', 'send_expired_notice')
+    list_filter = ('send_expired_notice',)
+    search_fields = ('organization__name',)
+    readonly_fields = ('created_at', 'updated_at')
+
+
+@admin.register(PlanExpiryNotification)
+class PlanExpiryNotificationAdmin(admin.ModelAdmin):
+    """Bitácora de avisos enviados. Solo lectura: borrar una fila REENVÍA el correo.
+
+    Es el registro de idempotencia del job, no un log decorativo; por eso no se puede
+    crear ni editar desde acá.
+    """
+
+    list_display = ('student_plan', 'organization', 'kind', 'days_before', 'sent_at')
+    list_filter = ('kind', 'organization')
+    search_fields = ('student_plan__user__username', 'student_plan__user__email')
+    readonly_fields = (
+        'student_plan', 'organization', 'kind', 'days_before',
+        'sent_at', 'created_at', 'updated_at',
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        # Sin esto el changelist ofrece "Eliminar los objetos seleccionados", y borrar una
+        # fila de acá REENVÍA el correo que representa.
+        return False

@@ -666,6 +666,150 @@ class ConsumptionLog(TimestampedModel):
         return f'Consumo {self.user_id} - {self.class_instance_id}'
 
 
+class OrganizationExpiryNotificationConfig(TimestampedModel):
+    """Qué avisos de vencimiento manda cada organización. APAGADA por defecto (7.4).
+
+    Los defaults son deliberadamente inertes —lista vacía y flag en False— porque el job
+    corre sobre alumnos reales: al desplegar no puede salir ni un correo hasta que cada
+    gimnasio lo active a mano. La data migration que crea las filas de las organizaciones
+    existentes usa exactamente estos defaults por el mismo motivo.
+
+    Por ahora solo se edita desde el admin de Django: 7.4 no expone API ni UI.
+    """
+
+    # Tope del horizonte de aviso y de la cantidad de avisos. No son reglas de negocio
+    # finas, son cotas de cordura: evitan que un typo en el admin genere un recordatorio
+    # por cada día de un año o avise el vencimiento con una década de anticipación.
+    MAX_DAYS_BEFORE = 365
+    MAX_REMINDERS = 10
+
+    organization = models.OneToOneField(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name='expiry_notification_config',
+    )
+    # JSONField y no ArrayField de postgres: la suite corre en SQLite (`settings_test`) y
+    # ArrayField no tiene `db_type` fuera de postgres, así que la migración ni siquiera
+    # aplicaría ahí. Guarda una lista de enteros; `clean()` es quien impone esa forma.
+    reminder_days_before = models.JSONField(
+        default=list,
+        blank=True,
+        help_text=(
+            'Días de anticipación con que avisar el vencimiento, p. ej. [10, 3]. '
+            'Vacío = no se envían recordatorios.'
+        ),
+    )
+    send_expired_notice = models.BooleanField(
+        default=False,
+        help_text='¿Avisar al alumno el día en que su plan vence?',
+    )
+
+    class Meta:
+        verbose_name = 'Configuración de avisos de vencimiento'
+        verbose_name_plural = 'Configuraciones de avisos de vencimiento'
+
+    def __str__(self):
+        return f'Avisos de vencimiento - {self.organization.name}'
+
+    @property
+    def is_enabled(self):
+        """¿La organización pidió ALGO? Si no, el job la saltea entera."""
+        return bool(self.reminder_days_before) or self.send_expired_notice
+
+    def clean(self):
+        super().clean()
+        days = self.reminder_days_before
+        if days in (None, ''):
+            self.reminder_days_before = []
+            return
+        if not isinstance(days, list):
+            raise ValidationError(
+                {'reminder_days_before': 'Debe ser una lista de días, p. ej. [10, 3].'}
+            )
+        if len(days) > self.MAX_REMINDERS:
+            raise ValidationError(
+                {'reminder_days_before': f'Máximo {self.MAX_REMINDERS} recordatorios.'}
+            )
+        cleaned = []
+        for value in days:
+            # `bool` es subclase de `int` y no queremos aceptar True como "1 día".
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValidationError(
+                    {'reminder_days_before': f'"{value}" no es un número de días.'}
+                )
+            if value < 1 or value > self.MAX_DAYS_BEFORE:
+                raise ValidationError({
+                    'reminder_days_before':
+                        f'Los días deben estar entre 1 y {self.MAX_DAYS_BEFORE} ("{value}").',
+                })
+            cleaned.append(value)
+        if len(set(cleaned)) != len(cleaned):
+            raise ValidationError(
+                {'reminder_days_before': 'No repitas el mismo día de anticipación.'}
+            )
+        # Orden descendente: es el orden en que el alumno los recibe. Se normaliza en vez
+        # de rechazarse porque el orden no cambia lo que se envía y exigirlo a mano en el
+        # admin sería una molestia sin contrapartida.
+        self.reminder_days_before = sorted(cleaned, reverse=True)
+
+
+class PlanExpiryNotification(TimestampedModel):
+    """Un aviso YA ENVIADO. Es el registro de idempotencia del job (7.4).
+
+    El job corre varias veces al día, así que "¿ya avisé esto?" no puede depender de la
+    hora en que se ejecutó ni de un flag en `StudentPlan`: se responde con la existencia de
+    la fila. Cada envío entra por `get_or_create`, y el par (membresía, tipo, offset) es la
+    identidad del aviso.
+    """
+
+    class Kind(models.TextChoices):
+        REMINDER = 'reminder', 'Por vencer'
+        EXPIRED = 'expired', 'Vencido'
+
+    student_plan = models.ForeignKey(
+        StudentPlan,
+        on_delete=models.CASCADE,
+        related_name='expiry_notifications',
+    )
+    # Copia de `student_plan.organization`. Se desnormaliza para que el scope multitenant
+    # del job sea un filtro directo y no un join, igual que en `StudentPlan`. `PROTECT` por
+    # coherencia con esa FK: la organización de una membresía no desaparece de costado.
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.PROTECT,
+        related_name='plan_expiry_notifications',
+    )
+    kind = models.CharField(max_length=16, choices=Kind.choices)
+    # Solo para REMINDER: con qué anticipación se mandó. NULL en EXPIRED, que ocurre una
+    # sola vez por membresía.
+    days_before = models.PositiveIntegerField(null=True, blank=True)
+    sent_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-sent_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['student_plan', 'kind', 'days_before'],
+                condition=models.Q(days_before__isnull=False),
+                name='uniq_plan_expiry_reminder_per_offset',
+            ),
+            # La segunda constraint NO es redundante: en SQL `NULL != NULL`, así que un
+            # índice único sobre (plan, kind, days_before) deja pasar infinitas filas con
+            # `days_before` NULL —justo el caso del aviso de vencido—. Sin esto, la
+            # idempotencia del "venció" quedaría solo en el `get_or_create` de la
+            # aplicación y dos corridas simultáneas mandarían el correo dos veces.
+            models.UniqueConstraint(
+                fields=['student_plan', 'kind'],
+                condition=models.Q(days_before__isnull=True),
+                name='uniq_plan_expiry_notice_without_offset',
+            ),
+        ]
+
+    def __str__(self):
+        offset = f' ({self.days_before}d)' if self.days_before is not None else ''
+        return f'{self.get_kind_display()}{offset} - plan {self.student_plan_id}'
+
+
 class TeacherPaymentRule(TimestampedModel):
     class PaymentType(models.TextChoices):
         FIXED_PER_CLASS = 'fixed_per_class', 'Fijo por clase'

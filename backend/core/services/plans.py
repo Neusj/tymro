@@ -131,6 +131,11 @@ class StudentPlanState:
     status: str
     label: str
     reason_code: Optional[str]
+    # Fecha en que termina la ventana. La publica el estado —y no la leen los consumidores
+    # de `student_plan.end_date`— porque 7.4 la manda por correo junto con
+    # `days_to_expiry`: si el aviso sacara la fecha del modelo y los días de acá, un cambio
+    # en cómo se deriva la vigencia haría que el correo se contradijera a sí mismo.
+    expiry_date: Optional[date]
     days_to_expiry: Optional[int]
     remaining_classes: Optional[int]
     is_usable: bool
@@ -167,7 +172,7 @@ def _remaining_classes(student_plan):
     return max((student_plan.total_classes or 0) - (student_plan.classes_used or 0), 0)
 
 
-def _state(status, *, days_to_expiry=None, remaining_classes=None):
+def _state(status, *, expiry_date=None, days_to_expiry=None, remaining_classes=None):
     usable = status == PlanStatus.ACTIVE
     if usable:
         reason_code = None
@@ -180,6 +185,7 @@ def _state(status, *, days_to_expiry=None, remaining_classes=None):
         status=status,
         label=_LABELS[status],
         reason_code=reason_code,
+        expiry_date=expiry_date,
         days_to_expiry=days_to_expiry,
         remaining_classes=remaining_classes,
         is_usable=usable,
@@ -216,7 +222,12 @@ def describe_student_plan(student_plan: Optional[StudentPlan], on_date: date) ->
     remaining = _remaining_classes(student_plan)
 
     def build(status):
-        return _state(status, days_to_expiry=days_to_expiry, remaining_classes=remaining)
+        return _state(
+            status,
+            expiry_date=student_plan.end_date,
+            days_to_expiry=days_to_expiry,
+            remaining_classes=remaining,
+        )
 
     if student_plan.end_date and student_plan.end_date < on_date:
         return build(PlanStatus.EXPIRED)
