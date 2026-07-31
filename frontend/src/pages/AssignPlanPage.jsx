@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { assignPlanToUser, getPlans, usersApi } from '../api/client'
 import DashboardHeader from '../components/DashboardHeader'
+import { todayLocalISO } from '../utils/format'
 
 function firstApiError(detail, fallback) {
   if (!detail) {
@@ -45,7 +46,10 @@ export default function AssignPlanPage() {
   const [form, setForm] = useState({
     user: '',
     plan: '',
-    start_date: new Date().toISOString().slice(0, 10),
+    // Fecha LOCAL: `toISOString()` normaliza a UTC y despues de las 20:00 hora de Chile
+    // proponia el dia siguiente. El backend deriva `end_date` de este valor, asi que la
+    // ventana completa de la membresia se corria un dia.
+    start_date: todayLocalISO(),
     discount_percentage: '',
   })
 

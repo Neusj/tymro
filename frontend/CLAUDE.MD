@@ -10,9 +10,12 @@ npm install
 npm run dev                 # vite, http://localhost:5173
 npm run build               # producción
 npm run preview             # previsualizar build
+npm run test                # vitest run (suite unitaria, jsdom)
+npm run test:watch          # vitest en modo watch
 ```
 
-- No hay scripts de `test` ni `lint` configurados.
+- **Tests con vitest** (`vitest.config.js`, setup en `src/test/setup.js`); los archivos son `src/**/*.test.{js,jsx}`. No hay linter configurado.
+- `vitest.config.js` fija `TZ=America/Santiago`: la app muestra fechas del backend (`DateField`, sin hora) y el bug de interpretarlas como UTC solo se manifiesta al oeste de Greenwich. Sin la zona fijada, los tests de fecha pasarían estando rotos.
 
 ## Arquitectura
 
@@ -21,7 +24,7 @@ npm run preview             # previsualizar build
 - `api/client.js` — cliente axios centralizado y todos los endpoints.
 - `auth/AuthContext.jsx` — estado global de autenticación.
 - `routes/ProtectedRoute.jsx` — protección de rutas por rol.
-- `utils/` — `roles.js` (`defaultRouteByRole`), `planAlerts.js`.
+- `utils/` — `roles.js` (`defaultRouteByRole`), `format.js` (`clp`, `formatDate`, `todayLocalISO`, `firstApiError`), `rut.js`, `apiErrors.js`.
 - `layouts/` + `components/layout/` — `AppLayout`, `Sidebar`, etc.
 - `components/` — UI reutilizable (~20: `DataTable`, `FormModal`, `ConfirmDialog`, `BulkActionModal`, `StatCard`, etc.).
 - `pages/` — páginas por rol (~30).
@@ -50,5 +53,6 @@ npm run preview             # previsualizar build
 ## ⚠️ Advertencias (estado actual del repo)
 
 - **Inconsistencia de carpeta:** el `README.md` raíz menciona `front/` y usa comandos `cd front`, pero la carpeta real es **`frontend/`**. Los comandos del README no coinciden.
-- **Sin tests ni linter** configurados.
+- **Sin linter** configurado (sí hay tests: `npm run test`).
+- **El estado de una membresía no se deriva en el cliente.** El backend manda `validity_status` + `validity_status_label` + `expiry_alert_level` + `expiry_alert_message` (y en el roster, los mismos con prefijo `plan_`); la UI solo pinta. `PlanAlertBadge` traduce el nivel a color y nada más. Reintroducir un mapeo estado→texto en el frontend recrea la divergencia que 7.3 cerró.
 - El frontend ya tolera respuestas en lista o paginadas (el backend no tiene paginación DRF por defecto).

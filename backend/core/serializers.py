@@ -33,12 +33,7 @@ from .models import (
     TeacherPaymentRule,
     TrialFollowupConfiguration,
 )
-from .services.plans import (
-    EXPIRY_SOON_DAYS,
-    EXPIRY_WARNING_DAYS,
-    describe_student_plan,
-    wire_validity_status,
-)
+from .services.plans import describe_student_plan
 from .services.recurrence import create_enrollments_for_recurring_subscription
 
 User = get_user_model()
@@ -1422,6 +1417,7 @@ class StudentPlanSerializer(serializers.ModelSerializer):
     user_email = serializers.CharField(source='user.email', read_only=True)
     remaining_classes = serializers.SerializerMethodField()
     validity_status = serializers.SerializerMethodField()
+    validity_status_label = serializers.SerializerMethodField()
     days_to_expiry = serializers.SerializerMethodField()
     expiry_alert_level = serializers.SerializerMethodField()
     expiry_alert_message = serializers.SerializerMethodField()
@@ -1444,6 +1440,7 @@ class StudentPlanSerializer(serializers.ModelSerializer):
             'classes_used',
             'remaining_classes',
             'validity_status',
+            'validity_status_label',
             'days_to_expiry',
             'expiry_alert_level',
             'expiry_alert_message',
@@ -1503,47 +1500,27 @@ class StudentPlanSerializer(serializers.ModelSerializer):
         return self._state(obj).days_to_expiry
 
     def get_validity_status(self, obj):
-        # `wire_validity_status` proyecta al vocabulario que la API ya expone: los estados
-        # nuevos (`exhausted`, `enrollment_fee_unpaid`) colapsan a `active` porque son
-        # refinamientos de "vigente" y publicarlos rompe a los consumidores actuales, que
-        # tratan todo lo que no es `active` como vencido. Exponerlos es 7.3.
-        return wire_validity_status(self._state(obj))[0]
+        # Sin proyección: 7.3 quitó el colapso de `exhausted`/`enrollment_fee_unpaid` a
+        # `active`. Los consumidores ya no traducen el string, pintan `validity_status_label`.
+        return self._state(obj).status
+
+    def get_validity_status_label(self, obj):
+        # Paridad con `plan_status_label` del roster. Es la MISMA etiqueta de `_LABELS`, no
+        # una segunda copia: sin este campo el frontend tendría que reimplementar el mapeo
+        # estado→texto, que es justo la re-derivación que 7.3 elimina.
+        return self._state(obj).label
 
     def get_days_to_expiry(self, obj):
         return self._days_to_expiry(obj)
 
     def get_expiry_alert_level(self, obj):
-        status_value = self.get_validity_status(obj)
-        if status_value == 'upcoming':
-            return 'safe'
-        if status_value != 'active':
-            return 'expired' if status_value == 'expired' else 'neutral'
-
-        days = self._days_to_expiry(obj)
-        if days is None:
-            return 'neutral'
-        if days <= EXPIRY_SOON_DAYS:
-            return 'danger'
-        if days <= EXPIRY_WARNING_DAYS:
-            return 'warning'
-        return 'safe'
+        # El mapeo (y los umbrales) viven en `core.services.plans._plan_alert`, la misma
+        # fuente que consume el roster. Re-ramificar acá sobre el string era lo que hacía
+        # que una membresía sin saldo saliera 'neutral' con mensaje de vigente.
+        return self._state(obj).alert_level
 
     def get_expiry_alert_message(self, obj):
-        status_value = self.get_validity_status(obj)
-        if status_value == 'expired':
-            return 'Vencido'
-        if status_value == 'upcoming':
-            return 'Por iniciar'
-        if status_value == 'inactive':
-            return 'No vigente'
-        days = self._days_to_expiry(obj)
-        if days is None:
-            return 'Sin fecha de vencimiento'
-        if days == 0:
-            return 'Vence hoy'
-        if days == 1:
-            return '1 dia vigente'
-        return f'{days} dias vigentes'
+        return self._state(obj).alert_message
 
 
 class StudentPlanAssignSerializer(serializers.Serializer):

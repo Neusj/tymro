@@ -7,8 +7,8 @@ import FilterPanel from '../components/FilterPanel'
 import KpiStrip from '../components/KpiStrip'
 import FormModal from '../components/FormModal'
 import DataTable from '../components/ui/DataTable'
+import PlanAlertBadge from '../components/ui/PlanAlertBadge'
 import ValueBadge from '../components/ui/ValueBadge'
-import { getPlanAlertInfo } from '../utils/planAlerts'
 import {
   applyTeacherClassFilters,
   calculateTeacherKpis,
@@ -58,23 +58,17 @@ function BalanceBadge({ available, unlimited = false }) {
   )
 }
 
+// El roster ya manda el aviso resuelto (`plan_expiry_alert_level` + `_message`). Antes acá
+// se traducía DOS veces: se sintetizaba un `validity_status` para pedirle el color al
+// helper y después se descartaba su etiqueta, reescribiendo los textos a mano — con un
+// `else` que mostraba "Sin plan" a cualquier estado no reconocido, incluido un alumno con
+// plan vigente sin saldo.
 function PlanStatusBadge({ student }) {
-  const statusValue = student?.plan_status || 'no_plan'
-  const alert = getPlanAlertInfo({
-    validity_status:
-      statusValue === 'active'
-        ? 'active'
-        : statusValue === 'expired'
-          ? 'expired'
-          : statusValue === 'upcoming'
-            ? 'upcoming'
-            : 'inactive',
-    days_to_expiry: student?.plan_days_to_expiry,
-  })
   return (
-    <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${alert.className}`}>
-      {statusValue === 'active' ? alert.label : statusValue === 'expired' ? 'Vencido' : statusValue === 'upcoming' ? 'Por iniciar' : 'Sin plan'}
-    </span>
+    <PlanAlertBadge
+      level={student?.plan_expiry_alert_level}
+      message={student?.plan_expiry_alert_message}
+    />
   )
 }
 

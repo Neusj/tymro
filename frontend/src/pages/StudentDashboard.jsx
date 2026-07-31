@@ -5,7 +5,8 @@ import useRefetchOnForeground from '../hooks/useRefetchOnForeground'
 import DashboardHeader from '../components/DashboardHeader'
 import EmptyState from '../components/EmptyState'
 import SectionCard from '../components/SectionCard'
-import { getPlanAlertInfo } from '../utils/planAlerts'
+import PlanAlertBadge from '../components/ui/PlanAlertBadge'
+import { formatDate } from '../utils/format'
 
 function ProfileImage({ user }) {
   if (user?.profile_image) {
@@ -40,11 +41,12 @@ export default function StudentDashboard() {
   // PWA: al volver del foco (p. ej. tras pagar en Checkout Pro) re-pide el plan.
   useRefetchOnForeground(loadPlan)
 
-  const today = new Date().toISOString().slice(0, 10)
+  // La vigencia NO se recalcula acá. Antes era `is_active && end_date >= today` con un
+  // `today` sacado de `toISOString()` (UTC), así que a partir de las 20:00 de Chile el
+  // último día del plan la tarjeta decía "Vencido" mientras el backend —y la reserva— lo
+  // seguían aceptando. El estado lo resuelve `describe_student_plan` y viaja ya etiquetado.
   const remaining = Math.max((myPlan?.total_classes || 0) - (myPlan?.classes_used || 0), 0)
   const usagePercent = myPlan?.total_classes ? Math.round(((myPlan?.classes_used || 0) / myPlan.total_classes) * 100) : 0
-  const planStatus = myPlan && myPlan.is_active && myPlan.end_date >= today ? 'Activo' : 'Vencido'
-  const planAlert = getPlanAlertInfo(myPlan)
 
   const progressClass = useMemo(() => {
     if (remaining <= 0) {
@@ -92,12 +94,14 @@ export default function StudentDashboard() {
                 </div>
                 <div className="rounded-xl border border-brand-line p-3">
                   <p className="text-xs uppercase tracking-wide text-brand-muted">Estado</p>
-                  <p className="mt-1 text-sm font-semibold">{planStatus}</p>
-                  <span className={`mt-2 inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${planAlert.className}`}>{planAlert.label}</span>
+                  <p className="mt-1 text-sm font-semibold">{myPlan.validity_status_label || '-'}</p>
+                  <span className="mt-2 block">
+                    <PlanAlertBadge level={myPlan.expiry_alert_level} message={myPlan.expiry_alert_message} />
+                  </span>
                 </div>
                 <div className="rounded-xl border border-brand-line p-3">
                   <p className="text-xs uppercase tracking-wide text-brand-muted">Inicio / Fin</p>
-                  <p className="mt-1 text-sm font-semibold">{myPlan.start_date} / {myPlan.end_date}</p>
+                  <p className="mt-1 text-sm font-semibold">{formatDate(myPlan.start_date)} / {formatDate(myPlan.end_date)}</p>
                 </div>
                 <div className="rounded-xl border border-brand-line p-3">
                   <p className="text-xs uppercase tracking-wide text-brand-muted">Clases disponibles</p>

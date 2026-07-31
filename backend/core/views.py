@@ -94,13 +94,7 @@ from .services.recurrence import (
     reactivate_future_cancelled_instances_for_template,
 )
 from .services.class_dashboard import get_class_dashboard_summary
-from .services.plans import (
-    EXPIRY_SOON_DAYS,
-    EXPIRY_WARNING_DAYS,
-    PlanStatus,
-    describe_student_plan,
-    wire_validity_status,
-)
+from .services.plans import REASON_PLAN_UNAVAILABLE, describe_student_plan
 from .services.public_urls import organization_public_base_url
 from .services.reservations import (
     ReservationRuleError,
@@ -457,50 +451,49 @@ def _get_latest_student_plan_map(student_ids, organization_id):
     return plan_by_user
 
 
-def _plan_status_payload(state):
-    """Presentacion del estado de la membresia para el roster.
+def _plan_status_payload(state, *, expose_reason=True):
+    """Proyeccion del estado de la membresia al payload del roster.
 
-    El PREDICADO ya no vive aca: lo resuelve `describe_student_plan`, la misma fuente que usa
-    el serializer y el validador de reservas, y esta funcion recibe el resultado ya calculado.
-    Lo que queda es el mapeo a nivel de alerta y a texto, que sigue siendo propio de esta
-    pantalla (consolidarlo con el del serializer es 7.3). Los umbrales salen de la constante
-    compartida, no de literales.
+    Ya no queda NADA que decidir aca: el predicado lo resuelve `describe_student_plan` y la
+    presentacion —etiqueta, nivel de alerta y texto— sale de `_plan_alert`, la misma fuente
+    que consume `StudentPlanSerializer`. Esta funcion solo renombra al prefijo `plan_` que
+    usa el roster; mientras re-ramificaba sobre el string, una membresia sin saldo salia
+    'safe' con el mensaje "20 dias vigentes".
+
+    `plan_reason_code` es el motivo maquina del bloqueo, con los mismos codigos que
+    `ReservationRuleError`: sin el, la UI le dice "sin clases disponibles" a un alumno que
+    tiene 8 clases y lo unico que debe es la matricula.
+
+    `expose_reason=False` lo degrada a `plan_unavailable`. La matricula impaga es un dato
+    FINANCIERO —`FinancialResourcePermission` le niega esa superficie al monitor— y este es
+    un endpoint operativo. gym_admin, manager y el profe de la clase lo reciben entero
+    porque ya podian inferirlo: pueden POSTear la inscripcion y el 400 les devuelve
+    'Debes pagar la matricula de tu plan antes de reservar.'. El monitor no puede inscribir,
+    asi que para el seria informacion nueva. El BLOQUEO se sigue viendo igual
+    (`has_available_classes`); lo que se oculta es la causa.
     """
-    status, label = wire_validity_status(state)
-    payload = {
-        'plan_status': status,
-        'plan_status_label': label,
+    reason_code = state.reason_code
+    if not expose_reason and reason_code is not None:
+        reason_code = REASON_PLAN_UNAVAILABLE
+    return {
+        'plan_status': state.status,
+        'plan_status_label': state.label,
         'plan_days_to_expiry': state.days_to_expiry,
+        'plan_reason_code': reason_code,
+        'plan_expiry_alert_level': state.alert_level,
+        'plan_expiry_alert_message': state.alert_message,
     }
 
-    if status == PlanStatus.NO_PLAN:
-        return {**payload, 'plan_expiry_alert_level': 'neutral',
-                'plan_expiry_alert_message': 'Sin plan vigente'}
-    if status == PlanStatus.EXPIRED:
-        return {**payload, 'plan_expiry_alert_level': 'expired',
-                'plan_expiry_alert_message': 'Vencido'}
-    if status == PlanStatus.UPCOMING:
-        return {**payload, 'plan_expiry_alert_level': 'safe',
-                'plan_expiry_alert_message': 'Por iniciar'}
-    if status == PlanStatus.INACTIVE:
-        return {**payload, 'plan_expiry_alert_level': 'neutral',
-                'plan_expiry_alert_message': 'No vigente'}
 
-    days_to_expiry = state.days_to_expiry
-    if days_to_expiry is None:
-        alert_level = 'neutral'
-        message = 'Sin fecha de vencimiento'
-    elif days_to_expiry <= EXPIRY_SOON_DAYS:
-        alert_level = 'danger'
-        message = 'Vence pronto'
-    elif days_to_expiry <= EXPIRY_WARNING_DAYS:
-        alert_level = 'warning'
-        message = 'Por vencer'
-    else:
-        alert_level = 'safe'
-        message = f'{days_to_expiry} dias vigentes'
-    return {**payload, 'plan_expiry_alert_level': alert_level,
-            'plan_expiry_alert_message': message}
+def _may_see_plan_reason(user):
+    """Quien recibe el motivo REAL del bloqueo. Todos los lectores del roster menos monitor.
+
+    Se expresa como "monitor no" y no como "financiero si" a proposito: `manager` no pasa
+    `FinancialResourcePermission`, pero si puede inscribir alumnos
+    (`roles.is_org_admin`), o sea ya tiene el oraculo del 400. El corte real es "puede
+    inscribir", y el unico lector del roster que no puede es el monitor.
+    """
+    return not _is_monitor(user)
 
 
 def _resolve_roster_student_plan(student_id, active_by_student, latest_by_student):
@@ -529,13 +522,20 @@ def _roster_plan_balance(student_plan, state):
     conserva clases sin usar en la columna, pero ofrecerlas contradiria al flujo de reserva,
     que la rechaza. Es la misma incoherencia que ya se habia cerrado del lado de la
     organizacion ("9 clases disponibles" y reservar fallaba).
+
+    OFRECER se decide con `is_usable`, no con `passes_valid_on`: es exactamente la
+    propiedad que consulta `validate_student_plan_for_reservation`, asi que el roster y la
+    reserva coinciden por construccion y no por coincidencia. `passes_valid_on` dejaba
+    pasar la matricula impaga —dentro de la ventana y con saldo—, y el POST moria en 400.
+
+    El SALDO se sigue informando tal cual. Forzarlo a 0 seria cambiar una mentira por otra:
+    las 8 clases existen y el motivo del bloqueo lo dice `plan_reason_code`, no el saldo.
     """
     if student_plan is None or not state.passes_valid_on:
         return 0, False, False
     if student_plan.unlimited_classes:
-        return None, True, True
-    remaining = state.remaining_classes
-    return remaining, remaining > 0, False
+        return None, state.is_usable, True
+    return state.remaining_classes, state.is_usable, False
 
 
 def _validate_student_plan_for_reservation(student):
@@ -2227,6 +2227,7 @@ class GymClassViewSet(ModelViewSet):
         ):
             raise PermissionDenied('No tienes permisos para ver los alumnos inscritos en esta clase.')
 
+        expose_reason = _may_see_plan_reason(user)
         enrollments = gym_class.enrollments.filter(status='active').select_related('student')
         student_ids = list(enrollments.values_list('student_id', flat=True))
         active_plan_by_student = _get_active_student_plan_map(student_ids, gym_class.organization_id)
@@ -2246,7 +2247,7 @@ class GymClassViewSet(ModelViewSet):
             )
             state = describe_student_plan(student_plan, today)
             remaining_classes, has_available, unlimited = _roster_plan_balance(student_plan, state)
-            plan_status = _plan_status_payload(state)
+            plan_status = _plan_status_payload(state, expose_reason=expose_reason)
             full_name = f'{student.first_name} {student.last_name}'.strip()
             results.append(
                 {
@@ -2280,6 +2281,7 @@ class GymClassViewSet(ModelViewSet):
         ):
             raise PermissionDenied('No tienes permisos para listar alumnos inscribibles en esta clase.')
 
+        expose_reason = _may_see_plan_reason(user)
         active_enrolled_ids = set(gym_class.enrollments.filter(status='active').values_list('student_id', flat=True))
         candidates = User.objects.filter(
             role=User.Role.STUDENT,
@@ -2300,7 +2302,7 @@ class GymClassViewSet(ModelViewSet):
             )
             state = describe_student_plan(student_plan, today)
             remaining_classes, has_available, unlimited = _roster_plan_balance(student_plan, state)
-            plan_status = _plan_status_payload(state)
+            plan_status = _plan_status_payload(state, expose_reason=expose_reason)
             full_name = f'{student.first_name} {student.last_name}'.strip()
             results.append(
                 {

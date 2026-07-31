@@ -3,9 +3,8 @@ import { getMyMemberships, paymentsApi } from '../api/client'
 import useRefetchOnForeground from '../hooks/useRefetchOnForeground'
 import DashboardHeader from '../components/DashboardHeader'
 import DataTable from '../components/ui/DataTable'
-import ValueBadge from '../components/ui/ValueBadge'
-import { getPlanAlertInfo } from '../utils/planAlerts'
-import { clp } from '../utils/format'
+import PlanAlertBadge from '../components/ui/PlanAlertBadge'
+import { clp, formatDate } from '../utils/format'
 
 function firstApiError(detail, fallback) {
   if (!detail) {
@@ -22,17 +21,6 @@ function firstApiError(detail, fallback) {
     return firstValue[0]
   }
   return fallback
-}
-
-function formatDate(value) {
-  if (!value) {
-    return '-'
-  }
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) {
-    return value
-  }
-  return date.toLocaleDateString()
 }
 
 export default function StudentPlansPage() {
@@ -98,16 +86,20 @@ export default function StudentPlansPage() {
       {
         key: 'validity_status',
         label: 'Estado',
-        render: (row) => <ValueBadge kind="user_status" value={row.validity_status === 'active' ? 'active' : 'expired'} />,
+        // La etiqueta la manda el backend (`_LABELS`). El ternario que había acá colapsaba
+        // los siete estados a "Activa"/"Vencido", así que un plan sin saldo —vigente por
+        // fecha— se mostraba como vencido justo al lado del botón de pago.
+        //
+        // Sigue siendo un chip y no texto pelado: en móvil DataTable manda esta celda a la
+        // zona `meta`, que NO aporta estilo propio, así que el color tiene que venir del
+        // contenido. La severidad la decide el backend; acá no se deriva nada.
+        render: (row) => <PlanAlertBadge level={row.expiry_alert_level} message={row.validity_status_label} />,
       },
       {
         key: 'alert',
         label: 'Alerta',
         sortable: false,
-        render: (row) => {
-          const alert = getPlanAlertInfo(row)
-          return <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${alert.className}`}>{alert.label}</span>
-        },
+        render: (row) => <PlanAlertBadge level={row.expiry_alert_level} message={row.expiry_alert_message} />,
       },
       {
         key: 'matricula',

@@ -29,8 +29,9 @@ from core.models import StudentPlan
 # detectara. Mismo criterio que `Plan.NOT_PURCHASABLE_ONLINE`: si el número vive en un solo
 # lugar, no hay nada que sincronizar.
 #
-# El MAPEO de estos umbrales a nivel de alerta y a texto sigue en cada presentador, no acá:
-# consolidar la presentación es 7.3.
+# El MAPEO de estos umbrales a nivel de alerta y a texto también vive acá desde 7.3
+# (`_plan_alert`): tenerlo en cada presentador era lo que hacía que el mismo plan dijera
+# "Vence pronto" en el roster y "5 dias vigentes" en el serializer.
 EXPIRY_SOON_DAYS = 5
 EXPIRY_WARNING_DAYS = 12
 
@@ -71,6 +72,58 @@ _LABELS = {
 }
 
 
+class AlertLevel:
+    """Severidad del aviso. Es lo ÚNICO que la UI traduce a color; el texto ya viene hecho.
+
+    No es un segundo vocabulario de estado: `EXPIRED` acá es una severidad heredada del
+    payload que la API ya publicaba, no el `PlanStatus.EXPIRED`. Los dos estados que 7.3
+    destapa son `DANGER` —bloquean, pero la membresía sigue dentro de su ventana—.
+    """
+
+    NEUTRAL = 'neutral'
+    SAFE = 'safe'
+    WARNING = 'warning'
+    DANGER = 'danger'
+    EXPIRED = 'expired'
+
+
+# Aviso de los estados que no dependen de la fecha. `EXHAUSTED` y `ENROLLMENT_FEE_UNPAID`
+# reusan su etiqueta: el motivo del bloqueo ES el mensaje. Antes caían en el `else` de cada
+# presentador y salían como "12 dias vigentes", que es lo contrario de lo que pasa.
+_STATIC_ALERTS = {
+    PlanStatus.NO_PLAN: (AlertLevel.NEUTRAL, 'Sin plan vigente'),
+    PlanStatus.EXPIRED: (AlertLevel.EXPIRED, _LABELS[PlanStatus.EXPIRED]),
+    PlanStatus.UPCOMING: (AlertLevel.SAFE, _LABELS[PlanStatus.UPCOMING]),
+    PlanStatus.INACTIVE: (AlertLevel.NEUTRAL, 'No vigente'),
+    PlanStatus.EXHAUSTED: (AlertLevel.DANGER, _LABELS[PlanStatus.EXHAUSTED]),
+    PlanStatus.ENROLLMENT_FEE_UNPAID: (
+        AlertLevel.DANGER, _LABELS[PlanStatus.ENROLLMENT_FEE_UNPAID],
+    ),
+}
+
+
+def _plan_alert(status, days_to_expiry):
+    """`(nivel, mensaje)` del aviso. FUENTE ÚNICA de la presentación (7.3).
+
+    Reemplaza a las dos copias que re-ramificaban sobre el string del estado
+    —`StudentPlanSerializer` y `_plan_status_payload` del roster—. Se conserva el texto del
+    serializer, que es el que el alumno ya ve hoy en pantalla; el del roster ("Vence
+    pronto" / "Por vencer") no lo leía ningún consumidor.
+    """
+    if status != PlanStatus.ACTIVE:
+        return _STATIC_ALERTS[status]
+    if days_to_expiry is None:
+        return AlertLevel.NEUTRAL, 'Sin fecha de vencimiento'
+    if days_to_expiry <= 0:
+        return AlertLevel.DANGER, 'Vence hoy'
+    message = '1 dia vigente' if days_to_expiry == 1 else f'{days_to_expiry} dias vigentes'
+    if days_to_expiry <= EXPIRY_SOON_DAYS:
+        return AlertLevel.DANGER, message
+    if days_to_expiry <= EXPIRY_WARNING_DAYS:
+        return AlertLevel.WARNING, message
+    return AlertLevel.SAFE, message
+
+
 @dataclass(frozen=True)
 class StudentPlanState:
     """Estado derivado de UNA membresía en UNA fecha. Inmutable: es una lectura."""
@@ -81,6 +134,8 @@ class StudentPlanState:
     days_to_expiry: Optional[int]
     remaining_classes: Optional[int]
     is_usable: bool
+    alert_level: str
+    alert_message: str
 
     @property
     def passes_valid_on(self):
@@ -100,20 +155,10 @@ _PASSES_VALID_ON_STATUSES = frozenset({
     PlanStatus.ENROLLMENT_FEE_UNPAID,
 })
 
-# Proyección al vocabulario que la API YA expone (`validity_status` del serializer y
-# `plan_status` del roster). Los dos estados nuevos colapsan a `active` a propósito: son
-# refinamientos de "vigente" y publicarlos rompería a los consumidores actuales, que tratan
-# todo lo que no es `active` como vencido. Exponerlos —y con qué nombre— es 7.3.
-_WIRE_STATUS = {
-    PlanStatus.EXHAUSTED: PlanStatus.ACTIVE,
-    PlanStatus.ENROLLMENT_FEE_UNPAID: PlanStatus.ACTIVE,
-}
-
-
-def wire_validity_status(state: 'StudentPlanState'):
-    """`(status, label)` del estado en el vocabulario público actual."""
-    status = _WIRE_STATUS.get(state.status, state.status)
-    return status, _LABELS[status]
+# 7.3 quitó `_WIRE_STATUS`, que proyectaba `EXHAUSTED` y `ENROLLMENT_FEE_UNPAID` a `active`
+# antes de publicarlos. El colapso existía para no romper a los consumidores, que trataban
+# todo lo que no era `active` como vencido; ahora los cuatro leen la etiqueta y el aviso que
+# vienen de acá, así que el wire publica los siete estados tal cual.
 
 
 def _remaining_classes(student_plan):
@@ -130,6 +175,7 @@ def _state(status, *, days_to_expiry=None, remaining_classes=None):
         reason_code = REASON_ENROLLMENT_FEE_UNPAID
     else:
         reason_code = REASON_PLAN_UNAVAILABLE
+    alert_level, alert_message = _plan_alert(status, days_to_expiry)
     return StudentPlanState(
         status=status,
         label=_LABELS[status],
@@ -137,6 +183,8 @@ def _state(status, *, days_to_expiry=None, remaining_classes=None):
         days_to_expiry=days_to_expiry,
         remaining_classes=remaining_classes,
         is_usable=usable,
+        alert_level=alert_level,
+        alert_message=alert_message,
     )
 
 

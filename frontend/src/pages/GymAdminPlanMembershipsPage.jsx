@@ -4,8 +4,8 @@ import { getPlanById, getPlanMemberships, removePlanMembership } from '../api/cl
 import ConfirmDialog from '../components/ConfirmDialog'
 import DashboardHeader from '../components/DashboardHeader'
 import DataTable from '../components/ui/DataTable'
-import ValueBadge from '../components/ui/ValueBadge'
-import { getPlanAlertInfo } from '../utils/planAlerts'
+import PlanAlertBadge from '../components/ui/PlanAlertBadge'
+import { formatDate } from '../utils/format'
 
 function firstApiError(detail, fallback) {
   if (!detail) {
@@ -22,17 +22,6 @@ function firstApiError(detail, fallback) {
     return firstValue[0]
   }
   return fallback
-}
-
-function formatDate(value) {
-  if (!value) {
-    return '-'
-  }
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) {
-    return value
-  }
-  return date.toLocaleDateString()
 }
 
 export default function GymAdminPlanMembershipsPage() {
@@ -64,7 +53,14 @@ export default function GymAdminPlanMembershipsPage() {
     loadData()
   }, [id])
 
-  const activeCount = useMemo(() => memberships.filter((item) => item.is_active).length, [memberships])
+  // Se cuenta el MISMO estado que pinta la columna, no `is_active`. El flag significa "no
+  // fue reemplazada" y `activate_student_plan` lo deja en true para siempre, así que el
+  // KPI decía "12 activas" sobre una tabla de 12 filas que decían "Vencido". El endpoint
+  // sigue devolviendo el histórico completo: lo que cambia es qué se cuenta de él.
+  const activeCount = useMemo(
+    () => memberships.filter((item) => item.validity_status === 'active').length,
+    [memberships],
+  )
 
   const removeMembership = async () => {
     if (!deleting) {
@@ -97,29 +93,19 @@ export default function GymAdminPlanMembershipsPage() {
       {
         key: 'validity_status',
         label: 'Estado',
-        render: (row) => (
-          <ValueBadge
-            kind="user_status"
-            value={
-              row.validity_status === 'active'
-                ? 'active'
-                : row.validity_status === 'expired'
-                  ? 'expired'
-                  : row.validity_status === 'upcoming'
-                    ? 'upcoming'
-                    : 'inactive'
-            }
-          />
-        ),
+        // La escalera de cuatro ramas mandaba al `else` ("Inactiva") todo lo que no
+        // conocía, o sea exactamente los dos estados que 7.3 destapa.
+        //
+        // Sigue siendo un chip y no texto pelado: en móvil DataTable manda esta celda a la
+        // zona `meta`, que NO aporta estilo propio, así que el color tiene que venir del
+        // contenido. La severidad la decide el backend; acá no se deriva nada.
+        render: (row) => <PlanAlertBadge level={row.expiry_alert_level} message={row.validity_status_label} />,
       },
       {
         key: 'alert',
         label: 'Alerta',
         sortable: false,
-        render: (row) => {
-          const alert = getPlanAlertInfo(row)
-          return <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${alert.className}`}>{alert.label}</span>
-        },
+        render: (row) => <PlanAlertBadge level={row.expiry_alert_level} message={row.expiry_alert_message} />,
       },
       {
         key: 'actions',

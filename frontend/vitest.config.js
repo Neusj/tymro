@@ -12,5 +12,10 @@ export default defineConfig({
     setupFiles: ['./src/test/setup.js'],
     css: false,
     include: ['src/**/*.{test,spec}.{js,jsx}'],
+    // La app es de un gimnasio chileno y el backend responde fechas en America/Santiago.
+    // Fijar la zona hace que los tests de fecha valgan en cualquier máquina: el bug de
+    // interpretar 'YYYY-MM-DD' como UTC solo se manifiesta al oeste de Greenwich, así que
+    // en un CI en UTC pasarían igual estando rotos.
+    env: { TZ: 'America/Santiago' },
   },
 })
