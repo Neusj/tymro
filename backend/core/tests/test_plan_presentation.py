@@ -328,31 +328,82 @@ def test_roster_reason_code_distinguishes_why_the_plan_blocks(api_client, roster
 # --------------------------------------------------------------------------------------
 
 @pytest.mark.parametrize('actor', ['admin', 'manager', 'teacher'])
-def test_financial_readers_get_the_real_reason_code(api_client, roster, actor):
+def test_financial_readers_get_the_whole_payload(api_client, roster, actor):
     """gym_admin, manager y el profe de la clase ya podian inferirlo intentando inscribir:
-    el POST devuelve 'Debes pagar la matricula...'. Para ellos el codigo real no agrega
-    capacidad, solo les evita el intento fallido."""
+    el POST devuelve 'Debes pagar la matricula...'. Para ellos el dato no agrega capacidad,
+    solo les evita el intento fallido, asi que reciben el payload entero."""
     plan = _plan(roster['org'], name='Pack 10', total_classes=10)
     _membership(roster['student'], plan, classes_used=2, enrollment_fee=15000)
 
     row = _roster_row(api_client, roster, actor=actor)
 
+    assert row['plan_status'] == 'enrollment_fee_unpaid'
+    assert row['plan_status_label'] == 'Matrícula impaga'
+    assert row['plan_expiry_alert_message'] == 'Matrícula impaga'
     assert row['plan_reason_code'] == 'enrollment_fee_unpaid'
 
 
-def test_monitor_gets_the_reason_code_degraded(api_client, roster):
+def test_monitor_never_receives_the_financial_fact(api_client, roster):
     """El monitor lee el roster pero NO puede inscribir, asi que no tenia el oraculo del 400.
 
     `FinancialResourcePermission` le niega la superficie financiera; publicarle la deuda del
     alumno en una superficie operativa seria darle un dato que la politica del proyecto
-    trata como financiero. Recibe el motivo generico: el bloqueo se ve, la causa no.
+    trata como financiero. Se redactan los CUATRO campos: degradar solo `plan_reason_code`
+    dejaba el hecho en `plan_status_label` y en el mensaje, que es justo lo que la UI pinta.
     """
     plan = _plan(roster['org'], name='Pack 10', total_classes=10)
     _membership(roster['student'], plan, classes_used=2, enrollment_fee=15000)
 
     row = _roster_row(api_client, roster, actor='monitor')
 
+    assert row['plan_status'] == 'unavailable'
+    assert row['plan_status_label'] == 'No disponible'
+    assert row['plan_expiry_alert_message'] == 'No disponible'
+    assert row['plan_expiry_alert_level'] == 'danger'
     assert row['plan_reason_code'] == 'plan_unavailable'
+    # Y en ningun campo del row sobrevive el rastro del dato financiero.
+    assert 'matr' not in str(row).lower()
+    assert 'enrollment_fee' not in str(row)
+
+
+def test_monitor_cannot_tell_unpaid_fee_from_exhausted(api_client, roster):
+    """Sin esto la redaccion no redacta: si solo se ocultara la matricula, "No disponible"
+    seria sinonimo de deuda y el monitor lo inferiria por eliminacion. Los dos estados que
+    7.3 destapo —y que el monitor antes veia como `active`— caen al MISMO balde."""
+    plan = _plan(roster['org'], name='Pack 4', total_classes=4)
+    _membership(roster['student'], plan, classes_used=4)
+
+    exhausted_row = _roster_row(api_client, roster, actor='monitor')
+
+    StudentPlan.objects.all().delete()
+    _membership(roster['student'], plan, classes_used=1, enrollment_fee=15000)
+
+    unpaid_row = _roster_row(api_client, roster, actor='monitor')
+
+    for key in ('plan_status', 'plan_status_label', 'plan_expiry_alert_level',
+                'plan_expiry_alert_message', 'plan_reason_code'):
+        assert exhausted_row[key] == unpaid_row[key], key
+
+
+@pytest.mark.parametrize(
+    'kwargs,expected_status,expected_label',
+    [
+        ({'start_offset': -40, 'end_offset': -10}, 'expired', 'Vencido'),
+        ({'start_offset': 3, 'end_offset': 30}, 'upcoming', 'Por iniciar'),
+        ({'is_active': False}, 'inactive', 'Inactivo'),
+    ],
+)
+def test_monitor_keeps_seeing_the_non_financial_states(api_client, roster, kwargs,
+                                                      expected_status, expected_label):
+    """La redaccion no le quita al monitor lo que siempre vio: vencido, por iniciar,
+    inactivo y sin plan no son datos financieros y se siguen mostrando tal cual."""
+    plan = _plan(roster['org'], name='Pack 10', total_classes=10)
+    _membership(roster['student'], plan, **kwargs)
+
+    row = _roster_row(api_client, roster, actor='monitor')
+
+    assert row['plan_status'] == expected_status
+    assert row['plan_status_label'] == expected_label
 
 
 def test_monitor_still_sees_that_the_plan_blocks(api_client, roster):

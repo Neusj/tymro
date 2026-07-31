@@ -94,7 +94,7 @@ from .services.recurrence import (
     reactivate_future_cancelled_instances_for_template,
 )
 from .services.class_dashboard import get_class_dashboard_summary
-from .services.plans import REASON_PLAN_UNAVAILABLE, describe_student_plan
+from .services.plans import REASON_PLAN_UNAVAILABLE, AlertLevel, describe_student_plan
 from .services.public_urls import organization_public_base_url
 from .services.reservations import (
     ReservationRuleError,
@@ -464,25 +464,59 @@ def _plan_status_payload(state, *, expose_reason=True):
     `ReservationRuleError`: sin el, la UI le dice "sin clases disponibles" a un alumno que
     tiene 8 clases y lo unico que debe es la matricula.
 
-    `expose_reason=False` lo degrada a `plan_unavailable`. La matricula impaga es un dato
-    FINANCIERO —`FinancialResourcePermission` le niega esa superficie al monitor— y este es
-    un endpoint operativo. gym_admin, manager y el profe de la clase lo reciben entero
-    porque ya podian inferirlo: pueden POSTear la inscripcion y el 400 les devuelve
-    'Debes pagar la matricula de tu plan antes de reservar.'. El monitor no puede inscribir,
-    asi que para el seria informacion nueva. El BLOQUEO se sigue viendo igual
-    (`has_available_classes`); lo que se oculta es la causa.
+    `expose_reason=False` REDACTA la membresia vigente-pero-inutilizable. La matricula
+    impaga es un dato FINANCIERO —`FinancialResourcePermission` le niega esa superficie al
+    monitor— y este es un endpoint operativo. gym_admin, manager y el profe de la clase la
+    reciben entera porque ya podian inferirla: pueden POSTear la inscripcion y el 400 les
+    devuelve 'Debes pagar la matricula de tu plan antes de reservar.'. El monitor no puede
+    inscribir, asi que para el seria informacion nueva.
+
+    Se redactan los CUATRO campos juntos. Degradar solo `plan_reason_code` no alcanzaba: el
+    hecho seguia viajando en `plan_status`, en `plan_status_label` y en el mensaje de alerta
+    —que es justo el que la UI pinta—, o sea la redaccion no redactaba nada.
+
+    El BLOQUEO se sigue viendo (`has_available_classes` sale de `is_usable`, que no depende
+    de esto); lo que se oculta es la CAUSA.
     """
-    reason_code = state.reason_code
-    if not expose_reason and reason_code is not None:
-        reason_code = REASON_PLAN_UNAVAILABLE
+    if not expose_reason and _is_redacted_for_non_financial(state):
+        return {
+            'plan_status': _REDACTED_PLAN_STATUS,
+            'plan_status_label': _REDACTED_PLAN_LABEL,
+            'plan_days_to_expiry': state.days_to_expiry,
+            'plan_reason_code': REASON_PLAN_UNAVAILABLE,
+            'plan_expiry_alert_level': AlertLevel.DANGER,
+            'plan_expiry_alert_message': _REDACTED_PLAN_LABEL,
+        }
     return {
         'plan_status': state.status,
         'plan_status_label': state.label,
         'plan_days_to_expiry': state.days_to_expiry,
-        'plan_reason_code': reason_code,
+        'plan_reason_code': state.reason_code,
         'plan_expiry_alert_level': state.alert_level,
         'plan_expiry_alert_message': state.alert_message,
     }
+
+
+# Balde opaco de la redaccion. NO es un `PlanStatus`: no pertenece al vocabulario del
+# dominio, existe solo en el wire del roster y para un lector concreto.
+_REDACTED_PLAN_STATUS = 'unavailable'
+_REDACTED_PLAN_LABEL = 'No disponible'
+
+
+def _is_redacted_for_non_financial(state):
+    """Membresia DENTRO de su ventana pero inutilizable: saldo agotado o matricula impaga.
+
+    Se deriva de las dos propiedades del estado en vez de enumerar estados, asi que un
+    estado futuro con la misma forma queda redactado sin tocar esto.
+
+    Los DOS caen al mismo balde a proposito. Si solo se ocultara la matricula, "No
+    disponible" seria sinonimo de deuda y el monitor la inferiria por eliminacion; con los
+    dos juntos, "sin saldo" —que no es dato financiero— le da cobertura. Ademas es lo que el
+    monitor ya veia antes de 7.3, cuando el wire colapsaba los dos a `active`: no pierde
+    nada que tuviera. Los estados no financieros (vencido, por iniciar, inactivo, sin plan)
+    no entran, y se le siguen mostrando tal cual.
+    """
+    return state.passes_valid_on and not state.is_usable
 
 
 def _may_see_plan_reason(user):
