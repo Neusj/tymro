@@ -20,7 +20,7 @@ from typing import Optional
 
 from django.db import transaction
 
-from core.models import StudentPlan
+from core.models import PaymentTransaction, StudentPlan
 
 
 # Umbrales de aviso de vencimiento, en días. FUENTE ÚNICA: estaban duplicados como
@@ -70,6 +70,25 @@ _LABELS = {
     PlanStatus.ENROLLMENT_FEE_UNPAID: 'Matrícula impaga',
     PlanStatus.ACTIVE: 'Vigente',
 }
+
+
+class PlanPaymentStatus:
+    """EJE DE PAGO. Vocabulario SEPARADO del de vigencia (`PlanStatus`), no una extensión.
+
+    Una membresía tiene dos preguntas independientes encima: si sirve hoy (`PlanStatus`) y
+    si está pagada (esto). Las combinaciones son libres —`active` + `unpaid` es el plan que
+    el admin asignó a mano y nadie cobró, y es perfectamente usable—, así que meter el pago
+    dentro de `PlanStatus` obligaría a elegir cuál de los dos hechos publicar y perdería el
+    otro. Por eso son dos campos y no uno.
+
+    `FREE` no es "gratis" en el sentido de sin valor: es "el gimnasio decidió no cobrar
+    esto" (beca, giftcard, cortesía). Se distingue de `PAID` a propósito, porque una beca no
+    es un cobro conseguido y confundirlas ensucia cualquier lectura de ingresos.
+    """
+
+    PAID = 'paid'
+    UNPAID = 'unpaid'
+    FREE = 'free'
 
 
 class AlertLevel:
@@ -141,6 +160,7 @@ class StudentPlanState:
     is_usable: bool
     alert_level: str
     alert_message: str
+    payment_status: Optional[str] = None
 
     @property
     def passes_valid_on(self):
@@ -172,7 +192,54 @@ def _remaining_classes(student_plan):
     return max((student_plan.total_classes or 0) - (student_plan.classes_used or 0), 0)
 
 
-def _state(status, *, expiry_date=None, days_to_expiry=None, remaining_classes=None):
+def _payment_status(student_plan):
+    """Eje de pago de UNA membresía. DERIVACIÓN PROVISIONAL: 8.2 la reemplaza.
+
+    Hoy no existe un registro de pago manual —el gimnasio que cobra en efectivo no tiene
+    dónde anotarlo—, así que esto se deriva de lo único que hay: el precio de venta que la
+    membresía guardó (`final_price`) y las `PaymentTransaction` de MercadoPago que quedaron
+    colgadas de ella. Cuando 8.2 traiga el modelo de pago manual, la fuente de `PAID` pasa a
+    ser ese registro y esta función se reescribe; el vocabulario y los consumidores no.
+
+    Tres reglas, en este orden:
+
+    * `FREE` gana sobre todo: si el precio de venta es 0, no había nada que cobrar y no hay
+      cobro que reconocer. Se exige un 0 EXPLÍCITO —`final_price` es NULLABLE— porque "no se
+      registró el precio" no es lo mismo que "se decidió no cobrar", y colapsarlos declararía
+      becada cualquier fila vieja o creada desde el admin de Django.
+    * `PAID` si hay una transacción APROBADA de la MISMA organización colgada de la
+      membresía. El filtro por `organization_id` NO es redundante: `student_plan` es una FK
+      propia y ninguna constraint obliga a que la transacción sea del tenant que vendió la
+      membresía, así que seguirla sin intersectar la organización dejaría que un cobro de la
+      org B le declare pagada una deuda a la org A (el agujero multitenant recurrente del
+      proyecto).
+    * `UNPAID` el resto: hay (o puede haber) algo que cobrar y no consta cobrado.
+
+    Se recorre `origin_transactions.all()` en Python en vez de filtrar en la DB para que un
+    `prefetch_related('origin_transactions')` del llamador lo resuelva sin consultas extra:
+    los dos lectores de lista (roster y membresías del plan) lo prefetchean, y así el eje no
+    introduce un N+1 por alumno. Sin prefetch cuesta una consulta por membresía.
+
+    AMBIGÜEDAD CONOCIDA (para 8.2): `apply_provider_payment` setea `tx.student_plan` también
+    cuando el cobro pagó solo la MATRÍCULA de una membresía preexistente (`plan_amount == 0`).
+    Esa transacción no pagó el plan, pero acá cuenta como `PAID`. Está fijado en
+    `test_a_matricula_only_transaction_counts_as_paid_PROVISIONAL` para que la decisión se
+    tome a propósito y no se descubra en producción.
+    """
+    price = student_plan.final_price
+    if price is not None and price <= 0:
+        return PlanPaymentStatus.FREE
+    for transaction in student_plan.origin_transactions.all():
+        if (
+            transaction.status == PaymentTransaction.STATUS_APPROVED
+            and transaction.organization_id == student_plan.organization_id
+        ):
+            return PlanPaymentStatus.PAID
+    return PlanPaymentStatus.UNPAID
+
+
+def _state(status, *, expiry_date=None, days_to_expiry=None, remaining_classes=None,
+           payment_status=None):
     usable = status == PlanStatus.ACTIVE
     if usable:
         reason_code = None
@@ -191,6 +258,10 @@ def _state(status, *, expiry_date=None, days_to_expiry=None, remaining_classes=N
         is_usable=usable,
         alert_level=alert_level,
         alert_message=alert_message,
+        # ORTOGONAL: no entra en `usable` ni en `reason_code`. Deber plata no bloquea —si
+        # alguna vez tiene que bloquear, es una decisión de producto que se toma aparte y se
+        # escribe acá arriba, no un efecto colateral de publicar el campo.
+        payment_status=payment_status,
     )
 
 
@@ -209,6 +280,10 @@ def describe_student_plan(student_plan: Optional[StudentPlan], on_date: date) ->
     membresía vencida es `EXPIRED` sin importar cómo quedó el flag; dentro de la ventana, el
     flag conserva su único sentido defendible: "dada de baja".
 
+    El estado de PAGO (`payment_status`) viaja en el mismo objeto pero es un EJE APARTE: no
+    participa de esta cadena de precedencia ni la altera. `active` + `unpaid` es una
+    combinación válida y usable.
+
     `on_date` es OBLIGATORIO: ver `StudentPlanQuerySet.valid_on`.
 
     NO decide CUÁL membresía mirar cuando el alumno tiene varias vigentes; eso es #9.
@@ -220,6 +295,10 @@ def describe_student_plan(student_plan: Optional[StudentPlan], on_date: date) ->
     if student_plan.end_date:
         days_to_expiry = (student_plan.end_date - on_date).days
     remaining = _remaining_classes(student_plan)
+    # Se resuelve UNA vez y fuera de las ramas: el eje de pago no depende de la vigencia, así
+    # que calcularlo dentro de cada `return` invitaría a que alguna rama lo omitiera y el
+    # campo apareciera y desapareciera según el estado.
+    payment_status = _payment_status(student_plan)
 
     def build(status):
         return _state(
@@ -227,6 +306,7 @@ def describe_student_plan(student_plan: Optional[StudentPlan], on_date: date) ->
             expiry_date=student_plan.end_date,
             days_to_expiry=days_to_expiry,
             remaining_classes=remaining,
+            payment_status=payment_status,
         )
 
     if student_plan.end_date and student_plan.end_date < on_date:

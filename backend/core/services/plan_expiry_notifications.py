@@ -201,6 +201,9 @@ def _send_reminders(config, today, dry_run, summary):
         .filter(organization_id=organization.id, end_date__in=target_dates)
         .valid_on(today)
         .select_related('user', 'plan')
+        # El estado incluye el eje de pago, que sale de esta FK inversa. El job no lo usa,
+        # pero lo paga igual al leer el estado: sin prefetch es una consulta por membresía.
+        .prefetch_related('origin_transactions')
     )
 
     for membership in memberships:
@@ -262,6 +265,7 @@ def _expire(config, today, dry_run, summary):
         StudentPlan.objects
         .filter(organization_id=organization.id, is_active=True, end_date__lt=today)
         .select_related('user', 'plan')
+        .prefetch_related('origin_transactions')   # mismo N+1 que en los recordatorios
     )
 
     for membership in memberships:

@@ -1422,6 +1422,7 @@ class StudentPlanSerializer(serializers.ModelSerializer):
     expiry_alert_level = serializers.SerializerMethodField()
     expiry_alert_message = serializers.SerializerMethodField()
     enrollment_fee_status = serializers.SerializerMethodField()
+    payment_status = serializers.SerializerMethodField()
 
     class Meta:
         model = StudentPlan
@@ -1450,6 +1451,7 @@ class StudentPlanSerializer(serializers.ModelSerializer):
             'enrollment_fee_paid_at',
             'enrollment_fee_due_at',
             'enrollment_fee_status',
+            'payment_status',
             'is_active',
         ]
         read_only_fields = [
@@ -1491,8 +1493,23 @@ class StudentPlanSerializer(serializers.ModelSerializer):
         `get_validity_status` y de ahi derivaban los otros tres campos. Ahora lo resuelve
         `describe_student_plan`, la misma funcion que usan el roster y el validador de
         reservas, asi que las tres vistas no pueden volver a divergir.
+
+        MEMOIZADO POR MEMBRESIA: siete campos derivados llaman aca, y desde que el estado
+        incluye el eje de pago cada llamada recorre una FK inversa. Sin la cache, serializar
+        una sola membresia sin prefetch —`my-plan`, la respuesta de `assign`— costaba siete
+        consultas para responder exactamente lo mismo. Se cachea por `pk` y no por instancia
+        porque con `many=True` DRF reusa UN serializer hijo para todas las filas; una fila sin
+        `pk` (no guardada) no se cachea, para no colisionar todas bajo la misma clave `None`.
         """
-        return describe_student_plan(obj, timezone.localdate())
+        if obj.pk is None:
+            return describe_student_plan(obj, timezone.localdate())
+        if not hasattr(self, '_state_by_membership'):
+            self._state_by_membership = {}
+        if obj.pk not in self._state_by_membership:
+            self._state_by_membership[obj.pk] = describe_student_plan(
+                obj, timezone.localdate()
+            )
+        return self._state_by_membership[obj.pk]
 
     def _days_to_expiry(self, obj):
         # Lo calcula el estado, no este serializer: era el mismo `end_date - hoy` escrito dos
@@ -1521,6 +1538,26 @@ class StudentPlanSerializer(serializers.ModelSerializer):
 
     def get_expiry_alert_message(self, obj):
         return self._state(obj).alert_message
+
+    def get_payment_status(self, obj):
+        """Eje de pago (`paid`/`unpaid`/`free`), SEPARADO de `validity_status`.
+
+        Sale de la misma fuente única que la vigencia, así que no hay una segunda regla que
+        mantener sincronizada. Es de solo lectura por construcción —`SerializerMethodField`
+        no acepta escritura—: el estado de pago se DERIVA de la contraparte financiera, y un
+        campo escribible acá sería la forma de declararse pagado desde el front sin que nada
+        lo respalde.
+
+        Los lectores de este serializer son el propio alumno (`my-plan`, `my-memberships`) y
+        gym_admin/superadmin (`assign`, `memberships`): `manager` no llega porque
+        `FinancialResourcePermission` le niega el ViewSet entero, y `monitor` tampoco porque
+        la acción `memberships` lo manda al 403 con un check INLINE. Ese check inline es la
+        única barrera del monitor —la clase de permiso lo deja leer—, así que una acción GET
+        nueva en este ViewSet que devuelva este serializer tiene que repetirlo: no alcanza
+        con confiar en `permission_classes`. La redacción del monitor vive donde el monitor SÍ
+        lee membresías: el roster de la clase (`_plan_status_payload` en views.py).
+        """
+        return self._state(obj).payment_status
 
 
 class StudentPlanAssignSerializer(serializers.Serializer):

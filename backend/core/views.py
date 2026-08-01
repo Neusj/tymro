@@ -415,6 +415,9 @@ def _get_active_student_plan_map(student_ids, organization_id, on_date=None):
         )
         .valid_on(target_date)
         .select_related('plan')
+        # El eje de pago del estado sale de esta FK inversa. Sin prefetch, `_plan_status_payload`
+        # dispara una consulta por alumno del roster.
+        .prefetch_related('origin_transactions')
         .order_by('user_id', '-start_date', '-id')
     )
 
@@ -441,6 +444,7 @@ def _get_latest_student_plan_map(student_ids, organization_id):
             organization_id=organization_id,
         )
         .select_related('plan')
+        .prefetch_related('origin_transactions')   # mismo N+1 que en el mapa de vigentes
         .order_by('user_id', '-end_date', '-start_date', '-id')
     )
 
@@ -465,11 +469,10 @@ def _plan_status_payload(state, *, expose_reason=True):
     tiene 8 clases y lo unico que debe es la matricula.
 
     `expose_reason=False` REDACTA la membresia vigente-pero-inutilizable. La matricula
-    impaga es un dato FINANCIERO —`FinancialResourcePermission` le niega esa superficie al
-    monitor— y este es un endpoint operativo. gym_admin, manager y el profe de la clase la
-    reciben entera porque ya podian inferirla: pueden POSTear la inscripcion y el 400 les
-    devuelve 'Debes pagar la matricula de tu plan antes de reservar.'. El monitor no puede
-    inscribir, asi que para el seria informacion nueva.
+    impaga es un dato FINANCIERO y este es un endpoint operativo. gym_admin, manager y el
+    profe de la clase la reciben entera porque ya podian inferirla: pueden POSTear la
+    inscripcion y el 400 les devuelve 'Debes pagar la matricula de tu plan antes de
+    reservar.'. El monitor no puede inscribir, asi que para el seria informacion nueva.
 
     Se redactan los CUATRO campos juntos. Degradar solo `plan_reason_code` no alcanzaba: el
     hecho seguia viajando en `plan_status`, en `plan_status_label` y en el mensaje de alerta
@@ -477,9 +480,22 @@ def _plan_status_payload(state, *, expose_reason=True):
 
     El BLOQUEO se sigue viendo (`has_available_classes` sale de `is_usable`, que no depende
     de esto); lo que se oculta es la CAUSA.
+
+    `expose_reason` gobierna ADEMAS el eje de pago (`plan_payment_status`, 8.1), porque el
+    corte de lector es exactamente el mismo: todos menos monitor. Pero la redaccion del eje
+    de pago es INCONDICIONAL y por OMISION, y las dos diferencias son a proposito:
+
+    * Incondicional: `plan_status` solo delata algo financiero en dos de sus formas
+      (`exhausted`/`enrollment_fee_unpaid`), asi que se degrada solo ahi. `payment_status` ES
+      el dato financiero en las tres. Si se omitiera solo cuando el alumno debe, la AUSENCIA
+      del campo seria la deuda y el monitor la leeria igual.
+    * Por omision: 7.3 pudo degradar a un balde opaco ('No disponible') porque el vocabulario
+      de vigencia tiene un valor neutro que publicar y porque la UI ya pintaba esos campos.
+      Aca los tres valores (`paid`/`unpaid`/`free`) son afirmaciones financieras —no existe
+      un neutro— y el campo es nuevo, asi que nada se rompe al no mandarlo.
     """
     if not expose_reason and _is_redacted_for_non_financial(state):
-        return {
+        payload = {
             'plan_status': _REDACTED_PLAN_STATUS,
             'plan_status_label': _REDACTED_PLAN_LABEL,
             'plan_days_to_expiry': state.days_to_expiry,
@@ -487,14 +503,18 @@ def _plan_status_payload(state, *, expose_reason=True):
             'plan_expiry_alert_level': AlertLevel.DANGER,
             'plan_expiry_alert_message': _REDACTED_PLAN_LABEL,
         }
-    return {
-        'plan_status': state.status,
-        'plan_status_label': state.label,
-        'plan_days_to_expiry': state.days_to_expiry,
-        'plan_reason_code': state.reason_code,
-        'plan_expiry_alert_level': state.alert_level,
-        'plan_expiry_alert_message': state.alert_message,
-    }
+    else:
+        payload = {
+            'plan_status': state.status,
+            'plan_status_label': state.label,
+            'plan_days_to_expiry': state.days_to_expiry,
+            'plan_reason_code': state.reason_code,
+            'plan_expiry_alert_level': state.alert_level,
+            'plan_expiry_alert_message': state.alert_message,
+        }
+    if expose_reason:
+        payload['plan_payment_status'] = state.payment_status
+    return payload
 
 
 # Balde opaco de la redaccion. NO es un `PlanStatus`: no pertenece al vocabulario del
@@ -526,6 +546,17 @@ def _may_see_plan_reason(user):
     `FinancialResourcePermission`, pero si puede inscribir alumnos
     (`roles.is_org_admin`), o sea ya tiene el oraculo del 400. El corte real es "puede
     inscribir", y el unico lector del roster que no puede es el monitor.
+
+    OJO, ESTE CHECK INLINE ES LA UNICA BARRERA: `FinancialResourcePermission` NO excluye al
+    monitor —solo al manager—, y para `SAFE_METHODS` deja pasar a todo el resto
+    (`permissions.py`: "monitor solo lectura"). Cualquier superficie NUEVA que publique
+    estado financiero de una membresia tiene que repetir este corte a mano; apoyarse en la
+    clase de permiso le entrega el dato al monitor sin que nada falle.
+
+    Desde 8.1 este mismo flag gobierna `plan_payment_status`. Que el `manager` lo reciba es
+    deliberado (misma regla que el motivo del bloqueo: puede inscribir), aunque tenga 403 en
+    `/api/plans/` y `/api/teacher-payments/`: el corte de este endpoint es operativo, no el
+    de la superficie financiera.
     """
     return not _is_monitor(user)
 
@@ -3459,6 +3490,7 @@ class MembershipPlanViewSet(ModelViewSet):
                 organization_id=request.user.organization_id,
             )
             .valid_on(today)
+            .prefetch_related('origin_transactions')   # eje de pago sin N+1 por membresia
             .order_by('end_date', '-start_date', '-id')
         )
         serializer = StudentPlanSerializer(queryset, many=True)
@@ -3472,6 +3504,7 @@ class MembershipPlanViewSet(ModelViewSet):
         if _is_superadmin(user):
             memberships_queryset = (
                 StudentPlan.objects.select_related('user', 'plan')
+                .prefetch_related('origin_transactions')   # eje de pago sin N+1 por membresia
                 .filter(plan_id=plan.id, user__role=User.Role.STUDENT)
                 .order_by('-is_active', '-start_date', '-id')
             )
@@ -3482,6 +3515,7 @@ class MembershipPlanViewSet(ModelViewSet):
             # propio plan. La columna no se mueve con el alumno.
             memberships_queryset = (
                 StudentPlan.objects.select_related('user', 'plan')
+                .prefetch_related('origin_transactions')   # eje de pago sin N+1 por membresia
                 .filter(plan_id=plan.id, user__role=User.Role.STUDENT, organization_id=user.organization_id)
                 .order_by('-is_active', '-start_date', '-id')
             )

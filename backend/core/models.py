@@ -1188,10 +1188,16 @@ class PaymentAccount(TimestampedModel):
 class PaymentTransaction(TimestampedModel):
     # Lista literal (evita import circular models -> core.services.providers.base).
     # Debe mantenerse en sync con core.services.providers.base.PaymentStatus.
+    #
+    # `STATUS_APPROVED` sale de la lista como constante porque es el ÚNICO estado que
+    # significa "esto se cobró": lo consulta el eje de pago de la membresía
+    # (`core.services.plans._payment_status`). Sin la constante, ese predicado repetiría el
+    # literal 'approved' en un cuarto lugar y podría divergir de lo que el webhook escribe.
+    STATUS_APPROVED = 'approved'
     STATUS_CHOICES = [
         ('pending', 'pending'),
         ('in_process', 'in_process'),
-        ('approved', 'approved'),
+        (STATUS_APPROVED, 'approved'),
         ('rejected', 'rejected'),
         ('cancelled', 'cancelled'),
         ('refunded', 'refunded'),
