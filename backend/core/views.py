@@ -66,6 +66,8 @@ from .serializers import (
     GymClassDetailSerializer,
     GymClassSerializer,
     HolidaySerializer,
+    ManualPaymentCreateSerializer,
+    ManualPaymentSerializer,
     OrganizationSerializer,
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
@@ -94,6 +96,10 @@ from .services.recurrence import (
     reactivate_future_cancelled_instances_for_template,
 )
 from .services.class_dashboard import get_class_dashboard_summary
+from .services.manual_payments import (
+    ManualPaymentOrganizationMismatch,
+    record_manual_payment,
+)
 from .services.plans import REASON_PLAN_UNAVAILABLE, AlertLevel, describe_student_plan
 from .services.public_urls import organization_public_base_url
 from .services.reservations import (
@@ -415,9 +421,9 @@ def _get_active_student_plan_map(student_ids, organization_id, on_date=None):
         )
         .valid_on(target_date)
         .select_related('plan')
-        # El eje de pago del estado sale de esta FK inversa. Sin prefetch, `_plan_status_payload`
-        # dispara una consulta por alumno del roster.
-        .prefetch_related('origin_transactions')
+        # El eje de pago del estado sale de estas dos FKs inversas. Sin prefetch,
+        # `_plan_status_payload` dispara una consulta por alumno del roster.
+        .prefetch_related('origin_transactions', 'manual_payments')
         .order_by('user_id', '-start_date', '-id')
     )
 
@@ -444,7 +450,7 @@ def _get_latest_student_plan_map(student_ids, organization_id):
             organization_id=organization_id,
         )
         .select_related('plan')
-        .prefetch_related('origin_transactions')   # mismo N+1 que en el mapa de vigentes
+        .prefetch_related('origin_transactions', 'manual_payments')   # mismo N+1 que en el mapa de vigentes
         .order_by('user_id', '-end_date', '-start_date', '-id')
     )
 
@@ -3490,7 +3496,7 @@ class MembershipPlanViewSet(ModelViewSet):
                 organization_id=request.user.organization_id,
             )
             .valid_on(today)
-            .prefetch_related('origin_transactions')   # eje de pago sin N+1 por membresia
+            .prefetch_related('origin_transactions', 'manual_payments')   # eje de pago sin N+1 por membresia
             .order_by('end_date', '-start_date', '-id')
         )
         serializer = StudentPlanSerializer(queryset, many=True)
@@ -3504,7 +3510,7 @@ class MembershipPlanViewSet(ModelViewSet):
         if _is_superadmin(user):
             memberships_queryset = (
                 StudentPlan.objects.select_related('user', 'plan')
-                .prefetch_related('origin_transactions')   # eje de pago sin N+1 por membresia
+                .prefetch_related('origin_transactions', 'manual_payments')   # eje de pago sin N+1 por membresia
                 .filter(plan_id=plan.id, user__role=User.Role.STUDENT)
                 .order_by('-is_active', '-start_date', '-id')
             )
@@ -3515,7 +3521,7 @@ class MembershipPlanViewSet(ModelViewSet):
             # propio plan. La columna no se mueve con el alumno.
             memberships_queryset = (
                 StudentPlan.objects.select_related('user', 'plan')
-                .prefetch_related('origin_transactions')   # eje de pago sin N+1 por membresia
+                .prefetch_related('origin_transactions', 'manual_payments')   # eje de pago sin N+1 por membresia
                 .filter(plan_id=plan.id, user__role=User.Role.STUDENT, organization_id=user.organization_id)
                 .order_by('-is_active', '-start_date', '-id')
             )
@@ -3576,6 +3582,87 @@ class MembershipPlanViewSet(ModelViewSet):
 
         membership.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ManualPaymentCreateView(APIView):
+    """`POST /api/manual-payments/` — registra un cobro en efectivo o por transferencia.
+
+    SOLO ESCRITURA, y a propósito: no hay GET, PATCH ni DELETE. Un listado devolvería los
+    importes cobrados de cada membresía y, si mañana lo consumiera el roster, reabriría por
+    otra puerta lo que la redacción del monitor cierra (views.py:551-561). Anular o corregir
+    un pago tampoco existe todavía: tiene semántica propia y es otra tarea.
+
+    SOLO `gym_admin`. Ni manager, ni monitor, ni teacher, ni student — y tampoco superadmin.
+    El superadmin es rol de PLATAFORMA y no tiene organización, así que no hay org que
+    estampar sin creerle al payload; y derivarla de la membresía volvería TAUTOLÓGICA la
+    única guarda cross-tenant que tiene este endpoint —`org(actor) == org(membresía)` pasaría
+    a comparar la membresía consigo misma— dejando cualquier membresía de la plataforma
+    pagable desde un solo actor sin ancla de tenant. Además la plata la recibió el gimnasio,
+    no el operador. Denegar es reversible; abrir no.
+
+    La restricción vive ACÁ, en el backend. El control del frontend es cosmético.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        # El check va inline y no en una clase de permiso porque además del ROL exige el
+        # ANCLA: sin `organization_id` no hay organización que estampar en la fila, y una
+        # clase que solo mire `role` no lo expresa.
+        if not (_is_gym_admin(user) and user.organization_id):
+            raise PermissionDenied(
+                'Solo el administrador del gimnasio puede registrar pagos manuales.'
+            )
+
+        serializer = ManualPaymentCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        validated = serializer.validated_data
+
+        # La membresía se busca YA acotada por la organización del actor, en una sola
+        # consulta: no existe un momento en que el código tenga en la mano una membresía
+        # ajena. Se filtra por la COLUMNA `organization` —quien VENDIÓ la membresía— y jamás
+        # por `user__organization_id`: `StudentPlan.user` es CASCADE sobre el usuario, así que
+        # un alumno movido de gimnasio dejaría su membresía vieja alcanzable desde el
+        # gimnasio nuevo (mismo criterio que views.py:3512-3515).
+        membership = StudentPlan.objects.filter(
+            pk=validated['student_plan'],
+            organization_id=user.organization_id,
+        ).first()
+        if membership is None:
+            # 404 y no 403/400: el id de `StudentPlan` es autoincremental y adivinable (mismo
+            # argumento que views.py:3346-3348), así que distinguir "no existe" de "es de otra
+            # organización" convierte el endpoint en un oráculo de membresías ajenas.
+            raise NotFound('Membresía no encontrada.')
+
+        try:
+            payment = record_manual_payment(
+                student_plan=membership,
+                amount=validated['amount'],
+                reference=validated['reference'],
+                # NUNCA del payload: el actor y su organización, y nada más.
+                recorded_by=user,
+                organization=user.organization,
+            )
+        except ManualPaymentOrganizationMismatch as exc:
+            # Inalcanzable con el lookup de arriba. Queda como red por si un refactor futuro
+            # afloja el scope del queryset — y si eso pasa, tiene que fallar CERRADA sin
+            # reabrir el oráculo: un 403 acá distinguiría "existe pero es de otra
+            # organización" de un 404 "no existe", exactamente lo que el guard cross-org de
+            # arriba existe para no revelar. Mismo mensaje, mismo código.
+            raise NotFound('Membresía no encontrada.')
+        except DjangoValidationError as exc:
+            # `full_clean()` levanta la excepción de Django, que DRF no traduce: sin esto
+            # saldría 500. Las dos reglas que puede violar (monto e incoherencia de org) ya
+            # las cubren el serializer y el lookup, así que esto es defensa en profundidad.
+            raise ValidationError(
+                exc.message_dict if hasattr(exc, 'message_dict') else {'detail': exc.messages}
+            )
+
+        return Response(
+            ManualPaymentSerializer(payment).data,
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class TeacherPaymentRuleViewSet(ModelViewSet):

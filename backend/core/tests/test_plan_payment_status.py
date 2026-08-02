@@ -76,6 +76,20 @@ def _transaction(membership, *, status='approved', organization=None, amount=300
     )
 
 
+def _manual_payment(membership, *, organization=None, amount=30000, reference='',
+                    recorded_by=None):
+    """Cobro fuera de linea ligado a `membership`. `organization` es parametrizable a
+    proposito: ninguna constraint impide la fila cross-tenant y hay que poder construirla."""
+    from core.models import ManualPayment
+    return ManualPayment.objects.create(
+        organization=organization or membership.organization,
+        student_plan=membership,
+        amount=amount,
+        reference=reference,
+        recorded_by=recorded_by,
+    )
+
+
 def _state(membership):
     return describe_student_plan(membership, TODAY)
 
@@ -184,18 +198,16 @@ def test_without_a_membership_there_is_no_payment_axis():
     assert state.payment_status is None
 
 
-def test_a_matricula_only_transaction_counts_as_paid_PROVISIONAL(student_with_plan):
-    """PIN DE DECISION PARA 8.2 — hoy da `paid` y probablemente esta MAL.
+def test_a_matricula_only_transaction_does_not_pay_the_plan(student_with_plan):
+    """DECISION A de 8.2: pagar la matricula no paga el plan.
 
-    `apply_provider_payment` setea `tx.student_plan` en los DOS caminos: cuando el cobro
-    compro el plan y cuando solo pago la MATRICULA de una membresia ya existente
-    (`payments.py`, rama `target_student_plan`). Esa segunda tx tiene `plan_amount == 0`:
-    no pago el plan, pago la matricula. La regla provisional de 8.1 —"hay una tx aprobada
-    ligada por `student_plan`"— no las distingue, asi que un plan asignado a mano por el
-    admin (impago) cuyo alumno pago su matricula en linea sale `paid`.
-
-    Este test NO bendice ese resultado: lo fija para que 8.2 tenga que borrarlo a
-    proposito, en vez de descubrir el caso en produccion.
+    Reemplaza el pin `_PROVISIONAL`. `apply_provider_payment` setea `tx.student_plan` en
+    los DOS caminos: cuando el cobro compro el plan y cuando solo pago la MATRICULA de una
+    membresia ya existente (`payments.py`, rama `target_student_plan`). Esa segunda tx
+    tiene `plan_amount == 0`: no pago el plan, pago la matricula. La regla provisional de
+    8.1 —"hay una tx aprobada ligada por `student_plan`"— no las distinguia, asi que un
+    plan asignado a mano por el admin (impago) cuyo alumno pago su matricula en linea salia
+    `paid`. 8.2 filtra por `plan_amount > 0` y esta membresia queda `unpaid`.
     """
     org, student, plan = student_with_plan
     membership = _membership(student, plan, final_price=30000, enrollment_fee=15000,
@@ -203,7 +215,184 @@ def test_a_matricula_only_transaction_counts_as_paid_PROVISIONAL(student_with_pl
     _transaction(membership, status='approved', amount=15000, plan_amount=0,
                  enrollment_fee_amount=15000)
 
+    assert _state(membership).payment_status == PlanPaymentStatus.UNPAID
+
+
+def test_a_manual_payment_makes_the_membership_paid(student_with_plan):
+    """Cobertura minima obligatoria #1: un `ManualPayment` paga la membresia sin que exista
+    ninguna transaccion de MercadoPago."""
+    org, student, plan = student_with_plan
+    membership = _membership(student, plan, final_price=30000)
+    _manual_payment(membership)
+
     assert _state(membership).payment_status == PlanPaymentStatus.PAID
+
+
+def test_a_manual_payment_of_another_organization_does_not_count(
+        student_with_plan, make_organization):
+    """Cobertura #3 (mitad derivacion): `ManualPayment.student_plan` es una FK PROPIA.
+
+    Sin intersectar `organization_id`, un cobro registrado por la org B le declararia
+    pagada una deuda de la org A.
+    """
+    org, student, plan = student_with_plan
+    membership = _membership(student, plan, final_price=30000)
+    other_org = make_organization()
+    _manual_payment(membership, organization=other_org)
+
+    assert _state(membership).payment_status == PlanPaymentStatus.UNPAID
+
+
+def test_a_manual_payment_pays_a_plan_whose_only_transaction_was_the_matricula(
+        student_with_plan):
+    """Cierra el par con el test anterior: lo que arregla la deuda es el registro del
+    cobro, no la transaccion de matricula que ya estaba colgada de la membresia."""
+    org, student, plan = student_with_plan
+    membership = _membership(student, plan, final_price=30000, enrollment_fee=15000,
+                             enrollment_fee_paid_at=timezone.now())
+    _transaction(membership, status='approved', amount=15000, plan_amount=0,
+                 enrollment_fee_amount=15000)
+    _manual_payment(membership)
+
+    assert _state(membership).payment_status == PlanPaymentStatus.PAID
+
+
+def test_a_free_membership_stays_free_even_with_a_manual_payment(student_with_plan):
+    """`FREE` gana sobre todo: registrar un cobro no reescribe la decision comercial de
+    no cobrar."""
+    org, student, plan = student_with_plan
+    membership = _membership(student, plan, final_price=0)
+    _manual_payment(membership)
+
+    assert _state(membership).payment_status == PlanPaymentStatus.FREE
+
+
+def test_a_partial_manual_payment_still_reads_as_paid(student_with_plan):
+    """El eje NO tiene estado parcial: `amount` no se compara nunca contra `final_price`,
+    asi que un abono menor a la deuda total sigue leyendose `paid`."""
+    org, student, plan = student_with_plan
+    membership = _membership(student, plan, final_price=30000)
+    _manual_payment(membership, amount=10000)
+
+    assert _state(membership).payment_status == PlanPaymentStatus.PAID
+
+
+def test_a_manual_payment_does_not_pay_a_different_membership(student_with_plan):
+    """Guarda contra una derivacion que agrupe por `user` en vez de por `student_plan`: el
+    mismo alumno con dos membresias, pagar la A no puede pagar la B."""
+    org, student, plan = student_with_plan
+    membership_a = _membership(student, plan, final_price=30000)
+    other_plan = _plan(org, name='Otro pack')
+    membership_b = _membership(student, other_plan, final_price=30000)
+    _manual_payment(membership_a)
+
+    assert _state(membership_a).payment_status == PlanPaymentStatus.PAID
+    assert _state(membership_b).payment_status == PlanPaymentStatus.UNPAID
+
+
+@pytest.mark.parametrize(
+    'kwargs,expected_status',
+    [
+        ({'classes_used': 2}, PlanStatus.ACTIVE),
+        ({'classes_used': 10}, PlanStatus.EXHAUSTED),
+        ({'classes_used': 2, 'enrollment_fee': 15000}, PlanStatus.ENROLLMENT_FEE_UNPAID),
+        ({'is_active': False}, PlanStatus.INACTIVE),
+        ({'start_offset': 3, 'end_offset': 30}, PlanStatus.UPCOMING),
+        ({'start_offset': -40, 'end_offset': -10}, PlanStatus.EXPIRED),
+    ],
+)
+def test_a_manual_payment_does_not_change_the_validity_vocabulary(
+        student_with_plan, kwargs, expected_status):
+    """Cobertura #5: un `ManualPayment` no le agrega un valor nuevo al vocabulario de
+    vigencia. Mismos seis estados que `test_the_payment_axis_never_changes_the_validity_vocabulary`,
+    ahora con la contraparte financiera nueva."""
+    org, student, plan = student_with_plan
+    membership = _membership(student, plan, final_price=30000, **kwargs)
+    _manual_payment(membership)
+
+    state = _state(membership)
+
+    assert state.status == expected_status
+    assert state.label
+    assert state.alert_message
+
+
+def test_paying_manually_does_not_revive_an_expired_membership(student_with_plan):
+    """El reverso del anterior con la contraparte manual: pagar no arregla la vigencia."""
+    org, student, plan = student_with_plan
+    membership = _membership(student, plan, start_offset=-40, end_offset=-10)
+    _manual_payment(membership)
+
+    state = _state(membership)
+
+    assert state.payment_status == PlanPaymentStatus.PAID
+    assert state.status == PlanStatus.EXPIRED
+    assert state.is_usable is False
+
+
+def test_the_serializer_resolves_the_manual_payment_axis_once_per_membership(
+        student_with_plan):
+    """Espejo de `test_the_serializer_resolves_the_payment_axis_once_per_membership` para
+    la segunda FK inversa: sin memoizar, cada uno de los siete campos derivados del
+    serializer recorreria `manual_payments` de nuevo."""
+    org, student, plan = student_with_plan
+    membership = _membership(student, plan, final_price=30000)
+    _manual_payment(membership)
+
+    with CaptureQueriesContext(connection) as queries:
+        data = StudentPlanSerializer(membership).data
+
+    assert data['payment_status'] == 'paid'
+    payment_queries = [
+        query for query in queries.captured_queries
+        if 'core_manualpayment' in query['sql'].lower()
+    ]
+    assert len(payment_queries) == 1, payment_queries
+
+
+def test_the_roster_does_not_query_manual_payments_once_per_student(api_client, roster,
+                                                                    make_user):
+    """Mismo N+1 que `test_the_roster_does_not_query_payments_once_per_student`, ahora con
+    la FK inversa de `ManualPayment`: se compara el mismo endpoint con un alumno y con tres,
+    sembrando `ManualPayment` en vez de `PaymentTransaction`."""
+    plan = _plan(roster['org'], name='Pack 10')
+    membership = _membership(roster['student'], plan, classes_used=2, final_price=30000)
+    _manual_payment(membership)
+    api_client.force_authenticate(user=roster['admin'])
+    url = f'/api/classes/{roster["gym_class"].id}/enrolled-students/'
+
+    with CaptureQueriesContext(connection) as one_student:
+        first = api_client.get(url)
+    assert first.status_code == 200
+    assert first.json()[0]['plan_payment_status'] == 'paid'
+
+    for index in range(2):
+        extra = make_user(f'stu-extra-manualpay-{index}', organization=roster['org'],
+                          role='student')
+        Enrollment.objects.create(gym_class=roster['gym_class'], student=extra,
+                                  status='active')
+        extra_membership = _membership(extra, plan, classes_used=2, final_price=30000)
+        _manual_payment(extra_membership)
+
+    with CaptureQueriesContext(connection) as three_students:
+        second = api_client.get(url)
+    assert second.status_code == 200
+    assert len(second.json()) == 3
+
+    assert len(three_students) == len(one_student)
+
+
+def test_the_monitor_never_receives_the_payment_status_of_a_manually_paid_membership(
+        api_client, roster):
+    """Cobertura #6: la redaccion incondicional del monitor tambien cubre el pago manual,
+    no solo la transaccion aprobada de MercadoPago."""
+    plan = _plan(roster['org'], name='Pack 10')
+    membership = _membership(roster['student'], plan, classes_used=2, final_price=30000)
+    _manual_payment(membership)
+
+    row = _roster_row(api_client, roster, actor='monitor')
+
+    assert 'plan_payment_status' not in row
 
 
 # --------------------------------------------------------------------------------------

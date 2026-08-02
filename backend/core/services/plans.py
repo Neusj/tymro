@@ -193,38 +193,57 @@ def _remaining_classes(student_plan):
 
 
 def _payment_status(student_plan):
-    """Eje de pago de UNA membresía. DERIVACIÓN PROVISIONAL: 8.2 la reemplaza.
+    """Eje de pago de UNA membresía. DERIVACIÓN DEFINITIVA (8.2).
 
-    Hoy no existe un registro de pago manual —el gimnasio que cobra en efectivo no tiene
-    dónde anotarlo—, así que esto se deriva de lo único que hay: el precio de venta que la
-    membresía guardó (`final_price`) y las `PaymentTransaction` de MercadoPago que quedaron
-    colgadas de ella. Cuando 8.2 traiga el modelo de pago manual, la fuente de `PAID` pasa a
-    ser ese registro y esta función se reescribe; el vocabulario y los consumidores no.
+    8.1 tenía que adivinar el `PAID` porque no existía dónde anotar un cobro en efectivo.
+    Ahora hay dos contrapartes financieras posibles y las dos valen igual: la transacción
+    aprobada del proveedor (MercadoPago) y el `ManualPayment` que registró el gimnasio.
 
     Tres reglas, en este orden:
 
     * `FREE` gana sobre todo: si el precio de venta es 0, no había nada que cobrar y no hay
       cobro que reconocer. Se exige un 0 EXPLÍCITO —`final_price` es NULLABLE— porque "no se
       registró el precio" no es lo mismo que "se decidió no cobrar", y colapsarlos declararía
-      becada cualquier fila vieja o creada desde el admin de Django.
-    * `PAID` si hay una transacción APROBADA de la MISMA organización colgada de la
-      membresía. El filtro por `organization_id` NO es redundante: `student_plan` es una FK
-      propia y ninguna constraint obliga a que la transacción sea del tenant que vendió la
-      membresía, así que seguirla sin intersectar la organización dejaría que un cobro de la
-      org B le declare pagada una deuda a la org A (el agujero multitenant recurrente del
-      proyecto).
+      becada cualquier fila vieja o creada desde el admin de Django. Una membresía en 0 con
+      un `ManualPayment` encima SIGUE siendo `free`: el registro del cobro no reescribe la
+      decisión comercial de no cobrar.
+    * `PAID` si hay (a) una transacción APROBADA de la MISMA organización colgada de la
+      membresía Y QUE HAYA PAGADO EL PLAN (`plan_amount > 0`), o (b) un `ManualPayment` de la
+      MISMA organización sobre esta membresía. El orden entre (a) y (b) da igual —las dos
+      devuelven lo mismo— y se dejan así solo para que el diff contra 8.1 sea mínimo.
     * `UNPAID` el resto: hay (o puede haber) algo que cobrar y no consta cobrado.
 
-    Se recorre `origin_transactions.all()` en Python en vez de filtrar en la DB para que un
-    `prefetch_related('origin_transactions')` del llamador lo resuelva sin consultas extra:
-    los dos lectores de lista (roster y membresías del plan) lo prefetchean, y así el eje no
-    introduce un N+1 por alumno. Sin prefetch cuesta una consulta por membresía.
+    `plan_amount > 0` es la AMBIGÜEDAD QUE 8.1 DEJÓ FIJADA y que 8.2 resuelve.
+    `apply_provider_payment` setea `tx.student_plan` en sus DOS ramas: cuando el cobro compró
+    el plan y cuando pagó solo la MATRÍCULA de una membresía preexistente (`payments.py`,
+    rama `target_student_plan`), y esa segunda tx tiene `plan_amount == 0`. Sin este filtro,
+    un plan que el admin asignó a mano —impago— cuyo alumno pagó su matrícula en línea salía
+    `paid`. Pagar la matrícula no paga el plan. No hay regresión sobre las compras reales:
+    `create_checkout` siempre escribe `plan_amount = precio con descuento` cuando hay plan, y
+    el único caso en que eso da 0 es un plan de precio 0 (o 100% de descuento), que la regla
+    `FREE` atrapa antes de llegar acá.
 
-    AMBIGÜEDAD CONOCIDA (para 8.2): `apply_provider_payment` setea `tx.student_plan` también
-    cuando el cobro pagó solo la MATRÍCULA de una membresía preexistente (`plan_amount == 0`).
-    Esa transacción no pagó el plan, pero acá cuenta como `PAID`. Está fijado en
-    `test_a_matricula_only_transaction_counts_as_paid_PROVISIONAL` para que la decisión se
-    tome a propósito y no se descubra en producción.
+    El filtro por `organization_id` NO es redundante en NINGUNA de las dos ramas:
+    `PaymentTransaction.student_plan` y `ManualPayment.student_plan` son FKs propias y
+    ninguna constraint obliga a que la contraparte sea del tenant que vendió la membresía, así
+    que seguirlas sin intersectar la organización dejaría que un cobro de la org B le declare
+    pagada una deuda a la org A (el agujero multitenant recurrente del proyecto).
+
+    NO se intersecta `tx.user_id` con `student_plan.user_id` (decisión de 8.2): un tercero
+    —el padre, la empresa— puede pagar la membresía de otro, y exigir que coincidan
+    convertiría ese pago legítimo en una deuda.
+
+    NO se compara `amount` contra `final_price`. El eje tiene tres valores y ninguno es
+    "parcial": un abono de 10.000 sobre una membresía de 30.000 deja la fila en `paid`. Si
+    algún día hace falta saber cuánto falta, es un campo nuevo y una decisión de producto, no
+    un cuarto valor de este vocabulario.
+
+    Los DOS recorridos son sobre `.all()` en Python en vez de filtros en la DB para que un
+    `prefetch_related('origin_transactions', 'manual_payments')` del llamador los resuelva sin
+    consultas extra: los lectores de lista (roster, membresías del plan, job nocturno) los
+    prefetchean, y así el eje no introduce un N+1 por alumno. Sin prefetch cuesta dos consultas
+    por membresía. Si alguien cambia esto por un `.filter(...)`, los tests de conteo de
+    `test_plan_payment_status.py` se ponen rojos.
     """
     price = student_plan.final_price
     if price is not None and price <= 0:
@@ -233,7 +252,11 @@ def _payment_status(student_plan):
         if (
             transaction.status == PaymentTransaction.STATUS_APPROVED
             and transaction.organization_id == student_plan.organization_id
+            and (transaction.plan_amount or 0) > 0
         ):
+            return PlanPaymentStatus.PAID
+    for payment in student_plan.manual_payments.all():
+        if payment.organization_id == student_plan.organization_id:
             return PlanPaymentStatus.PAID
     return PlanPaymentStatus.UNPAID
 

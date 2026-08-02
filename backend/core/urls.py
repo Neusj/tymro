@@ -29,6 +29,7 @@ from .views import (
     HolidayViewSet,
     LoginView,
     LogoutView,
+    ManualPaymentCreateView,
     MeView,
     MembershipPlanViewSet,
     OrganizationViewSet,
@@ -98,5 +99,8 @@ urlpatterns = [
     path('payments/transactions/<uuid:pk>/status/', PaymentTransactionStatusView.as_view(),
          name='payments-transaction-status'),
     path('payments/webhook/', PaymentWebhookView.as_view(), name='payments-webhook'),
+    # Cobro registrado a mano por el gimnasio. NO va bajo `payments/`: eso es la plomería del
+    # proveedor (checkout, OAuth, webhook) y esto no toca ningún proveedor. Solo POST.
+    path('manual-payments/', ManualPaymentCreateView.as_view(), name='manual-payments-create'),
     path('', include(router.urls)),
 ]

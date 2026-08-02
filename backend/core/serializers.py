@@ -1,4 +1,5 @@
 ﻿from datetime import timedelta
+from decimal import Decimal
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -21,6 +22,7 @@ from .models import (
     Enrollment,
     GymClass,
     Holiday,
+    ManualPayment,
     Plan,
     MembershipPlan,
     Organization,
@@ -1577,6 +1579,54 @@ class StudentPlanAssignSerializer(serializers.Serializer):
         attrs['discount_percentage'] = attrs.get('discount_percentage', plan.discount_percentage or 0)
         attrs['end_date'] = attrs['start_date'] + timedelta(days=max(plan.duration_days - 1, 0))
         return attrs
+
+
+class ManualPaymentCreateSerializer(serializers.Serializer):
+    """Entrada del registro de un cobro fuera de línea. Valida FORMA, no pertenencia.
+
+    `student_plan` es un ENTERO y no un `PrimaryKeyRelatedField` a propósito: si el
+    serializer resolviera la FK contra `StudentPlan.objects.all()`, una membresía de otra
+    organización pasaría la validación y moriría después en la view con 404, mientras que un
+    id inexistente moriría acá con 400 — dos códigos distintos para dos casos que tienen que
+    ser INDISTINGUIBLES, o el endpoint queda de oráculo de membresías ajenas. La resolución
+    la hace la view DENTRO del scope de la organización del actor.
+
+    `organization`, `recorded_by` y `recorded_at` no existen acá: se estampan en el servidor.
+    Un campo de organización en la entrada sería exactamente el payload que la regla #1 del
+    backend prohíbe.
+    """
+
+    # Cota superior por el mismo motivo que `_as_id_list` en views.py:189-193: fuera del
+    # rango de bigint, el `filter(pk=...)` revienta en PostgreSQL con un 500 que SQLite no
+    # reproduce, así que la suite no lo detectaría.
+    student_plan = serializers.IntegerField(min_value=1, max_value=2 ** 63 - 1)
+    amount = serializers.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        min_value=Decimal('0.01'),
+    )
+    reference = serializers.CharField(max_length=120, allow_blank=True, default='')
+
+
+class ManualPaymentSerializer(serializers.ModelSerializer):
+    """Respuesta del POST. MÍNIMA a propósito.
+
+    No incluye `payment_status` y no anida `StudentPlanSerializer`. La trampa está escrita en
+    views.py:551-561: el corte que le oculta el eje financiero al monitor es un check INLINE,
+    NO la clase de permiso, así que cada superficie nueva que publique estado de pago tiene
+    que repetirlo a mano. La forma barata de no equivocarse es no publicarlo: quien registró
+    el pago ya sabe qué registró, y el estado de la membresía se lee donde ya se leía
+    (`my-memberships`, `/api/plans/{id}/memberships/`, el roster).
+
+    Tampoco viaja `recorded_by`: es el propio actor, o sea información que el cliente ya
+    tiene. Menos campos, menos superficie.
+    """
+
+    class Meta:
+        model = ManualPayment
+        fields = ['id', 'student_plan', 'amount', 'reference', 'recorded_at']
+        read_only_fields = fields
+
 
 class TeacherPaymentRuleSerializer(serializers.ModelSerializer):
     branch_name = serializers.CharField(source='branch.name', read_only=True)

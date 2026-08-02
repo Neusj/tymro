@@ -8,6 +8,7 @@ from .models import (
     Enrollment,
     GymClass,
     Holiday,
+    ManualPayment,
     MembershipPlan,
     Organization,
     OrganizationExpiryNotificationConfig,
@@ -86,4 +87,46 @@ class PlanExpiryNotificationAdmin(admin.ModelAdmin):
     def has_delete_permission(self, request, obj=None):
         # Sin esto el changelist ofrece "Eliminar los objetos seleccionados", y borrar una
         # fila de acá REENVÍA el correo que representa.
+        return False
+
+
+@admin.register(ManualPayment)
+class ManualPaymentAdmin(admin.ModelAdmin):
+    """Libro de cobros fuera de línea. SOLO LECTURA: la única escritura es el endpoint.
+
+    Los tres permisos cerrados, y cada uno por su motivo:
+
+    * `delete` — lección 7.4 (`PlanExpiryNotificationAdmin`), acá con plata de por medio.
+      Borrar una fila devuelve la membresía de `paid` a `unpaid` sin dejar rastro de que
+      alguna vez se cobró, y el changelist ofrece la acción masiva por defecto.
+    * `add` — el formulario del admin deja elegir `organization` y `student_plan` por
+      separado: es exactamente la fila cross-tenant que el endpoint prohíbe, y encima sin
+      `recorded_by`. `clean()` impide la incoherencia, pero la organización CORRECTA no la
+      puede adivinar un formulario: sale del actor que recibió la plata.
+    * `change` — editar el importe o repuntar `student_plan` mueve un cobro de una membresía
+      a otra. Corregir un pago mal registrado tiene semántica propia (anular + registrar de
+      nuevo) y 8.2 no la define; hacerlo por acá lo dejaría sin historial.
+
+    Queda como lo que es: una vista de auditoría.
+    """
+
+    list_display = (
+        'student_plan', 'organization', 'amount', 'reference', 'recorded_by', 'recorded_at',
+    )
+    list_filter = ('organization',)
+    search_fields = (
+        'reference', 'student_plan__user__username', 'student_plan__user__email',
+    )
+    readonly_fields = (
+        'organization', 'student_plan', 'amount', 'reference', 'recorded_by',
+        'recorded_at', 'created_at', 'updated_at',
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
         return False

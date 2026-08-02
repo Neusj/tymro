@@ -1,8 +1,9 @@
 ﻿import uuid
 from datetime import timedelta
+from decimal import Decimal
 
 from django.core.exceptions import ValidationError
-from django.core.validators import RegexValidator
+from django.core.validators import MinValueValidator, RegexValidator
 from django.db import models
 from django.utils import timezone
 import re
@@ -928,6 +929,141 @@ class TeacherPayout(TimestampedModel):
 
     def __str__(self):
         return f'{self.teacher} - {self.period_year}-{self.period_month:02d} ({self.amount})'
+
+
+class ManualPayment(TimestampedModel):
+    """Cobro de una membresía recibido FUERA de línea (efectivo, transferencia).
+
+    Es la contraparte de `PaymentTransaction` para el gimnasio que cobra en la recepción.
+    Hasta 8.2 ese cobro no tenía dónde anotarse, así que el eje de pago de la membresía
+    (`core.services.plans._payment_status`) tenía que ADIVINARLO desde el precio de venta y
+    las transacciones de MercadoPago colgadas de la fila. Con este registro, `PAID` deja de
+    ser una inferencia y pasa a ser un hecho declarado por alguien con nombre.
+
+    LA EXISTENCIA DE LA FILA ES EL HECHO. No hay campo `status` ni estado parcial a
+    propósito: "pagado a medias" es otra pregunta —cuánto falta— y contestarla acá obligaría
+    a que el vocabulario de tres valores (`paid`/`unpaid`/`free`) creciera un cuarto. Por el
+    mismo motivo `amount` NO se compara nunca contra `StudentPlan.final_price`: se guarda
+    porque es el dato del cobro, no porque la derivación lo consulte.
+
+    Puede haber VARIAS filas por membresía (dos abonos en efectivo, o el saldo pagado una
+    semana después) y ninguna desplaza a las otras: no hay constraint de unicidad y no debe
+    agregarse.
+
+    `amount` es `Decimal` y no `Float` como `TeacherPayout.amount`: el resto del dinero
+    COBRADO del esquema ya es decimal —`PaymentTransaction.amount`/`plan_amount`/
+    `enrollment_fee_amount`, `StudentPlan.enrollment_fee`— y esto es de esa familia. Los
+    montos float del esquema son valores DERIVADOS de un cálculo (el payout del profe,
+    `final_price`); un cobro recibido es un dato de entrada y no puede arrastrar el error de
+    representación binaria.
+    """
+
+    # La organización que COBRÓ. Se estampa desde el actor que registra: NUNCA del payload y
+    # NUNCA derivada de `recorded_by.organization`. Esa FK es SET_NULL y además el usuario
+    # puede cambiar de organización después, así que derivar de ahí movería el cobro de
+    # tenant solo (el agujero multitenant recurrente del proyecto: seguir una FK propia sin
+    # intersectar `organization_id`). Es también la ÚNICA columna que la derivación
+    # intersecta para decidir si este pago le habla a esta membresía.
+    #
+    # PROTECT por el mismo motivo que `StudentPlan.organization` (migración 0030): borrar la
+    # organización no puede llevarse en silencio la plata cobrada. No agrega una superficie
+    # de 500: `OrganizationViewSet.destroy` ya cuenta membresías y devuelve 400 antes del
+    # DELETE, y encima envuelve el `super().destroy()` en un `except ProtectedError`
+    # pensado literalmente para "el próximo PROTECT que se agregue" (views.py:1609-1615).
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.PROTECT,
+        related_name='manual_payments',
+    )
+    # CASCADE, igual que `ConsumptionLog.student_plan`: este registro es un hecho SOBRE esa
+    # membresía y no significa nada sin ella —la derivación solo lo alcanza por esta FK, así
+    # que huérfano sería ilegible—.
+    #
+    # PROTECT se descartó a propósito: convertiría en 500 dos borrados que hoy funcionan y
+    # que nadie envuelve en un try —`DELETE /api/users/{id}/` (cascadea usuario →
+    # membresías, `UserViewSet.perform_destroy` no captura `ProtectedError`) y
+    # `DELETE /api/plans/{id}/memberships/{id}/`—. Endurecer esos dos caminos es otra tarea.
+    # RIESGO RESIDUAL ASUMIDO: quitar una membresía sin consumo se lleva sus pagos
+    # manuales. La guarda que ya existe en `remove_membership` (consumo o `classes_used > 0`)
+    # cubre el caso común, y 8.2 no abre ninguna puerta nueva de borrado (el admin está
+    # cerrado y no hay API de anulación).
+    student_plan = models.ForeignKey(
+        StudentPlan,
+        on_delete=models.CASCADE,
+        related_name='manual_payments',
+    )
+    amount = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal('0.01'))],
+        help_text='Monto cobrado. Debe ser mayor a cero.',
+    )
+    # Texto libre OPCIONAL: nº de transferencia, folio de boleta, "efectivo caja 2". Se deja
+    # vacío a propósito: el efectivo NO tiene comprobante, y exigir el campo obligaría al
+    # administrador a inventar un valor —ensuciando justo la columna que existe para
+    # auditar—. `blank=True` + `default=''` y no `null=True`: un solo valor vacío, la
+    # convención del resto del esquema para texto.
+    reference = models.CharField(
+        max_length=120,
+        blank=True,
+        default='',
+        help_text='Nº de transferencia, folio o nota. Vacío si fue efectivo sin comprobante.',
+    )
+    # Quién registró el cobro. SET_NULL —igual que `TeacherPayout.marked_by`— y no CASCADE:
+    # con CASCADE, borrar al administrador que cobró BORRARÍA el cobro, y la membresía
+    # volvería en silencio de `paid` a `unpaid` sin que quede rastro de que alguna vez se
+    # pagó. PROTECT tampoco: `UserViewSet.perform_destroy` no captura `ProtectedError`, así
+    # que borrar a ese administrador saldría 500. Perder el autor es aceptable; perder el
+    # hecho no.
+    #
+    # OJO: esta FK NO es el ancla multitenant y no debe usarse como tal. La organización de
+    # la fila es la COLUMNA `organization`, estampada al crear. Con SET_NULL este campo puede
+    # quedar en NULL o apuntar a alguien que después se mudó de organización, y ninguna de
+    # las dos cosas puede mover el pago de tenant.
+    recorded_by = models.ForeignKey(
+        'accounts.CustomUser',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='manual_payments_recorded',
+    )
+    # `default=timezone.now` y no `auto_now_add`, igual que `TeacherPayout.paid_at`: se llena
+    # solo (el endpoint jamás lo lee del payload) pero sigue siendo escribible desde código,
+    # que es exactamente lo que va a necesitar cualquier carga histórica de cobros viejos.
+    # Con `auto_now_add` esa fecha solo se podría corregir con un UPDATE crudo.
+    recorded_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        # SIN unicidad sobre (student_plan, ...) a propósito: un gimnasio puede recibir dos
+        # abonos por la misma membresía y cada uno es su propia fila.
+        ordering = ['-recorded_at', '-id']
+        constraints = [
+            # Misma regla que el validador del campo, una capa más abajo: el validador solo
+            # corre en `full_clean()`, y esto también protege contra un INSERT por shell o
+            # por una futura carga masiva. `check=` (no `condition=`) porque el repo está en
+            # Django 5.0.6; `condition=` recién existe desde 5.1.
+            models.CheckConstraint(
+                check=models.Q(amount__gt=0),
+                name='manual_payment_amount_positive',
+            ),
+        ]
+
+    def __str__(self):
+        return f'Pago manual {self.amount} - membresia {self.student_plan_id}'
+
+    def clean(self):
+        # Misma guarda que `StudentPlan.clean()` con su plan: nada en el esquema obliga a que
+        # la organización de la fila sea la que vendió la membresía, y la derivación del eje
+        # de pago intersecta justo esa columna. Desincronizadas, una fila de la org B le
+        # declararía pagada una deuda a la org A.
+        super().clean()
+        if (
+            self.student_plan_id
+            and self.organization_id != self.student_plan.organization_id
+        ):
+            raise ValidationError(
+                {'organization': 'La organización debe ser la misma que la de la membresía.'}
+            )
 
 
 class ClassTemplate(TimestampedModel):
