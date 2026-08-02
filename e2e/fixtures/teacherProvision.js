@@ -118,7 +118,9 @@ export async function ensureUnlimitedStudents(ctx, refs, count = 2) {
       if (!res.ok()) throw new Error(`ensureStudent ${username} ${res.status()}: ${await res.text()}`)
       user = await res.json()
     }
-    const assign = await ctx.post('plans/assign/', { data: { user: user.id, plan: planId, start_date: planStartDate() } })
+    // `manual` y no `free`: `free` deja `final_price` en 0 y los flujos de pago a profe de
+    // esta suite leen el precio de la membresía.
+    const assign = await ctx.post('plans/assign/', { data: { user: user.id, plan: planId, start_date: planStartDate(), payment: { method: 'manual', amount: '10000.00' } } })
     if (!assign.ok()) throw new Error(`assign plan ilimitado a ${username} ${assign.status()}: ${await assign.text()}`)
     students.push({ id: user.id, username, firstName: `AlumnoE2E${i}` })
   }
@@ -146,7 +148,7 @@ export async function ensureBalanceStudent(ctx, refs, { total = 10, username = '
     if (!res.ok()) throw new Error(`crear plan saldo ${res.status()}: ${await res.text()}`)
     planId = (await res.json()).id
   }
-  const assign = await ctx.post('plans/assign/', { data: { user: user.id, plan: planId, start_date: planStartDate() } })
+  const assign = await ctx.post('plans/assign/', { data: { user: user.id, plan: planId, start_date: planStartDate(), payment: { method: 'manual', amount: '10000.00' } } })
   if (!assign.ok()) throw new Error(`assign plan saldo a ${username} ${assign.status()}: ${await assign.text()}`)
   return { id: user.id, username, password: STUDENT_PASSWORD }
 }

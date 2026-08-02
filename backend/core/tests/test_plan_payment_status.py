@@ -122,10 +122,13 @@ def test_membership_with_an_approved_transaction_is_paid(student_with_plan):
 
 
 def test_membership_with_a_price_and_no_transaction_is_unpaid(student_with_plan):
-    """El caso que hoy no se ve en ningun lado: el plan que asigna el admin a mano.
+    """`activate_student_plan` no crea ninguna contraparte financiera por si sola: el eje de
+    pago depende SIEMPRE de una transaccion o un `ManualPayment` colgados aparte.
 
-    `activate_student_plan` no crea ninguna contraparte financiera, asi que una membresia
-    asignada por `POST /api/plans/assign/` nace exactamente asi.
+    Desde 8.3, `POST /api/plans/assign/` ya no puede nacer asi -exige declarar `payment`
+    (`free` o `manual`) y por eso queda `free` o `paid`-. Este `unpaid` sigue siendo real: lo
+    dejan filas legadas, el importador, el admin de Django o un checkout que cobro la
+    matricula pero no el plan.
     """
     org, student, plan = student_with_plan
     membership = _membership(student, plan, final_price=30000)

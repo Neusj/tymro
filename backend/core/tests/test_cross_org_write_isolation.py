@@ -290,6 +290,7 @@ def test_plan_assign_cannot_cross_orgs(api_client, world):
     resp = api_client.post('/api/plans/assign/', {
         'user': world['student_a'].id, 'plan': world['plan_a'].id,
         'start_date': str(timezone.localdate()),
+        'payment': {'method': 'free'},
     }, format='json')
 
     assert resp.status_code in DENIED | {400}, resp.content

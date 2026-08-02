@@ -150,6 +150,7 @@ def test_assigning_a_plan_does_not_deactivate_another_orgs_membership(api_client
     resp = api_client.post('/api/plans/assign/', {
         'user': moved_student['student'].id, 'plan': plan_b.id,
         'start_date': str(timezone.localdate()),
+        'payment': {'method': 'free'},
     }, format='json')
 
     assert resp.status_code == 201, resp.content
@@ -179,6 +180,7 @@ def test_assigning_a_plan_does_not_close_the_previous_membership_of_its_own_org(
     resp = api_client.post('/api/plans/assign/', {
         'user': moved_student['student'].id, 'plan': plan_b.id,
         'start_date': str(timezone.localdate()),
+        'payment': {'method': 'free'},
     }, format='json')
 
     assert resp.status_code == 201, resp.content

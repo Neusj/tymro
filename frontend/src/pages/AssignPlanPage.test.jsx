@@ -7,6 +7,9 @@ vi.mock('../api/client', () => ({
   getPlans: vi.fn(),
   usersApi: { list: vi.fn() },
 }))
+vi.mock('../auth/AuthContext', () => ({
+  useAuth: () => ({ user: { role: 'gym_admin' } }),
+}))
 
 import { getPlans, usersApi } from '../api/client'
 import AssignPlanPage from './AssignPlanPage'

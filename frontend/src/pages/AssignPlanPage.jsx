@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { assignPlanToUser, getPlans, usersApi } from '../api/client'
 import DashboardHeader from '../components/DashboardHeader'
+import { useAuth } from '../auth/AuthContext'
 import { todayLocalISO } from '../utils/format'
 
 function firstApiError(detail, fallback) {
@@ -17,6 +18,14 @@ function firstApiError(detail, fallback) {
   const firstValue = Object.values(detail)[0]
   if (Array.isArray(firstValue) && firstValue[0]) {
     return firstValue[0]
+  }
+  if (typeof firstValue === 'string') {
+    return firstValue
+  }
+  // El serializer de `payment` anida errores un nivel más (ej. {payment: {amount: [...]}}):
+  // se baja recursivamente hasta encontrar el string o la lista real.
+  if (firstValue && typeof firstValue === 'object') {
+    return firstApiError(firstValue, fallback)
   }
   return fallback
 }
@@ -35,6 +44,10 @@ function toList(data) {
 }
 
 export default function AssignPlanPage() {
+  const { user } = useAuth()
+  // Solo el admin del gimnasio puede declarar un pago manual: el backend lo rechaza (400)
+  // si un superadmin lo intenta, asi que ni se le muestra la opcion (UX, no la restriccion real).
+  const isSuperadmin = user?.role === 'superadmin'
   const [searchParams] = useSearchParams()
   const [students, setStudents] = useState([])
   const [plans, setPlans] = useState([])
@@ -42,6 +55,11 @@ export default function AssignPlanPage() {
   const [working, setWorking] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  // Vía por la que se declara el plan: "manual" es el caso comun de venta, por eso es el
+  // default para gym_admin. Para superadmin la unica vía posible es "free".
+  const [paymentMethod, setPaymentMethod] = useState(isSuperadmin ? 'free' : 'manual')
+  const [amount, setAmount] = useState('')
+  const [reference, setReference] = useState('')
 
   const [form, setForm] = useState({
     user: '',
@@ -53,12 +71,23 @@ export default function AssignPlanPage() {
     discount_percentage: '',
   })
 
+  const paymentVia = isSuperadmin ? 'free' : paymentMethod
+
+  const selectVia = (via) => {
+    setPaymentMethod(via)
+    // Cambiar de via invalida el error mostrado (ej. "ingresa un monto" de la via pago
+    // no tiene sentido si se pasa a gratis).
+    setError('')
+  }
+
   const selectedPlan = useMemo(() => plans.find((item) => String(item.id) === String(form.plan)), [plans, form.plan])
   const isUnlimited = Boolean(selectedPlan?.unlimited_classes)
   const totalClasses = Number(selectedPlan?.total_classes || 0)
   const discount = form.discount_percentage !== '' ? Number(form.discount_percentage) : Number(selectedPlan?.discount_percentage || 0)
   const basePrice = Number(selectedPlan?.price || 0)
-  const finalEstimate = Math.max(basePrice * (1 - discount / 100), 0)
+  // Via gratis = beca total: el backend fija el descuento en 100 y el precio final es $0,
+  // sin importar el % que haya quedado cargado en el input (que ademas queda oculto).
+  const finalEstimate = paymentVia === 'free' ? 0 : Math.max(basePrice * (1 - discount / 100), 0)
 
   const loadData = async () => {
     setLoading(true)
@@ -95,16 +124,33 @@ export default function AssignPlanPage() {
       setError('Selecciona usuario y plan.')
       return
     }
+    // Validacion de UX solamente: el 400 real (monto/reference/discount invalidos para la
+    // via elegida) lo valida el backend y se muestra tal cual llega en el catch.
+    if (paymentVia === 'manual') {
+      const amountNumber = Number(amount)
+      if (amount === '' || !Number.isFinite(amountNumber) || amountNumber <= 0) {
+        setError('Ingresa un monto válido, mayor a $0.')
+        return
+      }
+    }
     setWorking(true)
     setError('')
     setNotice('')
     try {
-      await assignPlanToUser({
+      const payload = {
         user: Number(form.user),
         plan: Number(form.plan),
         start_date: form.start_date,
-        discount_percentage: discount,
-      })
+      }
+      if (paymentVia === 'free') {
+        // El backend rechaza (400) un pago free que traiga discount_percentage, amount o
+        // reference: por eso ninguna de esas claves se agrega al payload en esta via.
+        payload.payment = { method: 'free' }
+      } else {
+        payload.discount_percentage = discount
+        payload.payment = { method: 'manual', amount: String(amount).trim(), reference: reference.trim() }
+      }
+      await assignPlanToUser(payload)
       setNotice('Plan asignado correctamente.')
       setForm((prev) => ({ ...prev, user: '' }))
     } catch (apiError) {
@@ -120,6 +166,46 @@ export default function AssignPlanPage() {
 
       {error ? <p className="rounded-lg border border-brand-red/50 bg-brand-red/10 px-3 py-2 text-sm text-red-200">{error}</p> : null}
       {notice ? <p className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">{notice}</p> : null}
+
+      <section className="card-surface p-5">
+        <p className="text-sm font-semibold text-brand-white">Vía de pago</p>
+        <p className="mt-1 text-xs text-brand-muted">Elegí cómo se registra este plan para el alumno.</p>
+        {/* Mobile-first: una columna, dos en pantallas mas anchas. Para superadmin la
+            tarjeta de "Registrar pago" ni se renderiza (el backend igual la rechaza con 400,
+            pero acá evitamos ofrecer una opción que sabemos que va a fallar). */}
+        <div className={`mt-3 grid grid-cols-1 gap-3 ${isSuperadmin ? '' : 'sm:grid-cols-2'}`}>
+          <button
+            type="button"
+            disabled={working}
+            onClick={() => selectVia('free')}
+            aria-pressed={paymentVia === 'free'}
+            // aria-label fija el nombre accesible: sin esto, el <p> de descripcion se suma
+            // al texto del boton y "Gratis (beca / cortesía)" deja de matchear exacto.
+            aria-label="Gratis (beca / cortesía)"
+            className={`rounded-xl border p-3 text-left text-sm transition ${
+              paymentVia === 'free' ? 'border-brand-blue bg-brand-blue/10' : 'border-brand-line bg-black/20'
+            }`}
+          >
+            <p className="font-semibold text-brand-white">Gratis (beca / cortesía)</p>
+            <p className="text-xs text-brand-muted">Sin cobro: el plan queda 100% bonificado.</p>
+          </button>
+          {!isSuperadmin ? (
+            <button
+              type="button"
+              disabled={working}
+              onClick={() => selectVia('manual')}
+              aria-pressed={paymentVia === 'manual'}
+              aria-label="Registrar pago"
+              className={`rounded-xl border p-3 text-left text-sm transition ${
+                paymentVia === 'manual' ? 'border-brand-blue bg-brand-blue/10' : 'border-brand-line bg-black/20'
+              }`}
+            >
+              <p className="font-semibold text-brand-white">Registrar pago</p>
+              <p className="text-xs text-brand-muted">Venta con cobro manual (transferencia, efectivo, etc.).</p>
+            </button>
+          ) : null}
+        </div>
+      </section>
 
       <section className="card-surface p-5">
         <form onSubmit={submit} className="grid gap-3 md:grid-cols-2">
@@ -173,20 +259,51 @@ export default function AssignPlanPage() {
             <p className="text-base font-semibold">{selectedPlan ? (isUnlimited ? 'Ilimitado' : totalClasses) : 'Segun plan'}</p>
             <p className="text-xs text-brand-muted">Definidas por el plan (no editable)</p>
           </div>
-          <label className="space-y-1 text-sm">
-            <span>Descuento %</span>
-            <input
-              type="number"
-              min="0"
-              max="100"
-              step="0.01"
-              disabled={working}
-              value={form.discount_percentage}
-              onChange={(event) => setForm((prev) => ({ ...prev, discount_percentage: event.target.value }))}
-              placeholder={selectedPlan ? String(selectedPlan.discount_percentage || 0) : '0'}
-              className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
-            />
-          </label>
+          {paymentVia === 'manual' ? (
+            <>
+              {/* Descuento %, monto y referencia solo tienen sentido en la vía pago: en la
+                  vía gratis el backend fija el descuento en 100 y rechaza (400) si alguno
+                  de estos campos viaja en el payload. */}
+              <label className="space-y-1 text-sm">
+                <span>Descuento %</span>
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.01"
+                  disabled={working}
+                  value={form.discount_percentage}
+                  onChange={(event) => setForm((prev) => ({ ...prev, discount_percentage: event.target.value }))}
+                  placeholder={selectedPlan ? String(selectedPlan.discount_percentage || 0) : '0'}
+                  className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
+                />
+              </label>
+              <label className="space-y-1 text-sm">
+                <span>Monto cobrado</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  disabled={working}
+                  value={amount}
+                  onChange={(event) => setAmount(event.target.value)}
+                  placeholder="0"
+                  className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
+                />
+              </label>
+              <label className="space-y-1 text-sm md:col-span-2">
+                <span>Referencia (opcional)</span>
+                <input
+                  type="text"
+                  disabled={working}
+                  value={reference}
+                  onChange={(event) => setReference(event.target.value)}
+                  placeholder="Nº de transferencia, efectivo caja 2..."
+                  className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
+                />
+              </label>
+            </>
+          ) : null}
           <div className="rounded-lg border border-brand-line bg-black/20 px-3 py-2 text-sm">
             <p className="text-brand-muted">Precio final estimado</p>
             <p className="text-lg font-semibold">${finalEstimate.toFixed(2)}</p>

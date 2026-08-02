@@ -1562,11 +1562,58 @@ class StudentPlanSerializer(serializers.ModelSerializer):
         return self._state(obj).payment_status
 
 
+class StudentPlanAssignPaymentSerializer(serializers.Serializer):
+    """Sub-payload de `payment` dentro de `assign` (8.3). Declara la vía financiera de la
+    membresía nueva: `free` (beca total) o `manual` (cobro fuera de línea).
+
+    `amount`/`reference` espejan a mano `ManualPaymentCreateSerializer` (mismo tope, mismo
+    default): las dos rutas terminan en el mismo INSERT de `ManualPayment` vía
+    `record_manual_payment`, así que el monto que no alcanza el mínimo o que falta para
+    `manual` se corta ACÁ, antes de tocar la base — sin esperar a la regla cruzada de
+    `StudentPlanAssignSerializer.validate()` que sí necesita ver el `plan`.
+    """
+    METHOD_FREE = 'free'
+    METHOD_MANUAL = 'manual'
+    METHOD_CHOICES = (
+        (METHOD_FREE, 'Gratis (beca / giftcard)'),
+        (METHOD_MANUAL, 'Pago manual (efectivo / transferencia)'),
+    )
+
+    method = serializers.ChoiceField(choices=METHOD_CHOICES)
+    amount = serializers.DecimalField(max_digits=10, decimal_places=2, min_value=Decimal('0.01'), required=False)
+    reference = serializers.CharField(max_length=120, allow_blank=True, default='')
+
+    def validate(self, attrs):
+        method = attrs.get('method')
+        if method == self.METHOD_MANUAL:
+            if attrs.get('amount') is None:
+                raise serializers.ValidationError({
+                    'amount': 'El monto es obligatorio para declarar un pago manual.',
+                })
+        else:
+            # Free ES beca total, no un descuento parcial: un monto o una referencia de cobro
+            # encima serían incoherentes con "no se cobró nada", así que no se resuelven en
+            # silencio (ni ignorando el monto, ni sumándolo).
+            if attrs.get('amount') is not None:
+                raise serializers.ValidationError({
+                    'amount': 'La vía "free" no admite un monto: es una beca total, no un pago parcial.',
+                })
+            if attrs.get('reference'):
+                raise serializers.ValidationError({
+                    'reference': 'La vía "free" no admite una referencia de pago.',
+                })
+        return attrs
+
+
 class StudentPlanAssignSerializer(serializers.Serializer):
     user = serializers.PrimaryKeyRelatedField(queryset=User.objects.filter(role=User.Role.STUDENT, is_active=True))
     plan = serializers.PrimaryKeyRelatedField(queryset=Plan.objects.filter(is_active=True))
     start_date = serializers.DateField()
     discount_percentage = serializers.FloatField(required=False, min_value=0, max_value=100)
+    # REQUERIDO (8.3): ya no existe el alta sin declaración financiera. Antes de esto, un
+    # `assign` sin contraparte de pago quedaba "vendido sin rastro" — ni ManualPayment ni
+    # transacción de MercadoPago, y el eje de 8.2 lo derivaba `unpaid` para siempre.
+    payment = StudentPlanAssignPaymentSerializer()
 
     def validate(self, attrs):
         plan = attrs['plan']
@@ -1576,7 +1623,37 @@ class StudentPlanAssignSerializer(serializers.Serializer):
         # La cantidad de clases (y si es ilimitado) se DERIVA del plan, no es editable en la asignación.
         attrs['total_classes'] = plan.total_classes
         attrs['unlimited_classes'] = plan.unlimited_classes
-        attrs['discount_percentage'] = attrs.get('discount_percentage', plan.discount_percentage or 0)
+
+        payment = attrs['payment']
+        if payment['method'] == StudentPlanAssignPaymentSerializer.METHOD_FREE:
+            # `initial_data` (no `attrs`) es la única forma de distinguir "no vino
+            # `discount_percentage`" de "vino con el mismo valor que el default": el campo no
+            # tiene `default`, así que sin mirar el payload crudo un descuento explícito
+            # convivía en silencio con una vía que ya promete 100% — dos declaraciones
+            # distintas del mismo 0 que además podrían no coincidir (p. ej. `discount_percentage: 50`
+            # con `payment.method: free`).
+            if 'discount_percentage' in self.initial_data:
+                raise serializers.ValidationError({
+                    'discount_percentage': (
+                        'No se puede combinar con `payment.method: "free"`: esa vía ya fija '
+                        'el descuento en 100%.'
+                    ),
+                })
+            attrs['discount_percentage'] = 100
+        else:
+            discount = attrs.get('discount_percentage')
+            if discount is None:
+                discount = plan.discount_percentage or 0
+            attrs['discount_percentage'] = discount
+            # La invariante `manual ⟹ final_price > 0` (FREE gana sobre PAID en
+            # `_payment_status`) NO se valida acá: este `validate()` corre en
+            # `serializer.is_valid()`, que en la view pasa ANTES de las guardas cross-org. Si
+            # el `plan` es de OTRA organización, comparar su precio acá filtraría por el
+            # status code (400 "la venta queda en $0" vs 403 de la guarda) si ese plan ajeno
+            # vale 0 o no -un oráculo de precios de otro tenant, autoincrementales y
+            # adivinables-. La guarda vive en la view, DESPUÉS de confirmar que el plan es
+            # del actor.
+
         attrs['end_date'] = attrs['start_date'] + timedelta(days=max(plan.duration_days - 1, 0))
         return attrs
 

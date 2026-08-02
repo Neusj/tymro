@@ -78,6 +78,7 @@ from .serializers import (
     PersonSerializer,
     RecurringEnrollmentSerializer,
     SelfProfileSerializer,
+    StudentPlanAssignPaymentSerializer,
     StudentPlanAssignSerializer,
     StudentPlanSerializer,
     TeacherPaymentRuleAssignmentsUpdateSerializer,
@@ -3453,6 +3454,21 @@ class MembershipPlanViewSet(ModelViewSet):
         validated = serializer.validated_data
         student = validated['user']
         plan = validated['plan']
+        payment = validated['payment']
+
+        # Actor-de-pago: quien declara `manual` tiene que tener organización propia para
+        # estamparla en el `ManualPayment`. El superadmin es rol de PLATAFORMA y no la tiene
+        # -derivarla de la membresía volvería tautológica la guarda cross-org de más abajo,
+        # mismo argumento que `ManualPaymentCreateView` (views.py:3595-3601)-, y el mismo
+        # check cubre al gym_admin degenerado sin `organization_id`. Va ANTES de las guardas
+        # cross-org y es 400, no 403: el problema es de FORMA del payload -pidió una vía que
+        # su rol no puede ejecutar-, no de permiso sobre el alumno o el plan puntual.
+        if payment['method'] == StudentPlanAssignPaymentSerializer.METHOD_MANUAL and not (
+            _is_gym_admin(user) and user.organization_id
+        ):
+            raise ValidationError({
+                'payment': 'Solo el administrador del gimnasio puede declarar un pago manual.',
+            })
 
         if _is_gym_admin(user) and student.organization_id != user.organization_id:
             raise PermissionDenied('No puedes asignar planes a alumnos de otra organización.')
@@ -3461,13 +3477,84 @@ class MembershipPlanViewSet(ModelViewSet):
         if plan.organization_id != student.organization_id:
             raise PermissionDenied('No puedes asignar un plan de otra organización.')
 
-        from core.services.plans import activate_student_plan
-        assigned = activate_student_plan(
-            student=student,
-            plan=plan,
-            start_date=validated['start_date'],
-            discount_percentage=validated['discount_percentage'],
-        )
+        if payment['method'] == StudentPlanAssignPaymentSerializer.METHOD_MANUAL:
+            # Invariante `manual ⟹ final_price > 0`: en `_payment_status` (services/plans.py)
+            # FREE gana sobre PAID cuando el precio de venta es 0. Un `ManualPayment` colgado
+            # de una fila así registraría un cobro real que la regla de 8.2 igual derivaría
+            # `free` — un pago invisible para el propio eje que se supone lo refleja.
+            #
+            # Vive ACÁ, DESPUÉS de las tres guardas cross-org de arriba, y no en
+            # `StudentPlanAssignSerializer.validate()`: ese `validate()` corre en
+            # `serializer.is_valid()`, que en esta view pasa ANTES de esas guardas. Comparar
+            # el precio del `plan` ahí adentro filtraría por el STATUS CODE si el plan fuera
+            # de otra organización -400 "la venta queda en $0" si vale 0, 403 recién acá si no-,
+            # un oráculo de precios de otro tenant con ids autoincrementales y adivinables
+            # (la misma clase de agujero que 8.2 cerró en `ManualPaymentCreateView`). Puesta
+            # acá, cualquier plan que no sea del actor ya cortó con 403 antes de llegar a esta
+            # comparación, así que el precio ajeno nunca se filtra por el código de respuesta.
+            if float(plan.price) <= 0 or validated['discount_percentage'] >= 100:
+                raise ValidationError({
+                    'payment': (
+                        'Con este precio y descuento la venta queda en $0: usá '
+                        '`payment.method: "free"` en vez de "manual".'
+                    ),
+                })
+
+        from core.services.plans import PlanOrganizationMismatch, activate_student_plan
+        try:
+            # Un solo atomic para las DOS escrituras: si `record_manual_payment` revienta, el
+            # INSERT de `activate_student_plan` tiene que deshacerse también -si no, la
+            # membresía queda viva sin el cobro que la vía "manual" prometía-. El try/except
+            # va POR FUERA del `with` para que la excepción dispare el rollback ANTES de
+            # mapearse a una respuesta HTTP: mapear adentro dejaría el `with` saliendo por una
+            # ruta que no es una excepción sin resolver, y el rollback no ocurriría.
+            with transaction.atomic():
+                assigned = activate_student_plan(
+                    student=student,
+                    plan=plan,
+                    start_date=validated['start_date'],
+                    discount_percentage=validated['discount_percentage'],
+                )
+                if payment['method'] == StudentPlanAssignPaymentSerializer.METHOD_MANUAL:
+                    # Nombre MÓDULO-GLOBAL (`core.views.record_manual_payment`, importado
+                    # arriba) y no un import local: un import local resolvería el nombre en el
+                    # scope de la función y el monkeypatch de test sobre `core.views.*` no lo
+                    # interceptaría.
+                    record_manual_payment(
+                        student_plan=assigned,
+                        amount=payment['amount'],
+                        reference=payment.get('reference', ''),
+                        # NUNCA del payload: el actor y su organización, y nada más (mismo
+                        # criterio que `ManualPaymentCreateView`).
+                        recorded_by=user,
+                        organization=user.organization,
+                    )
+        except PlanOrganizationMismatch:
+            # Inalcanzable HOY: las tres guardas de arriba ya garantizan
+            # `plan.organization_id == student.organization_id` (y, si el actor es gym_admin,
+            # también == la suya) antes de llegar a `activate_student_plan`. Queda como red
+            # por si un refactor futuro afloja alguna de esas guardas: sin este `except`, la
+            # excepción de dominio del servicio saldría como 500 en vez de negar el acceso.
+            raise PermissionDenied('El plan no pertenece a la organización del alumno.')
+        except ManualPaymentOrganizationMismatch:
+            # Inalcanzable HOY: la membresía la creamos nosotros en esta misma request, con la
+            # organización del PLAN -que las guardas de arriba ya igualaron a la del alumno y,
+            # si el actor es gym_admin, a la suya-. Queda como red por si un refactor futuro
+            # rompe esa cadena. El mapeo es 403 y no 404 (a diferencia de
+            # `ManualPaymentCreateView`) porque acá NO viaja ningún id de membresía en el
+            # body -la creamos nosotros mismos-, así que no hay ningún oráculo de ids que un
+            # 403 pueda revelar.
+            raise PermissionDenied(
+                'La membresía no pertenece a la organización que registra el pago.'
+            )
+        except DjangoValidationError as exc:
+            # Mismo mapeo que `ManualPaymentCreateView` (views.py:3654-3660): `full_clean()`
+            # del servicio levanta la excepción de Django, que DRF no traduce, y sin este
+            # `except` saldría 500.
+            raise ValidationError(
+                exc.message_dict if hasattr(exc, 'message_dict') else {'detail': exc.messages}
+            )
+
         return Response(StudentPlanSerializer(assigned).data, status=status.HTTP_201_CREATED)
 
     @action(detail=False, methods=['get'], url_path='my-plan')
