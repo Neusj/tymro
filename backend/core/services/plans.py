@@ -40,10 +40,12 @@ class PlanStatus:
     """Estados derivados de una membresía. Vocabulario definido en el backend.
 
     Los cinco primeros son los que ya existían repartidos entre el serializer y el roster.
-    `EXHAUSTED` y `ENROLLMENT_FEE_UNPAID` son nuevos acá: hasta ahora esas dos condiciones
-    solo se evaluaban dentro del validador de reservas, que las convertía en una excepción
-    en vez de en un estado, así que ningún lector podía distinguir "vigente" de "vigente
-    pero sin clases".
+    `EXHAUSTED` es nuevo acá: hasta ahora esa condición solo se evaluaba dentro del
+    validador de reservas, que la convertía en una excepción en vez de en un estado, así que
+    ningún lector podía distinguir "vigente" de "vigente pero sin clases". La matrícula
+    impaga YA NO es un estado de vigencia (8.4): la decisión de producto es que es SOLO
+    INFORMATIVA, así que pasó al eje ortogonal `EnrollmentFeeStatus`, espejo de
+    `PlanPaymentStatus`.
     """
 
     NO_PLAN = 'no_plan'
@@ -51,15 +53,13 @@ class PlanStatus:
     UPCOMING = 'upcoming'
     INACTIVE = 'inactive'
     EXHAUSTED = 'exhausted'
-    ENROLLMENT_FEE_UNPAID = 'enrollment_fee_unpaid'
     ACTIVE = 'active'
 
 
-# Código de negocio del bloqueo. Coincide con los `code` que ya devolvía
+# Código de negocio del bloqueo. Coincide con el `code` que ya devolvía
 # `ReservationRuleError` para que el estado unificado pueda alimentar al validador de
-# reservas sin cambiarle a la API los códigos de error que el frontend ya maneja.
+# reservas sin cambiarle a la API el código de error que el frontend ya maneja.
 REASON_PLAN_UNAVAILABLE = 'plan_unavailable'
-REASON_ENROLLMENT_FEE_UNPAID = 'enrollment_fee_unpaid'
 
 _LABELS = {
     PlanStatus.NO_PLAN: 'Sin plan',
@@ -67,7 +67,6 @@ _LABELS = {
     PlanStatus.UPCOMING: 'Por iniciar',
     PlanStatus.INACTIVE: 'Inactivo',
     PlanStatus.EXHAUSTED: 'Sin clases disponibles',
-    PlanStatus.ENROLLMENT_FEE_UNPAID: 'Matrícula impaga',
     PlanStatus.ACTIVE: 'Vigente',
 }
 
@@ -91,6 +90,24 @@ class PlanPaymentStatus:
     FREE = 'free'
 
 
+class EnrollmentFeeStatus:
+    """EJE DE MATRÍCULA. Vocabulario SEPARADO del de vigencia (`PlanStatus`), espejo exacto
+    de `PlanPaymentStatus` (8.4): si la matrícula está pagada es una pregunta aparte de si
+    la membresía sirve hoy, y las combinaciones son libres —`active` + `pending` es el caso
+    común del alumno que todavía no pagó su matrícula y de todos modos puede reservar—. Meter
+    esto dentro de `PlanStatus` era justo el bug que este eje resuelve: obligaba a elegir
+    entre publicar la vigencia o la deuda de matrícula y perdía la otra.
+
+    Son los MISMOS cuatro strings que el serializer ya publicaba antes de 8.4: el wire no
+    cambia, solo la fuente que decide cuál de los cuatro corresponde.
+    """
+
+    WAIVED = 'waived'    # enrollment_fee <= 0: no hay matrícula que cobrar
+    PAID = 'paid'
+    PENDING = 'pending'  # impaga, sin vencer (due_at NULL o >= on_date)
+    OVERDUE = 'overdue'  # impaga y vencida (due_at < on_date)
+
+
 class AlertLevel:
     """Severidad del aviso. Es lo ÚNICO que la UI traduce a color; el texto ya viene hecho.
 
@@ -106,18 +123,15 @@ class AlertLevel:
     EXPIRED = 'expired'
 
 
-# Aviso de los estados que no dependen de la fecha. `EXHAUSTED` y `ENROLLMENT_FEE_UNPAID`
-# reusan su etiqueta: el motivo del bloqueo ES el mensaje. Antes caían en el `else` de cada
-# presentador y salían como "12 dias vigentes", que es lo contrario de lo que pasa.
+# Aviso de los estados que no dependen de la fecha. `EXHAUSTED` reusa su etiqueta: el motivo
+# del bloqueo ES el mensaje. Antes caía en el `else` de cada presentador y salía como "12
+# dias vigentes", que es lo contrario de lo que pasa.
 _STATIC_ALERTS = {
     PlanStatus.NO_PLAN: (AlertLevel.NEUTRAL, 'Sin plan vigente'),
     PlanStatus.EXPIRED: (AlertLevel.EXPIRED, _LABELS[PlanStatus.EXPIRED]),
     PlanStatus.UPCOMING: (AlertLevel.SAFE, _LABELS[PlanStatus.UPCOMING]),
     PlanStatus.INACTIVE: (AlertLevel.NEUTRAL, 'No vigente'),
     PlanStatus.EXHAUSTED: (AlertLevel.DANGER, _LABELS[PlanStatus.EXHAUSTED]),
-    PlanStatus.ENROLLMENT_FEE_UNPAID: (
-        AlertLevel.DANGER, _LABELS[PlanStatus.ENROLLMENT_FEE_UNPAID],
-    ),
 }
 
 
@@ -161,6 +175,11 @@ class StudentPlanState:
     alert_level: str
     alert_message: str
     payment_status: Optional[str] = None
+    # ORTOGONAL, espejo exacto de `payment_status` (8.4): no entra en `usable` ni en
+    # `reason_code`. La matrícula impaga NO bloquea —si alguna vez tiene que bloquear, es una
+    # decisión de producto que se toma aparte y se escribe acá arriba, no un efecto colateral
+    # de publicar el campo.
+    enrollment_fee_status: Optional[str] = None
 
     @property
     def passes_valid_on(self):
@@ -168,8 +187,8 @@ class StudentPlanState:
 
         Las dos mitades del predicado tienen que coincidir: si esto se separa de `valid_on`,
         vuelve la incoherencia entre lo que el queryset selecciona y lo que el estado dice.
-        `EXHAUSTED` y `ENROLLMENT_FEE_UNPAID` pasan `valid_on` —el filtro no mira saldo ni
-        matrícula—; `INACTIVE` no, porque tiene el flag apagado.
+        `EXHAUSTED` pasa `valid_on` —el filtro no mira saldo—; `INACTIVE` no, porque tiene el
+        flag apagado.
         """
         return self.status in _PASSES_VALID_ON_STATUSES
 
@@ -177,13 +196,14 @@ class StudentPlanState:
 _PASSES_VALID_ON_STATUSES = frozenset({
     PlanStatus.ACTIVE,
     PlanStatus.EXHAUSTED,
-    PlanStatus.ENROLLMENT_FEE_UNPAID,
 })
 
 # 7.3 quitó `_WIRE_STATUS`, que proyectaba `EXHAUSTED` y `ENROLLMENT_FEE_UNPAID` a `active`
 # antes de publicarlos. El colapso existía para no romper a los consumidores, que trataban
-# todo lo que no era `active` como vencido; ahora los cuatro leen la etiqueta y el aviso que
-# vienen de acá, así que el wire publica los siete estados tal cual.
+# todo lo que no era `active` como vencido; ahora leen la etiqueta y el aviso que vienen de
+# acá, así que el wire publica los seis estados de vigencia tal cual. La matrícula, desde
+# 8.4, ya no es uno de ellos: salió del vocabulario entero, es el eje aparte
+# `enrollment_fee_status`.
 
 
 def _remaining_classes(student_plan):
@@ -261,15 +281,29 @@ def _payment_status(student_plan):
     return PlanPaymentStatus.UNPAID
 
 
+def _enrollment_fee_status(student_plan, on_date):
+    """Eje de matrícula de UNA membresía en `on_date`. Espejo de `_payment_status` (8.4).
+
+    FUENTE ÚNICA que reemplaza al cálculo que el serializer hacía por su cuenta contra
+    `timezone.localdate()`: acá SIEMPRE se deriva de `on_date`, la MISMA fecha que resuelve
+    el resto del estado, para que `describe_student_plan(sp, on_date)` no pueda contradecir
+    a lo que pinta el serializer (la contradicción que este eje viene a matar).
+    """
+    fee = student_plan.enrollment_fee or 0
+    if fee <= 0:
+        return EnrollmentFeeStatus.WAIVED
+    if student_plan.enrollment_fee_paid_at:
+        return EnrollmentFeeStatus.PAID
+    due = student_plan.enrollment_fee_due_at
+    if due and due < on_date:
+        return EnrollmentFeeStatus.OVERDUE
+    return EnrollmentFeeStatus.PENDING
+
+
 def _state(status, *, expiry_date=None, days_to_expiry=None, remaining_classes=None,
-           payment_status=None):
+           payment_status=None, enrollment_fee_status=None):
     usable = status == PlanStatus.ACTIVE
-    if usable:
-        reason_code = None
-    elif status == PlanStatus.ENROLLMENT_FEE_UNPAID:
-        reason_code = REASON_ENROLLMENT_FEE_UNPAID
-    else:
-        reason_code = REASON_PLAN_UNAVAILABLE
+    reason_code = None if usable else REASON_PLAN_UNAVAILABLE
     alert_level, alert_message = _plan_alert(status, days_to_expiry)
     return StudentPlanState(
         status=status,
@@ -285,15 +319,22 @@ def _state(status, *, expiry_date=None, days_to_expiry=None, remaining_classes=N
         # alguna vez tiene que bloquear, es una decisión de producto que se toma aparte y se
         # escribe acá arriba, no un efecto colateral de publicar el campo.
         payment_status=payment_status,
+        # ORTOGONAL, espejo exacto de `payment_status` (8.4): no entra en `usable` ni en
+        # `reason_code`. La matrícula impaga NO bloquea —si alguna vez tiene que bloquear, es
+        # una decisión de producto que se toma aparte y se escribe acá arriba, no un efecto
+        # colateral de publicar el campo.
+        enrollment_fee_status=enrollment_fee_status,
     )
 
 
 def describe_student_plan(student_plan: Optional[StudentPlan], on_date: date) -> StudentPlanState:
     """Estado derivado de `student_plan` en `on_date`. FUENTE ÚNICA del predicado.
 
-    Reemplaza a las cinco copias del predicado que había en el backend y les suma las dos
-    mitades que solo vivían dentro de `validate_student_plan_for_reservation`: el saldo y la
-    matrícula.
+    Reemplaza a las cinco copias del predicado que había en el backend y le suma el saldo,
+    que hasta 7.2 solo vivía dentro de `validate_student_plan_for_reservation`. La matrícula
+    NO entra acá desde 8.4: la decisión de producto es que es SOLO INFORMATIVA, así que se
+    resuelve como el eje aparte `enrollment_fee_status` (ver más abajo), nunca como una rama
+    de este predicado.
 
     ORDEN DE PRECEDENCIA (importa): las FECHAS deciden primero y `is_active` después. Es el
     orden que ya usaban los dos presentadores, y es el único que hace que el estado no
@@ -303,9 +344,9 @@ def describe_student_plan(student_plan: Optional[StudentPlan], on_date: date) ->
     membresía vencida es `EXPIRED` sin importar cómo quedó el flag; dentro de la ventana, el
     flag conserva su único sentido defendible: "dada de baja".
 
-    El estado de PAGO (`payment_status`) viaja en el mismo objeto pero es un EJE APARTE: no
-    participa de esta cadena de precedencia ni la altera. `active` + `unpaid` es una
-    combinación válida y usable.
+    El estado de PAGO (`payment_status`) y el de MATRÍCULA (`enrollment_fee_status`) viajan
+    en el mismo objeto pero son EJES APARTE: no participan de esta cadena de precedencia ni
+    la alteran. `active` + `unpaid` + `pending` es una combinación válida y usable.
 
     `on_date` es OBLIGATORIO: ver `StudentPlanQuerySet.valid_on`.
 
@@ -318,10 +359,11 @@ def describe_student_plan(student_plan: Optional[StudentPlan], on_date: date) ->
     if student_plan.end_date:
         days_to_expiry = (student_plan.end_date - on_date).days
     remaining = _remaining_classes(student_plan)
-    # Se resuelve UNA vez y fuera de las ramas: el eje de pago no depende de la vigencia, así
-    # que calcularlo dentro de cada `return` invitaría a que alguna rama lo omitiera y el
-    # campo apareciera y desapareciera según el estado.
+    # Se resuelven UNA vez y fuera de las ramas: ninguno de los dos ejes depende de la
+    # vigencia, así que calcularlos dentro de cada `return` invitaría a que alguna rama los
+    # omitiera y el campo apareciera y desapareciera según el estado.
     payment_status = _payment_status(student_plan)
+    enrollment_fee_status = _enrollment_fee_status(student_plan, on_date)
 
     def build(status):
         return _state(
@@ -330,6 +372,7 @@ def describe_student_plan(student_plan: Optional[StudentPlan], on_date: date) ->
             days_to_expiry=days_to_expiry,
             remaining_classes=remaining,
             payment_status=payment_status,
+            enrollment_fee_status=enrollment_fee_status,
         )
 
     if student_plan.end_date and student_plan.end_date < on_date:
@@ -340,12 +383,6 @@ def describe_student_plan(student_plan: Optional[StudentPlan], on_date: date) ->
         return build(PlanStatus.INACTIVE)
     if not student_plan.unlimited_classes and (student_plan.classes_used or 0) >= (student_plan.total_classes or 0):
         return build(PlanStatus.EXHAUSTED)
-    if (
-        student_plan.enrollment_fee
-        and student_plan.enrollment_fee > 0
-        and not student_plan.enrollment_fee_paid_at
-    ):
-        return build(PlanStatus.ENROLLMENT_FEE_UNPAID)
     return build(PlanStatus.ACTIVE)
 
 

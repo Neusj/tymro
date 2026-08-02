@@ -2,12 +2,14 @@
 
 7.2 dejo el predicado en `describe_student_plan`, pero la PRESENTACION seguia partida en
 dos: `StudentPlanSerializer` y `_plan_status_payload` del roster re-ramificaban cada uno
-sobre el string del estado, y el wire colapsaba `exhausted` y `enrollment_fee_unpaid` a
-`active` para no romper a los consumidores.
+sobre el string del estado, y el wire colapsaba `exhausted` a `active` para no romper a los
+consumidores. (La matricula impaga aparecia acá como estado de vigencia —
+`enrollment_fee_unpaid`— hasta 8.4, que la sacó del todo del vocabulario: es dato SOLO
+INFORMATIVO, eje aparte `enrollment_fee_status`; ver `test_enrollment_fee_informative.py`.)
 
 Este archivo fija las tres consecuencias de cerrar eso:
 
-1. El wire publica los siete estados sin colapsar.
+1. El wire publica los seis estados sin colapsar.
 2. Los dos presentadores derivan (alert_level, alert_message) de la MISMA funcion, asi que
    no pueden volver a divergir.
 3. El roster deja de ofrecer "inscribir" a quien la reserva va a rechazar, y dice POR QUE.
@@ -109,15 +111,19 @@ def test_serializer_publishes_exhausted_instead_of_active(student_with_plan):
     assert data['validity_status_label'] == 'Sin clases disponibles'
 
 
-def test_serializer_publishes_enrollment_fee_unpaid_instead_of_active(student_with_plan):
-    """Matricula impaga deja de disfrazarse de `active` en `validity_status`."""
+def test_serializer_no_longer_disguises_unpaid_enrollment_fee_as_a_validity_state(
+        student_with_plan):
+    """8.4: la matricula impaga ya NO tiene un estado de vigencia propio (era
+    `enrollment_fee_unpaid`). Es dato solo informativo en su eje aparte
+    (`enrollment_fee_status`); `validity_status` la ignora por completo."""
     org, student, plan = student_with_plan
     membership = _membership(student, plan, classes_used=2, enrollment_fee=15000)
 
     data = StudentPlanSerializer(membership).data
 
-    assert data['validity_status'] == 'enrollment_fee_unpaid'
-    assert data['validity_status_label'] == 'Matrícula impaga'
+    assert data['validity_status'] == 'active'
+    assert data['validity_status_label'] == 'Vigente'
+    assert data['enrollment_fee_status']['status'] == 'pending'
 
 
 def test_roster_publishes_exhausted_instead_of_active(api_client, roster):
@@ -157,14 +163,17 @@ def test_exhausted_alert_stops_reading_like_a_vigente_countdown(student_with_pla
     assert data['expiry_alert_message'] == 'Sin clases disponibles'
 
 
-def test_enrollment_fee_unpaid_alert_names_the_matricula(student_with_plan):
+def test_unpaid_enrollment_fee_no_longer_produces_a_static_alert(student_with_plan):
+    """8.4: ya no existe el alert estático 'Matrícula impaga' (danger). La matrícula es
+    solo informativa, así que el aviso de vigencia sale de las fechas de la membresía, como
+    cualquier otra membresía activa."""
     org, student, plan = student_with_plan
     membership = _membership(student, plan, classes_used=2, enrollment_fee=15000)
 
     data = StudentPlanSerializer(membership).data
 
-    assert data['expiry_alert_level'] == 'danger'
-    assert data['expiry_alert_message'] == 'Matrícula impaga'
+    assert data['expiry_alert_level'] == 'safe'
+    assert data['expiry_alert_message'] == '20 dias vigentes'
 
 
 def test_roster_exhausted_alert_stops_saying_dias_vigentes(api_client, roster):
@@ -258,27 +267,26 @@ def test_every_status_has_an_alert():
 
 
 # --------------------------------------------------------------------------------------
-# 3. El roster deja de ofrecer lo que la reserva rechaza, y dice por que
+# 3. El roster deja de ofrecer lo que la reserva rechaza (saldo agotado), y dice por que.
+#    La matricula impaga YA NO rechaza nada (8.4): se ofrece igual que pagada.
 # --------------------------------------------------------------------------------------
 
-def test_unpaid_enrollment_fee_is_not_offered_for_enrollment(api_client, roster):
-    """Se ofrecia inscribir y el POST devolvia 400 'Debes pagar la matricula'.
-
-    El saldo se sigue informando tal cual (8 clases existen de verdad); lo que cambia es
-    que la membresia no se ofrece como inscribible.
-    """
+def test_unpaid_enrollment_fee_is_also_offered_for_enrollment(api_client, roster):
+    """8.4: antes esto se ofrecia y el POST devolvia 400 'Debes pagar la matricula'; ese
+    codigo de error ya no existe (`test_enrollment_fee_informative.py` lo cubre). La
+    matricula impaga se ofrece exactamente igual que pagada."""
     plan = _plan(roster['org'], name='Pack 10', total_classes=10)
     _membership(roster['candidate'], plan, classes_used=2, enrollment_fee=15000)
 
     row = _roster_row(api_client, roster, endpoint='enrollable-students')
 
-    assert row['has_available_classes'] is False
+    assert row['has_available_classes'] is True
     assert row['available_classes'] == 8
-    assert row['plan_status'] == 'enrollment_fee_unpaid'
+    assert row['plan_status'] == 'active'
 
 
 def test_paid_enrollment_fee_is_still_offered(api_client, roster):
-    """Contraprueba del anterior: pagar la matricula vuelve a habilitar la inscripcion."""
+    """Sigue siendo valido tras 8.4: pagada u impaga, la matricula no cambia la oferta."""
     plan = _plan(roster['org'], name='Pack 10', total_classes=10)
     _membership(
         roster['candidate'], plan, classes_used=2, enrollment_fee=15000,
@@ -292,14 +300,14 @@ def test_paid_enrollment_fee_is_still_offered(api_client, roster):
     assert row['plan_status'] == 'active'
 
 
-def test_unlimited_membership_with_unpaid_fee_is_not_offered(api_client, roster):
-    """El atajo de `unlimited_classes` tambien tiene que respetar la matricula."""
+def test_unlimited_membership_with_unpaid_fee_is_offered(api_client, roster):
+    """El atajo de `unlimited_classes` tambien deja de depender de la matricula (8.4)."""
     plan = _plan(roster['org'], name='Full', total_classes=0, unlimited=True)
     _membership(roster['candidate'], plan, enrollment_fee=15000)
 
     row = _roster_row(api_client, roster, endpoint='enrollable-students')
 
-    assert row['has_available_classes'] is False
+    assert row['has_available_classes'] is True
     assert row['unlimited_classes'] is True
 
 
@@ -307,14 +315,16 @@ def test_unlimited_membership_with_unpaid_fee_is_not_offered(api_client, roster)
     'kwargs,expected_reason',
     [
         ({'classes_used': 2}, None),
-        ({'classes_used': 2, 'enrollment_fee': 15000}, 'enrollment_fee_unpaid'),
+        # La matricula impaga ya no es una razon de bloqueo (8.4): mismo `None` que un plan
+        # sin matricula.
+        ({'classes_used': 2, 'enrollment_fee': 15000}, None),
         ({'classes_used': 10}, 'plan_unavailable'),
         ({'start_offset': -40, 'end_offset': -10}, 'plan_unavailable'),
     ],
 )
 def test_roster_reason_code_distinguishes_why_the_plan_blocks(api_client, roster, kwargs,
                                                               expected_reason):
-    """Sin esto la UI dice 'sin clases disponibles' a quien tiene 8 clases y debe matricula."""
+    """Sin esto la UI dice 'sin clases disponibles' a quien en realidad esta sin saldo."""
     plan = _plan(roster['org'], name='Pack 10', total_classes=10)
     _membership(roster['student'], plan, **kwargs)
 
@@ -324,35 +334,41 @@ def test_roster_reason_code_distinguishes_why_the_plan_blocks(api_client, roster
 
 
 # --------------------------------------------------------------------------------------
-# 4. La matricula impaga es un dato financiero: el monitor no lo recibe
+# 4. El saldo agotado es la unica causa que redacta `plan_status`; el monitor no la recibe.
+#    Hasta 8.3 la matricula impaga era la otra causa: 8.4 la sacó del todo (es informativa,
+#    eje aparte `plan_enrollment_fee_status`, cubierto en `test_enrollment_fee_informative.py`).
 # --------------------------------------------------------------------------------------
 
 @pytest.mark.parametrize('actor', ['admin', 'manager', 'teacher'])
 def test_financial_readers_get_the_whole_payload(api_client, roster, actor):
-    """gym_admin, manager y el profe de la clase ya podian inferirlo intentando inscribir:
-    el POST devuelve 'Debes pagar la matricula...'. Para ellos el dato no agrega capacidad,
-    solo les evita el intento fallido, asi que reciben el payload entero."""
+    """8.4: la matricula impaga ya no es un motivo de bloqueo, asi que ya no hay nada que
+    inferir intentando inscribir. Los lectores financieros ven exactamente lo que hay: un
+    plan `active` con su aviso de vigencia normal."""
     plan = _plan(roster['org'], name='Pack 10', total_classes=10)
     _membership(roster['student'], plan, classes_used=2, enrollment_fee=15000)
 
     row = _roster_row(api_client, roster, actor=actor)
 
-    assert row['plan_status'] == 'enrollment_fee_unpaid'
-    assert row['plan_status_label'] == 'Matrícula impaga'
-    assert row['plan_expiry_alert_message'] == 'Matrícula impaga'
-    assert row['plan_reason_code'] == 'enrollment_fee_unpaid'
+    assert row['plan_status'] == 'active'
+    assert row['plan_status_label'] == 'Vigente'
+    assert row['plan_expiry_alert_message'] == '20 dias vigentes'
+    assert row['plan_reason_code'] is None
 
 
 def test_monitor_never_receives_the_financial_fact(api_client, roster):
     """El monitor lee el roster pero NO puede inscribir, asi que no tenia el oraculo del 400.
 
-    `FinancialResourcePermission` le niega la superficie financiera; publicarle la deuda del
-    alumno en una superficie operativa seria darle un dato que la politica del proyecto
-    trata como financiero. Se redactan los CUATRO campos: degradar solo `plan_reason_code`
-    dejaba el hecho en `plan_status_label` y en el mensaje, que es justo lo que la UI pinta.
+    `FinancialResourcePermission` le niega la superficie financiera; publicarle el motivo de
+    un bloqueo vigente-pero-inutilizable en una superficie operativa seria darle un dato que
+    la politica del proyecto trata como financiero. Se redactan los CUATRO campos: degradar
+    solo `plan_reason_code` dejaba el hecho en `plan_status_label` y en el mensaje, que es
+    justo lo que la UI pinta.
+
+    Desde 8.4 la unica causa que llega aca es el SALDO agotado: la matricula impaga dejo de
+    bloquear, asi que no hay nada de ella que redactar por esta via.
     """
-    plan = _plan(roster['org'], name='Pack 10', total_classes=10)
-    _membership(roster['student'], plan, classes_used=2, enrollment_fee=15000)
+    plan = _plan(roster['org'], name='Pack 4', total_classes=4)
+    _membership(roster['student'], plan, classes_used=4)
 
     row = _roster_row(api_client, roster, actor='monitor')
 
@@ -364,25 +380,6 @@ def test_monitor_never_receives_the_financial_fact(api_client, roster):
     # Y en ningun campo del row sobrevive el rastro del dato financiero.
     assert 'matr' not in str(row).lower()
     assert 'enrollment_fee' not in str(row)
-
-
-def test_monitor_cannot_tell_unpaid_fee_from_exhausted(api_client, roster):
-    """Sin esto la redaccion no redacta: si solo se ocultara la matricula, "No disponible"
-    seria sinonimo de deuda y el monitor lo inferiria por eliminacion. Los dos estados que
-    7.3 destapo —y que el monitor antes veia como `active`— caen al MISMO balde."""
-    plan = _plan(roster['org'], name='Pack 4', total_classes=4)
-    _membership(roster['student'], plan, classes_used=4)
-
-    exhausted_row = _roster_row(api_client, roster, actor='monitor')
-
-    StudentPlan.objects.all().delete()
-    _membership(roster['student'], plan, classes_used=1, enrollment_fee=15000)
-
-    unpaid_row = _roster_row(api_client, roster, actor='monitor')
-
-    for key in ('plan_status', 'plan_status_label', 'plan_expiry_alert_level',
-                'plan_expiry_alert_message', 'plan_reason_code'):
-        assert exhausted_row[key] == unpaid_row[key], key
 
 
 @pytest.mark.parametrize(
@@ -407,14 +404,18 @@ def test_monitor_keeps_seeing_the_non_financial_states(api_client, roster, kwarg
 
 
 def test_monitor_still_sees_that_the_plan_blocks(api_client, roster):
-    """Degradar el motivo no puede degradar el bloqueo: la UI del monitor sigue igual."""
-    plan = _plan(roster['org'], name='Pack 10', total_classes=10)
-    _membership(roster['candidate'], plan, classes_used=2, enrollment_fee=15000)
+    """Degradar el motivo no puede degradar el bloqueo: la UI del monitor sigue igual.
+
+    Ancla sobre SALDO agotado: desde 8.4 la matricula impaga ya no bloquea, asi que dejo
+    de servir para este caso (el bloqueo real que sobrevive es el saldo agotado).
+    """
+    plan = _plan(roster['org'], name='Pack 4', total_classes=4)
+    _membership(roster['candidate'], plan, classes_used=4)
 
     row = _roster_row(api_client, roster, endpoint='enrollable-students', actor='monitor')
 
     assert row['has_available_classes'] is False
-    assert row['available_classes'] == 8
+    assert row['available_classes'] == 0
 
 
 @pytest.mark.parametrize('actor', ['admin', 'manager', 'teacher', 'monitor'])

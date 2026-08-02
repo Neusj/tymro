@@ -473,13 +473,14 @@ def _plan_status_payload(state, *, expose_reason=True):
 
     `plan_reason_code` es el motivo maquina del bloqueo, con los mismos codigos que
     `ReservationRuleError`: sin el, la UI le dice "sin clases disponibles" a un alumno que
-    tiene 8 clases y lo unico que debe es la matricula.
+    tiene 8 clases y en realidad esta sin saldo. (La matricula, desde 8.4, ya NO es una causa
+    de bloqueo: es dato solo informativo y no aparece en este motivo.)
 
-    `expose_reason=False` REDACTA la membresia vigente-pero-inutilizable. La matricula
-    impaga es un dato FINANCIERO y este es un endpoint operativo. gym_admin, manager y el
-    profe de la clase la reciben entera porque ya podian inferirla: pueden POSTear la
-    inscripcion y el 400 les devuelve 'Debes pagar la matricula de tu plan antes de
-    reservar.'. El monitor no puede inscribir, asi que para el seria informacion nueva.
+    `expose_reason=False` REDACTA la membresia vigente-pero-inutilizable. Desde 8.4 la unica
+    causa que cae aca es el SALDO agotado —la matricula impaga dejo de bloquear, asi que ya
+    no hay nada de ella que redactar por esta via—. gym_admin, manager y el profe de la clase
+    reciben el motivo entero porque ya podian inferirlo intentando la inscripcion. El monitor
+    no puede inscribir, asi que para el seria informacion nueva.
 
     Se redactan los CUATRO campos juntos. Degradar solo `plan_reason_code` no alcanzaba: el
     hecho seguia viajando en `plan_status`, en `plan_status_label` y en el mensaje de alerta
@@ -488,18 +489,20 @@ def _plan_status_payload(state, *, expose_reason=True):
     El BLOQUEO se sigue viendo (`has_available_classes` sale de `is_usable`, que no depende
     de esto); lo que se oculta es la CAUSA.
 
-    `expose_reason` gobierna ADEMAS el eje de pago (`plan_payment_status`, 8.1), porque el
-    corte de lector es exactamente el mismo: todos menos monitor. Pero la redaccion del eje
-    de pago es INCONDICIONAL y por OMISION, y las dos diferencias son a proposito:
+    `expose_reason` gobierna ADEMAS los DOS ejes financieros ortogonales a la vigencia:
+    `plan_payment_status` (8.1) y `plan_enrollment_fee_status` (8.4), porque el corte de
+    lector es exactamente el mismo: todos menos monitor. Pero la redaccion de estos dos ejes
+    es INCONDICIONAL y por OMISION, y las dos diferencias son a proposito:
 
-    * Incondicional: `plan_status` solo delata algo financiero en dos de sus formas
-      (`exhausted`/`enrollment_fee_unpaid`), asi que se degrada solo ahi. `payment_status` ES
-      el dato financiero en las tres. Si se omitiera solo cuando el alumno debe, la AUSENCIA
-      del campo seria la deuda y el monitor la leeria igual.
+    * Incondicional: `plan_status` solo delata algo financiero en una de sus formas
+      (`exhausted`), asi que se degrada solo ahi. `payment_status` y `enrollment_fee_status`
+      SON el dato financiero en sus cuatro (o tres) valores. Si se omitieran solo cuando el
+      alumno debe, la AUSENCIA del campo seria la deuda y el monitor la leeria igual.
     * Por omision: 7.3 pudo degradar a un balde opaco ('No disponible') porque el vocabulario
       de vigencia tiene un valor neutro que publicar y porque la UI ya pintaba esos campos.
-      Aca los tres valores (`paid`/`unpaid`/`free`) son afirmaciones financieras —no existe
-      un neutro— y el campo es nuevo, asi que nada se rompe al no mandarlo.
+      Aca los valores de cada eje (`paid`/`unpaid`/`free`, `waived`/`paid`/`pending`/
+      `overdue`) son afirmaciones financieras —no existe un neutro— y los campos son nuevos,
+      asi que nada se rompe al no mandarlos: para el monitor el campo directamente NO EXISTE.
     """
     if not expose_reason and _is_redacted_for_non_financial(state):
         payload = {
@@ -521,6 +524,7 @@ def _plan_status_payload(state, *, expose_reason=True):
         }
     if expose_reason:
         payload['plan_payment_status'] = state.payment_status
+        payload['plan_enrollment_fee_status'] = state.enrollment_fee_status
     return payload
 
 
@@ -531,17 +535,19 @@ _REDACTED_PLAN_LABEL = 'No disponible'
 
 
 def _is_redacted_for_non_financial(state):
-    """Membresia DENTRO de su ventana pero inutilizable: saldo agotado o matricula impaga.
+    """Membresia DENTRO de su ventana pero inutilizable.
 
     Se deriva de las dos propiedades del estado en vez de enumerar estados, asi que un
-    estado futuro con la misma forma queda redactado sin tocar esto.
+    estado futuro con la misma forma queda redactado sin tocar esto. La FORMULA no cambio
+    con 8.4 —sigue siendo exactamente esta—, pero su POBLACION si: hasta 8.3 atrapaba dos
+    causas (saldo agotado y matricula impaga); con la matricula fuera del vocabulario de
+    vigencia (8.4, ya no bloquea, es dato solo informativo aparte), la unica causa que sigue
+    cayendo aca es el SALDO agotado. Es una consecuencia MECANICA de sacar
+    `ENROLLMENT_FEE_UNPAID` del vocabulario, no un cambio a mano de esta funcion.
 
-    Los DOS caen al mismo balde a proposito. Si solo se ocultara la matricula, "No
-    disponible" seria sinonimo de deuda y el monitor la inferiria por eliminacion; con los
-    dos juntos, "sin saldo" —que no es dato financiero— le da cobertura. Ademas es lo que el
-    monitor ya veia antes de 7.3, cuando el wire colapsaba los dos a `active`: no pierde
-    nada que tuviera. Los estados no financieros (vencido, por iniciar, inactivo, sin plan)
-    no entran, y se le siguen mostrando tal cual.
+    Es lo que el monitor ya veia antes de 7.3, cuando el wire colapsaba `exhausted` a
+    `active`: no pierde nada que tuviera. Los estados no financieros (vencido, por iniciar,
+    inactivo, sin plan) no entran, y se le siguen mostrando tal cual.
     """
     return state.passes_valid_on and not state.is_usable
 
@@ -560,10 +566,12 @@ def _may_see_plan_reason(user):
     estado financiero de una membresia tiene que repetir este corte a mano; apoyarse en la
     clase de permiso le entrega el dato al monitor sin que nada falle.
 
-    Desde 8.1 este mismo flag gobierna `plan_payment_status`. Que el `manager` lo reciba es
-    deliberado (misma regla que el motivo del bloqueo: puede inscribir), aunque tenga 403 en
-    `/api/plans/` y `/api/teacher-payments/`: el corte de este endpoint es operativo, no el
-    de la superficie financiera.
+    Desde 8.1 este mismo flag gobierna `plan_payment_status`, y desde 8.4 tambien
+    `plan_enrollment_fee_status`: los dos son dato financiero en TODOS sus valores y para el
+    monitor el campo directamente NO EXISTE. Que el `manager` los reciba es deliberado (misma
+    regla que el motivo del bloqueo: puede inscribir), aunque tenga 403 en `/api/plans/` y
+    `/api/teacher-payments/`: el corte de este endpoint es operativo, no el de la superficie
+    financiera.
     """
     return not _is_monitor(user)
 

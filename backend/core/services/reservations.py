@@ -6,11 +6,7 @@ from django.db.models.functions import Greatest
 from django.utils import timezone
 
 from ..models import ConsumptionLog, Enrollment, GymClass, StudentPlan
-from .plans import (
-    REASON_ENROLLMENT_FEE_UNPAID,
-    REASON_PLAN_UNAVAILABLE,
-    describe_student_plan,
-)
+from .plans import REASON_PLAN_UNAVAILABLE, describe_student_plan
 
 
 TERMINAL_CLASS_STATUSES = {
@@ -63,24 +59,25 @@ def get_active_student_plan(student, on_date=None):
 def validate_student_plan_for_reservation(student, on_date=None):
     """La membresía con la que el alumno puede reservar, o `ReservationRuleError`.
 
-    El saldo y la matrícula ya no se evalúan acá: los resuelve `describe_student_plan`, que
-    es la misma fuente que usan el roster y el serializer. Antes eran las dos únicas mitades
-    del predicado que existían en un solo lugar —este—, y por eso el roster podía ofrecer
-    clases que la reserva después rechazaba.
+    El saldo ya no se evalúa acá: lo resuelve `describe_student_plan`, que es la misma
+    fuente que usan el roster y el serializer. Antes era la única mitad del predicado que
+    existía en un solo lugar —este—, y por eso el roster podía ofrecer clases que la reserva
+    después rechazaba.
 
-    Los mensajes y los `code` no cambian: `reason_code` reproduce los mismos valores que esta
-    función ya devolvía (`plan_unavailable` / `enrollment_fee_unpaid`), que el frontend maneja.
+    La MATRÍCULA (8.4) tampoco se evalúa acá, pero no porque `describe_student_plan` la
+    resuelva en otro lado del predicado: es que la decisión de producto es que ya no bloquea
+    NADA. Es dato SOLO INFORMATIVO (`enrollment_fee_status`, eje aparte en la fuente única) y
+    reservar con matrícula impaga es un flujo válido. El código de error
+    `enrollment_fee_unpaid` deja de existir en la API de reservas.
+
+    El mensaje y el `code` que sí sobreviven no cambian: `reason_code` reproduce el mismo
+    valor que esta función ya devolvía (`plan_unavailable`), que el frontend maneja.
     """
     target_date = on_date or timezone.localdate()
     student_plan = get_active_student_plan(student, on_date=target_date)
     state = describe_student_plan(student_plan, target_date)
     if state.is_usable:
         return student_plan
-    if state.reason_code == REASON_ENROLLMENT_FEE_UNPAID:
-        raise ReservationRuleError(
-            'Debes pagar la matrícula de tu plan antes de reservar.',
-            code=REASON_ENROLLMENT_FEE_UNPAID,
-        )
     raise ReservationRuleError(
         'No tienes clases disponibles o plan activo', code=REASON_PLAN_UNAVAILABLE
     )

@@ -2,9 +2,10 @@
 
 Reemplaza a los dos bloques de lógica Python que etiquetaban el estado por separado
 —`StudentPlanSerializer.get_validity_status` y `_plan_status_payload` del roster— y les
-suma las dos mitades que hasta ahora solo existían dentro del validador de reservas: el
-SALDO (`unlimited_classes` / `classes_used` vs `total_classes`) y la MATRÍCULA
-(`enrollment_fee` impaga).
+suma la mitad que hasta ahora solo existía dentro del validador de reservas: el SALDO
+(`unlimited_classes` / `classes_used` vs `total_classes`). La MATRÍCULA (`enrollment_fee`
+impaga) YA NO es una rama de este predicado (8.4: es dato SOLO INFORMATIVO, eje aparte
+`enrollment_fee_status`).
 
 Que las cinco copias produzcan el mismo estado es el punto de la tarea. Que el estado no
 dependa del sentido que cada escritor le dio a `is_active` es el otro: el flag significa
@@ -99,16 +100,18 @@ def test_membership_that_has_not_started_is_upcoming(student_with_plan):
     assert state.is_usable is False
 
 
-def test_valid_membership_with_unpaid_enrollment_fee_is_blocked(student_with_plan):
-    """La otra mitad que solo vivía en el validador de reservas."""
+def test_valid_membership_with_unpaid_enrollment_fee_is_active_and_usable(student_with_plan):
+    """8.4: la matrícula impaga ya NO bloquea. Es dato solo informativo en su propio eje
+    (`enrollment_fee_status`); la vigencia no la ve."""
     _, student, plan = student_with_plan
     state = describe_student_plan(
         _membership(student, plan, enrollment_fee=15000, enrollment_fee_paid_at=None), TODAY
     )
-    assert state.status == PlanStatus.ENROLLMENT_FEE_UNPAID
-    assert state.label == 'Matrícula impaga'
-    assert state.reason_code == 'enrollment_fee_unpaid'
-    assert state.is_usable is False
+    assert state.status == PlanStatus.ACTIVE
+    assert state.label == 'Vigente'
+    assert state.reason_code is None
+    assert state.is_usable is True
+    assert state.enrollment_fee_status == 'pending'
 
 
 # --------------------------------------------------------------------------------------

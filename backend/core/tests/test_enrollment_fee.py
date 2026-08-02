@@ -1,8 +1,9 @@
 """Feature 3: matrícula (enrollment fee) por StudentPlan.
 
 La matrícula es individual del alumno (no global del plan): 0 = sin matrícula.
-Si es > 0 y no está pagada, bloquea las reservas. El vencimiento por defecto es
-un año desde la creación del StudentPlan.
+Es SOLO INFORMATIVA (8.4): impaga o vencida, NO bloquea las reservas; se muestra
+en su propio eje (`enrollment_fee_status`). El vencimiento por defecto es un año
+desde la creación del StudentPlan.
 """
 from datetime import timedelta
 from decimal import Decimal
@@ -12,7 +13,7 @@ from django.utils import timezone
 
 from core.models import Branch, GymClass, Plan, StudentPlan
 from core.serializers import StudentPlanSerializer
-from core.services.reservations import ReservationRuleError, reserve_student_in_class
+from core.services.reservations import reserve_student_in_class
 
 pytestmark = pytest.mark.django_db
 
@@ -65,12 +66,14 @@ def test_no_fee_leaves_due_at_null(setup):
     assert sp.enrollment_fee_due_at is None
 
 
-def test_reservation_blocked_when_fee_unpaid(setup):
+def test_reservation_allowed_when_fee_unpaid(setup):
+    """EL cambio de comportamiento de 8.4: antes esto levantaba `ReservationRuleError`
+    (code `enrollment_fee_unpaid`); ahora la matrícula es solo informativa y la reserva
+    se completa igual que si no hubiera matrícula."""
     _plan_with_fee(setup['org'], setup['student'], Decimal('50000'))
     gym_class = _future_class(setup['org'], setup['branch'], setup['teacher'])
-    with pytest.raises(ReservationRuleError) as exc:
-        reserve_student_in_class(student=setup['student'], gym_class=gym_class)
-    assert exc.value.code == 'enrollment_fee_unpaid'
+    enrollment = reserve_student_in_class(student=setup['student'], gym_class=gym_class)
+    assert enrollment.status == 'active'
 
 
 def test_reservation_allowed_when_fee_paid(setup):

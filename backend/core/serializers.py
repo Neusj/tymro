@@ -1472,15 +1472,18 @@ class StudentPlanSerializer(serializers.ModelSerializer):
         return max((obj.total_classes or 0) - (obj.classes_used or 0), 0)
 
     def get_enrollment_fee_status(self, obj):
-        fee = obj.enrollment_fee or 0
-        if fee <= 0:
-            return {'status': 'waived'}
-        if obj.enrollment_fee_paid_at:
-            return {'status': 'paid', 'paid_at': obj.enrollment_fee_paid_at.isoformat()}
-        due = obj.enrollment_fee_due_at
-        if due and timezone.localdate() > due:
-            return {'status': 'overdue', 'due_at': due.isoformat()}
-        return {'status': 'pending', 'due_at': due.isoformat() if due else None}
+        """PINTA desde la fuente única (8.4), no decide: `self._state(obj).enrollment_fee_status`
+        ya resolvió `waived`/`paid`/`pending`/`overdue`. Lo único que hace este método es
+        adjuntar la fecha que corresponde a CADA status —presentación mecánica—, para no
+        romper el dict de wire que el frontend ya lee (`enrollment_fee_status?.status`).
+        """
+        status = self._state(obj).enrollment_fee_status
+        if status == 'paid':
+            return {'status': status, 'paid_at': obj.enrollment_fee_paid_at.isoformat()}
+        if status in ('overdue', 'pending'):
+            due = obj.enrollment_fee_due_at
+            return {'status': status, 'due_at': due.isoformat() if due else None}
+        return {'status': status}
 
     def get_user_name(self, obj):
         if not obj.user:
@@ -1519,8 +1522,9 @@ class StudentPlanSerializer(serializers.ModelSerializer):
         return self._state(obj).days_to_expiry
 
     def get_validity_status(self, obj):
-        # Sin proyección: 7.3 quitó el colapso de `exhausted`/`enrollment_fee_unpaid` a
-        # `active`. Los consumidores ya no traducen el string, pintan `validity_status_label`.
+        # Sin proyección: 7.3 quitó el colapso de `exhausted` a `active` (8.4 después sacó
+        # `enrollment_fee_unpaid` del vocabulario entero: la matrícula ya no es un estado de
+        # vigencia). Los consumidores ya no traducen el string, pintan `validity_status_label`.
         return self._state(obj).status
 
     def get_validity_status_label(self, obj):

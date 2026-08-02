@@ -1,8 +1,8 @@
 """`payment_status` — EJE ORTOGONAL de pago en la fuente unica (8.1).
 
-`describe_student_plan` ya publicaba la VIGENCIA (active/expired/exhausted/
-enrollment_fee_unpaid/...). 8.1 le agrega un SEGUNDO eje, independiente: si esa membresia
-esta pagada o no. Son dos preguntas distintas sobre la misma fila y no se colapsan: un plan
+`describe_student_plan` ya publicaba la VIGENCIA (active/expired/exhausted/upcoming/
+inactive/no_plan). 8.1 le agrega un SEGUNDO eje, independiente: si esa membresia esta
+pagada o no. Son dos preguntas distintas sobre la misma fila y no se colapsan: un plan
 puede estar `active` Y `unpaid` a la vez, y eso NO lo vuelve inutilizable.
 
 Este archivo fija tres cosas:
@@ -298,7 +298,9 @@ def test_a_manual_payment_does_not_pay_a_different_membership(student_with_plan)
     [
         ({'classes_used': 2}, PlanStatus.ACTIVE),
         ({'classes_used': 10}, PlanStatus.EXHAUSTED),
-        ({'classes_used': 2, 'enrollment_fee': 15000}, PlanStatus.ENROLLMENT_FEE_UNPAID),
+        # La matricula impaga ya no es un estado de vigencia (8.4): deriva ACTIVE igual que
+        # la fila sin matricula, y viaja aparte en `enrollment_fee_status`.
+        ({'classes_used': 2, 'enrollment_fee': 15000}, PlanStatus.ACTIVE),
         ({'is_active': False}, PlanStatus.INACTIVE),
         ({'start_offset': 3, 'end_offset': 30}, PlanStatus.UPCOMING),
         ({'start_offset': -40, 'end_offset': -10}, PlanStatus.EXPIRED),
@@ -425,7 +427,8 @@ def test_an_unpaid_membership_is_still_usable(student_with_plan):
     [
         ({'classes_used': 2}, PlanStatus.ACTIVE),
         ({'classes_used': 10}, PlanStatus.EXHAUSTED),
-        ({'classes_used': 2, 'enrollment_fee': 15000}, PlanStatus.ENROLLMENT_FEE_UNPAID),
+        # Idem arriba: matricula impaga ya no es un estado de vigencia (8.4).
+        ({'classes_used': 2, 'enrollment_fee': 15000}, PlanStatus.ACTIVE),
         ({'is_active': False}, PlanStatus.INACTIVE),
         ({'start_offset': 3, 'end_offset': 30}, PlanStatus.UPCOMING),
         ({'start_offset': -40, 'end_offset': -10}, PlanStatus.EXPIRED),
@@ -434,7 +437,7 @@ def test_an_unpaid_membership_is_still_usable(student_with_plan):
 @pytest.mark.parametrize('final_price,paid', [(0, False), (30000, False), (30000, True)])
 def test_the_payment_axis_never_changes_the_validity_vocabulary(
         student_with_plan, kwargs, expected_status, final_price, paid):
-    """Los siete estados de vigencia salen igual con cualquier estado de pago.
+    """Los seis estados de vigencia salen igual con cualquier estado de pago.
 
     Es la contraprueba de que 8.1 agrego un eje y no un valor nuevo al vocabulario viejo.
     """
@@ -637,10 +640,15 @@ def test_redacting_the_payment_status_does_not_change_the_rest_of_the_roster(
 
 
 def test_the_monitor_redaction_of_7_3_still_holds(api_client, roster):
-    """Contraprueba de no-regresion: 8.1 no puede aflojar la redaccion que ya existia."""
-    plan = _plan(roster['org'], name='Pack 10')
-    _membership(roster['student'], plan, classes_used=2, enrollment_fee=15000,
-                final_price=30000)
+    """Contraprueba de no-regresion: 8.1 no puede aflojar la redaccion que ya existia.
+
+    Ancla sobre SALDO agotado y no sobre matricula: desde 8.4 la matricula impaga ya no
+    bloquea, asi que dejo de ser una de las causas redactadas (la unica que sobrevive es
+    el saldo agotado). Usar esa fixture aca daria un falso verde: la fila ya no se redacta
+    por matricula, se redactaria (o no) por una razon que este test no busca cubrir.
+    """
+    plan = _plan(roster['org'], name='Pack 4', total_classes=4)
+    _membership(roster['student'], plan, classes_used=4, final_price=30000)
 
     row = _roster_row(api_client, roster, actor='monitor')
 
