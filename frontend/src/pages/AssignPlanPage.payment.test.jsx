@@ -97,6 +97,87 @@ describe('AssignPlanPage — vía de pago', () => {
     expect(assignPlanToUser).not.toHaveBeenCalled()
   })
 
+  it('vía pago con conceptos adicionales: agrega filas y el payload manda payment.line_items bien formado', async () => {
+    renderPage()
+    await fillUserAndPlan()
+
+    await userEvent.type(screen.getByLabelText('Monto cobrado'), '20000')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Agregar concepto' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Agregar concepto' }))
+    await userEvent.type(screen.getByLabelText('Concepto 1'), 'Pesas')
+    await userEvent.type(screen.getByLabelText('Monto concepto 1'), '3000')
+    await userEvent.type(screen.getByLabelText('Concepto 2'), 'Toalla')
+    await userEvent.type(screen.getByLabelText('Monto concepto 2'), '2000')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Asignar plan' }))
+
+    await waitFor(() => expect(assignPlanToUser).toHaveBeenCalled())
+    const payload = assignPlanToUser.mock.calls[0][0]
+    expect(payload.payment).toEqual({
+      method: 'manual',
+      amount: '20000',
+      reference: '',
+      line_items: [
+        { concept: 'Pesas', amount: '3000' },
+        { concept: 'Toalla', amount: '2000' },
+      ],
+    })
+  })
+
+  it('vía pago: "Quitar" saca la fila y no viaja en el payload', async () => {
+    renderPage()
+    await fillUserAndPlan()
+
+    await userEvent.type(screen.getByLabelText('Monto cobrado'), '20000')
+    await userEvent.click(screen.getByRole('button', { name: 'Agregar concepto' }))
+    await userEvent.type(screen.getByLabelText('Concepto 1'), 'Pesas')
+    await userEvent.type(screen.getByLabelText('Monto concepto 1'), '3000')
+    await userEvent.click(screen.getByRole('button', { name: 'Quitar concepto 1' }))
+
+    await userEvent.click(screen.getByRole('button', { name: 'Asignar plan' }))
+
+    await waitFor(() => expect(assignPlanToUser).toHaveBeenCalled())
+    const payload = assignPlanToUser.mock.calls[0][0]
+    expect(Object.keys(payload.payment)).not.toContain('line_items')
+  })
+
+  it('vía pago con una fila a medio llenar (solo concepto o solo monto): no llama a la API y muestra el error', async () => {
+    renderPage()
+    await fillUserAndPlan()
+
+    await userEvent.type(screen.getByLabelText('Monto cobrado'), '20000')
+    await userEvent.click(screen.getByRole('button', { name: 'Agregar concepto' }))
+    await userEvent.type(screen.getByLabelText('Concepto 1'), 'Pesas')
+    // Monto concepto 1 queda vacío a propósito.
+
+    await userEvent.click(screen.getByRole('button', { name: 'Asignar plan' }))
+
+    expect(await screen.findByText(/cada concepto adicional/i)).toBeInTheDocument()
+    expect(assignPlanToUser).not.toHaveBeenCalled()
+  })
+
+  it('vía gratis: oculta "Conceptos adicionales" y descarta cualquier fila cargada antes de cambiar de vía', async () => {
+    renderPage()
+    await fillUserAndPlan()
+
+    // Carga una fila estando en la vía manual (default de gym_admin)...
+    await userEvent.click(screen.getByRole('button', { name: 'Agregar concepto' }))
+    await userEvent.type(screen.getByLabelText('Concepto 1'), 'Pesas')
+    await userEvent.type(screen.getByLabelText('Monto concepto 1'), '3000')
+
+    // ...y cambia a la vía gratis: la sección desaparece.
+    await userEvent.click(screen.getByRole('button', { name: 'Gratis (beca / cortesía)' }))
+    expect(screen.queryByText('Conceptos adicionales')).not.toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Asignar plan' }))
+
+    await waitFor(() => expect(assignPlanToUser).toHaveBeenCalled())
+    const payload = assignPlanToUser.mock.calls[0][0]
+    expect(payload.payment).toEqual({ method: 'free' })
+    expect(Object.keys(payload.payment)).not.toContain('line_items')
+  })
+
   it('superadmin: no ve "Registrar pago" y el submit manda payment.method=free', async () => {
     mockUser = { role: 'superadmin' }
     renderPage()

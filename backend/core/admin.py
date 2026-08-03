@@ -2,6 +2,7 @@ from django.contrib import admin
 from .models import (
     Attendance,
     Branch,
+    ChargeLineItem,
     ClassTemplate,
     ClassType,
     ConsumptionLog,
@@ -120,6 +121,36 @@ class ManualPaymentAdmin(admin.ModelAdmin):
     readonly_fields = (
         'organization', 'student_plan', 'amount', 'reference', 'recorded_by',
         'recorded_at', 'created_at', 'updated_at',
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(ChargeLineItem)
+class ChargeLineItemAdmin(admin.ModelAdmin):
+    """Desglose de conceptos extra cobrados junto a una membresía. SOLO LECTURA.
+
+    Misma lección que `ManualPaymentAdmin`: con plata de por medio, borrar o editar una
+    fila de acá cambiaría el desglose del cobro sin dejar rastro.
+    """
+
+    list_display = (
+        'student_plan', 'organization', 'concept', 'amount', 'created_by', 'created_at',
+    )
+    list_filter = ('organization',)
+    search_fields = (
+        'concept', 'student_plan__user__username', 'student_plan__user__email',
+    )
+    readonly_fields = (
+        'organization', 'student_plan', 'concept', 'amount', 'created_by',
+        'created_at', 'updated_at',
     )
 
     def has_add_permission(self, request):

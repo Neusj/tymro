@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { assignPlanToUser, getPlans, usersApi } from '../api/client'
 import DashboardHeader from '../components/DashboardHeader'
@@ -60,6 +60,10 @@ export default function AssignPlanPage() {
   const [paymentMethod, setPaymentMethod] = useState(isSuperadmin ? 'free' : 'manual')
   const [amount, setAmount] = useState('')
   const [reference, setReference] = useState('')
+  // Conceptos adicionales (#12): solo tienen sentido en la vía manual — el backend rechaza
+  // (400) `line_items` junto a un pago free, la misma incoherencia que `amount`/`reference`.
+  const [lineItems, setLineItems] = useState([])
+  const lineItemKeyRef = useRef(0)
 
   const [form, setForm] = useState({
     user: '',
@@ -78,6 +82,24 @@ export default function AssignPlanPage() {
     // Cambiar de via invalida el error mostrado (ej. "ingresa un monto" de la via pago
     // no tiene sentido si se pasa a gratis).
     setError('')
+    if (via === 'free') {
+      // Free es beca total: el backend rechaza (400) si viaja algún line_item, así que las
+      // filas cargadas se descartan al cambiar de vía (no solo se ocultan).
+      setLineItems([])
+    }
+  }
+
+  const addLineItem = () => {
+    lineItemKeyRef.current += 1
+    setLineItems((prev) => [...prev, { key: lineItemKeyRef.current, concept: '', amount: '' }])
+  }
+
+  const updateLineItem = (key, field, value) => {
+    setLineItems((prev) => prev.map((item) => (item.key === key ? { ...item, [field]: value } : item)))
+  }
+
+  const removeLineItem = (key) => {
+    setLineItems((prev) => prev.filter((item) => item.key !== key))
   }
 
   const selectedPlan = useMemo(() => plans.find((item) => String(item.id) === String(form.plan)), [plans, form.plan])
@@ -126,10 +148,32 @@ export default function AssignPlanPage() {
     }
     // Validacion de UX solamente: el 400 real (monto/reference/discount invalidos para la
     // via elegida) lo valida el backend y se muestra tal cual llega en el catch.
+    let validLineItems = []
     if (paymentVia === 'manual') {
       const amountNumber = Number(amount)
       if (amount === '' || !Number.isFinite(amountNumber) || amountNumber <= 0) {
         setError('Ingresa un monto válido, mayor a $0.')
+        return
+      }
+      // Filas completamente vacías (ej. una fila agregada y no usada) se ignoran en
+      // silencio; una fila con SOLO uno de los dos campos cargado es un dato a medio
+      // llenar y bloquea el envío igual que el monto principal arriba.
+      let hasInvalidLineItem = false
+      lineItems.forEach((item) => {
+        const conceptTrimmed = item.concept.trim()
+        const itemAmountNumber = Number(item.amount)
+        const isItemAmountValid = item.amount !== '' && Number.isFinite(itemAmountNumber) && itemAmountNumber > 0
+        if (!conceptTrimmed && !isItemAmountValid) {
+          return
+        }
+        if (!conceptTrimmed || !isItemAmountValid) {
+          hasInvalidLineItem = true
+          return
+        }
+        validLineItems.push({ concept: conceptTrimmed, amount: String(item.amount).trim() })
+      })
+      if (hasInvalidLineItem) {
+        setError('Cada concepto adicional necesita un texto y un monto mayor a $0.')
         return
       }
     }
@@ -149,10 +193,14 @@ export default function AssignPlanPage() {
       } else {
         payload.discount_percentage = discount
         payload.payment = { method: 'manual', amount: String(amount).trim(), reference: reference.trim() }
+        if (validLineItems.length > 0) {
+          payload.payment.line_items = validLineItems
+        }
       }
       await assignPlanToUser(payload)
       setNotice('Plan asignado correctamente.')
       setForm((prev) => ({ ...prev, user: '' }))
+      setLineItems([])
     } catch (apiError) {
       setError(firstApiError(apiError?.response?.data, 'No se pudo asignar el plan.'))
     } finally {
@@ -302,6 +350,61 @@ export default function AssignPlanPage() {
                   className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
                 />
               </label>
+              <div className="space-y-2 text-sm md:col-span-2">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="font-semibold text-brand-white">Conceptos adicionales</p>
+                    <p className="text-xs text-brand-muted">Cargos extra de esta venta (ej. pesas, toalla, matrícula manual).</p>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={working || lineItems.length >= 50}
+                    onClick={addLineItem}
+                    className="rounded-lg border border-brand-line px-2.5 py-1.5 text-xs font-semibold text-brand-white disabled:opacity-60"
+                  >
+                    Agregar concepto
+                  </button>
+                </div>
+                {lineItems.length === 0 ? (
+                  <p className="text-xs text-brand-muted">Sin conceptos adicionales.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {lineItems.map((item, index) => (
+                      <div key={item.key} className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          disabled={working}
+                          value={item.concept}
+                          onChange={(event) => updateLineItem(item.key, 'concept', event.target.value)}
+                          placeholder="Concepto (ej. pesas, toalla)"
+                          aria-label={`Concepto ${index + 1}`}
+                          className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
+                        />
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          disabled={working}
+                          value={item.amount}
+                          onChange={(event) => updateLineItem(item.key, 'amount', event.target.value)}
+                          placeholder="0"
+                          aria-label={`Monto concepto ${index + 1}`}
+                          className="w-28 shrink-0 rounded-lg border border-brand-line bg-black/30 px-3 py-2"
+                        />
+                        <button
+                          type="button"
+                          disabled={working}
+                          onClick={() => removeLineItem(item.key)}
+                          aria-label={`Quitar concepto ${index + 1}`}
+                          className="shrink-0 rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-xs text-red-200 disabled:opacity-60"
+                        >
+                          Quitar
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </>
           ) : null}
           <div className="rounded-lg border border-brand-line bg-black/20 px-3 py-2 text-sm">

@@ -201,6 +201,10 @@ class PaymentTransactionListView(ListAPIView):
         qs = (PaymentTransaction.objects
               .filter(organization_id=user.organization_id)
               .select_related('user', 'plan', 'student_plan')
+              # Espejo del `line_items` de PaymentTransactionAdminSerializer (#12): sin este
+              # prefetch, cada fila de la página dispara su propia query sobre
+              # `charge_line_items` al pedir el desglose.
+              .prefetch_related('student_plan__charge_line_items')
               .order_by('-created_at', '-id'))
 
         status_param = self.request.query_params.get('status')

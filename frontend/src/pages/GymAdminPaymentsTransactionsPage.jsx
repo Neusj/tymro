@@ -50,6 +50,31 @@ function formatMoney(amount, currency) {
   }
 }
 
+// Desglose (#12) de la celda "Concepto": antes mostraba el string binario `concept`
+// ("Plan: X" / "Matrícula" / "—"), que no podía representar más de un cargo por venta.
+// Ahora se arma en el front a partir de los montos ya separados que manda el backend
+// (`plan_amount`, `enrollment_fee_amount`, `line_items`); si ninguno aplica, cae al
+// `concept` legacy para no dejar la celda vacía en transacciones viejas o de MercadoPago.
+function conceptLines(tx) {
+  const lines = []
+  const planAmount = Number(tx.plan_amount)
+  if (Number.isFinite(planAmount) && planAmount > 0) {
+    lines.push(`Plan: ${tx.plan_name || 'Plan'} — ${formatMoney(planAmount, tx.currency)}`)
+  }
+  const feeAmount = Number(tx.enrollment_fee_amount)
+  if (Number.isFinite(feeAmount) && feeAmount > 0) {
+    lines.push(`Matrícula — ${formatMoney(feeAmount, tx.currency)}`)
+  }
+  const items = Array.isArray(tx.line_items) ? tx.line_items : []
+  items.forEach((item) => {
+    lines.push(`${item.concept} — ${formatMoney(item.amount, tx.currency)}`)
+  })
+  if (lines.length === 0) {
+    return [tx.concept || '—']
+  }
+  return lines
+}
+
 function StatusBadge({ status }) {
   const style = STATUS_STYLES[status] || 'border-brand-line bg-black/30 text-brand-muted'
   return (
@@ -160,7 +185,11 @@ export default function GymAdminPaymentsTransactionsPage() {
                       <div className="font-medium text-brand-white">{tx.student_name}</div>
                       <div className="text-xs text-brand-muted">{tx.student_email || tx.student_phone || '—'}</div>
                     </td>
-                    <td className="py-2 pr-3 text-brand-white">{tx.concept || '—'}</td>
+                    <td className="py-2 pr-3 text-brand-white">
+                      {conceptLines(tx).map((line, index) => (
+                        <div key={index} className={index === 0 ? '' : 'text-xs text-brand-muted'}>{line}</div>
+                      ))}
+                    </td>
                     <td className="py-2 pr-3 text-right font-medium text-brand-white">{formatMoney(tx.amount, tx.currency)}</td>
                     <td className="py-2 pr-3"><StatusBadge status={tx.status} /></td>
                     <td className="py-2 pr-3 text-brand-muted">{tx.activated_student_plan ? 'Sí' : 'No'}</td>

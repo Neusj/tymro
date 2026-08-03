@@ -22,7 +22,7 @@ const row = (over = {}) => ({
   status: 'approved', status_detail: null,
   amount: '20000.00', plan_amount: '20000.00', enrollment_fee_amount: '0.00', currency: 'CLP',
   student_name: 'Ana Pérez', student_email: 'ana@gym.cl', student_phone: '+56911111111',
-  plan_name: 'Mensual', concept: 'Plan: Mensual',
+  plan_name: 'Mensual', concept: 'Plan: Mensual', line_items: [],
   activated_student_plan: true, student_plan: 5,
   ...over,
 })
@@ -38,8 +38,41 @@ describe('GymAdminPaymentsTransactionsPage', () => {
 
     expect(await screen.findByText('Ana Pérez')).toBeInTheDocument()
     expect(screen.getByText('ana@gym.cl')).toBeInTheDocument()
-    expect(screen.getByText('Plan: Mensual')).toBeInTheDocument()
+    // Contrato #12: la celda "Concepto" ya NO es el string legacy a secas ("Plan: Mensual").
+    // Ahora es un desglose armado en el front a partir de plan_amount/enrollment_fee_amount/
+    // line_items, así que la línea del plan trae el monto pegado.
+    expect(screen.getByText('Plan: Mensual — $20.000')).toBeInTheDocument()
     expect(screen.getByText(/aprobado/i, { selector: 'span' })).toBeInTheDocument()
+  })
+
+  it('el desglose muestra matrícula y conceptos adicionales (line_items) además del plan', async () => {
+    paymentsApi.listTransactions.mockResolvedValue({
+      count: 1, next: null, previous: null,
+      results: [row({
+        enrollment_fee_amount: '5000.00',
+        line_items: [
+          { id: 1, concept: 'Pesas', amount: '3000.00' },
+          { id: 2, concept: 'Toalla', amount: '2000.00' },
+        ],
+      })],
+    })
+    renderPage()
+
+    expect(await screen.findByText('Plan: Mensual — $20.000')).toBeInTheDocument()
+    expect(screen.getByText('Matrícula — $5.000')).toBeInTheDocument()
+    expect(screen.getByText('Pesas — $3.000')).toBeInTheDocument()
+    expect(screen.getByText('Toalla — $2.000')).toBeInTheDocument()
+  })
+
+  it('sin plan_amount/enrollment_fee_amount/line_items cae al concept legacy', async () => {
+    paymentsApi.listTransactions.mockResolvedValue({
+      count: 1, next: null, previous: null,
+      results: [row({ plan_amount: '0.00', enrollment_fee_amount: '0.00', line_items: [], concept: '—' })],
+    })
+    renderPage()
+
+    expect(await screen.findByText('Ana Pérez')).toBeInTheDocument()
+    expect(screen.getByText('—')).toBeInTheDocument()
   })
 
   it('muestra estado vacío cuando no hay transacciones', async () => {

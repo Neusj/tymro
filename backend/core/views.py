@@ -98,6 +98,10 @@ from .services.recurrence import (
     generate_instances_for_template_range,
     reactivate_future_cancelled_instances_for_template,
 )
+from .services.charge_line_items import (
+    ChargeLineItemOrganizationMismatch,
+    record_charge_line_items,
+)
 from .services.class_dashboard import get_class_dashboard_summary
 from .services.manual_payments import (
     ManualPaymentOrganizationMismatch,
@@ -3621,6 +3625,20 @@ class MembershipPlanViewSet(ModelViewSet):
                     start_date=validated['start_date'],
                     discount_percentage=validated['discount_percentage'],
                 )
+                # Desglose de conceptos extra (#12). Solo llega con `manual` —el serializer
+                # rechaza `free` + conceptos—, así que a esta altura el actor ya pasó la
+                # guarda de actor-de-pago de arriba y tiene organización propia que
+                # estampar. Va ANTES del ManualPayment dentro del MISMO atomic: si el
+                # cobro revienta, el rollback se lleva membresía Y desglose juntos.
+                if payment.get('line_items'):
+                    record_charge_line_items(
+                        student_plan=assigned,
+                        line_items=payment['line_items'],
+                        # Mismo criterio que `record_manual_payment`: el actor y su
+                        # organización, NUNCA del payload.
+                        created_by=user,
+                        organization=user.organization,
+                    )
                 if payment['method'] == StudentPlanAssignPaymentSerializer.METHOD_MANUAL:
                     # Nombre MÓDULO-GLOBAL (`core.views.record_manual_payment`, importado
                     # arriba) y no un import local: un import local resolvería el nombre en el
@@ -3652,6 +3670,13 @@ class MembershipPlanViewSet(ModelViewSet):
             # 403 pueda revelar.
             raise PermissionDenied(
                 'La membresía no pertenece a la organización que registra el pago.'
+            )
+        except ChargeLineItemOrganizationMismatch:
+            # Misma red y mismo argumento que el except de arriba: inalcanzable hoy (la
+            # membresía nace en esta request con la organización del plan) y 403 sin
+            # oráculo porque ningún id de membresía viaja en el body.
+            raise PermissionDenied(
+                'La membresía no pertenece a la organización que registra los conceptos.'
             )
         except DjangoValidationError as exc:
             # Mismo mapeo que `ManualPaymentCreateView` (views.py:3654-3660): `full_clean()`
@@ -3689,7 +3714,7 @@ class MembershipPlanViewSet(ModelViewSet):
                 organization_id=request.user.organization_id,
             )
             .valid_on(today)
-            .prefetch_related('origin_transactions', 'manual_payments')   # eje de pago sin N+1 por membresia
+            .prefetch_related('origin_transactions', 'manual_payments', 'charge_line_items')   # eje de pago + desglose sin N+1 por membresia
             .order_by('end_date', '-start_date', '-id')
         )
         serializer = StudentPlanSerializer(queryset, many=True)
@@ -3703,7 +3728,7 @@ class MembershipPlanViewSet(ModelViewSet):
         if _is_superadmin(user):
             memberships_queryset = (
                 StudentPlan.objects.select_related('user', 'plan')
-                .prefetch_related('origin_transactions', 'manual_payments')   # eje de pago sin N+1 por membresia
+                .prefetch_related('origin_transactions', 'manual_payments', 'charge_line_items')   # eje de pago + desglose sin N+1 por membresia
                 .filter(plan_id=plan.id, user__role=User.Role.STUDENT)
                 .order_by('-is_active', '-start_date', '-id')
             )
@@ -3714,7 +3739,7 @@ class MembershipPlanViewSet(ModelViewSet):
             # propio plan. La columna no se mueve con el alumno.
             memberships_queryset = (
                 StudentPlan.objects.select_related('user', 'plan')
-                .prefetch_related('origin_transactions', 'manual_payments')   # eje de pago sin N+1 por membresia
+                .prefetch_related('origin_transactions', 'manual_payments', 'charge_line_items')   # eje de pago + desglose sin N+1 por membresia
                 .filter(plan_id=plan.id, user__role=User.Role.STUDENT, organization_id=user.organization_id)
                 .order_by('-is_active', '-start_date', '-id')
             )

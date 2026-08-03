@@ -1134,6 +1134,86 @@ class ManualPayment(TimestampedModel):
             )
 
 
+class ChargeLineItem(TimestampedModel):
+    """Desglose de conceptos EXTRA cobrados junto a la venta de una membresía (#12).
+
+    Cuando el alta de una membresía (`assign`) cobra algo más allá del plan —"pesas $5000",
+    "toalla $1000"—, cada concepto queda como una fila acá en vez de perderse en un campo de
+    texto libre del pago. Es puramente informativo: no hay `status` ni lógica de consumo,
+    igual que `ManualPayment` (LA EXISTENCIA DE LA FILA ES EL HECHO).
+
+    La matrícula (`StudentPlan.enrollment_fee`, eje `EnrollmentFeeStatus` de 8.4) NO pasa por
+    acá: tiene su propio campo y su propio ciclo de vida. Este modelo es para conceptos
+    arbitrarios que un administrador tipea en el momento, no para las columnas ya modeladas
+    de la venta.
+
+    `amount` nunca se compara contra `StudentPlan.final_price` ni contra `ManualPayment.amount`:
+    es el desglose informativo de EN QUÉ se cobró, no la contabilidad de CUÁNTO falta o se
+    pagó (esa cuenta la sigue llevando `ManualPayment`/`PaymentTransaction`).
+    """
+
+    # Se estampa del actor que registra el alta, nunca del payload — mismo motivo que
+    # `ManualPayment.organization` (ver ahí el detalle: derivar de una FK propia del usuario
+    # es el agujero cross-tenant recurrente del proyecto). PROTECT por la misma razón que
+    # `ManualPayment.organization`: borrar la organización no puede llevarse en silencio
+    # conceptos de cobro ya registrados.
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.PROTECT,
+        related_name='charge_line_items',
+    )
+    # CASCADE: mismo razonamiento que `ManualPayment.student_plan` — el concepto es un hecho
+    # SOBRE esa venta y huérfano sería ilegible. PROTECT se descarta por los mismos dos
+    # caminos de borrado documentados junto a `ManualPayment.student_plan`.
+    student_plan = models.ForeignKey(
+        StudentPlan,
+        on_delete=models.CASCADE,
+        related_name='charge_line_items',
+    )
+    # Texto libre pero OBLIGATORIO (sin `blank=True`): a diferencia de `ManualPayment.reference`
+    # acá no hay equivalente "efectivo sin comprobante" — el concepto es el dato mismo de la
+    # fila, no una nota opcional sobre otro dato.
+    concept = models.CharField(
+        max_length=120,
+        help_text='Concepto cobrado (ej. "pesas", "toalla").',
+    )
+    # Decimal y no Float: mismo argumento que `ManualPayment.amount` — dato de entrada
+    # cobrado, no un valor derivado de un cálculo.
+    amount = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal('0.01'))],
+        help_text='Monto del concepto. Debe ser mayor a cero.',
+    )
+    # SET_NULL: mismo motivo que `ManualPayment.recorded_by` — perder el autor es aceptable,
+    # perder el hecho no. Tampoco es ancla multitenant (esa es la columna `organization`).
+    created_by = models.ForeignKey(
+        'accounts.CustomUser',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='charge_line_items_created',
+    )
+
+    class Meta:
+        # Los conceptos de una venta se leen en el orden en que se cargaron.
+        ordering = ['id']
+        constraints = [
+            # Misma defensa en profundidad que `manual_payment_amount_positive`: el
+            # validador del campo solo corre en `full_clean()`. `check=` y no `condition=`
+            # porque el repo está en Django 5.0.6 (`condition=` es de 5.1).
+            models.CheckConstraint(
+                check=models.Q(amount__gt=0),
+                name='charge_line_item_amount_positive',
+            ),
+        ]
+        # SIN unicidad sobre (student_plan, concept) a propósito: dos conceptos iguales en
+        # la misma venta ("pesas" dos veces) son dos filas legítimas, no un duplicado.
+
+    def __str__(self):
+        return f'{self.concept} {self.amount} - membresia {self.student_plan_id}'
+
+
 class ClassTemplate(TimestampedModel):
     class Weekday(models.IntegerChoices):
         MONDAY = 0, 'Lunes'

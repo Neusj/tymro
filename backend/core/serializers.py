@@ -18,6 +18,7 @@ from .models import (
     Attendance,
     AttendanceChangeLog,
     Branch,
+    ChargeLineItem,
     ClassTemplate,
     ClassType,
     Discipline,
@@ -1532,6 +1533,20 @@ class PlanSerializer(serializers.ModelSerializer):
         return attrs
 
 
+class ChargeLineItemSerializer(serializers.ModelSerializer):
+    """Un concepto del desglose de cobro (#12), de solo lectura.
+
+    Sin `organization`/`student_plan`/`created_by`: quien lee esto ya está autorizado a ver
+    la membresía completa (viaja anidado dentro de `StudentPlanSerializer` o de la
+    transacción que la activó), así que repetir esas FK acá sería ruido, no dato nuevo.
+    """
+
+    class Meta:
+        model = ChargeLineItem
+        fields = ['id', 'concept', 'amount']
+        read_only_fields = fields
+
+
 class StudentPlanSerializer(serializers.ModelSerializer):
     plan_name = serializers.CharField(source='plan.name', read_only=True)
     plan_type = serializers.CharField(source='plan.plan_type', read_only=True)
@@ -1545,6 +1560,13 @@ class StudentPlanSerializer(serializers.ModelSerializer):
     expiry_alert_message = serializers.SerializerMethodField()
     enrollment_fee_status = serializers.SerializerMethodField()
     payment_status = serializers.SerializerMethodField()
+    # `line_items`/`line_items_total` (#12): igual que `payment_status` arriba, es dato
+    # financiero y hereda los mismos lectores — el monitor queda afuera por el check INLINE
+    # de `memberships` (views.py ~3721-3722) y por el scope de rol del resto de superficies,
+    # no por la clase de permiso. Cualquier superficie NUEVA que use este serializer tiene
+    # que repetir ese corte a mano; no alcanza con confiar en `permission_classes`.
+    line_items = ChargeLineItemSerializer(source='charge_line_items', many=True, read_only=True)
+    line_items_total = serializers.SerializerMethodField()
 
     class Meta:
         model = StudentPlan
@@ -1574,6 +1596,8 @@ class StudentPlanSerializer(serializers.ModelSerializer):
             'enrollment_fee_due_at',
             'enrollment_fee_status',
             'payment_status',
+            'line_items',
+            'line_items_total',
             'is_active',
         ]
         read_only_fields = [
@@ -1685,6 +1709,32 @@ class StudentPlanSerializer(serializers.ModelSerializer):
         """
         return self._state(obj).payment_status
 
+    def get_line_items_total(self, obj):
+        """Suma del desglose de conceptos extra (#12), en PYTHON y no `.aggregate()`.
+
+        `obj.charge_line_items.all()` ya viene resuelta por el prefetch que arma la view
+        (`# eje de pago + desglose sin N+1 por membresia`); un `.aggregate()` acá ignora esa
+        cache y dispara una query nueva POR CADA membresía de una lista (el mismo N+1 que
+        `origin_transactions`/`manual_payments` ya evitan). La suma vacía da `Decimal('0.00')`,
+        nunca `None`.
+        """
+        total = sum((item.amount for item in obj.charge_line_items.all()), Decimal('0.00'))
+        return str(total)
+
+
+class ChargeLineItemInputSerializer(serializers.Serializer):
+    """Entrada de UN concepto extra del desglose (#12). Valida FORMA, no pertenencia.
+
+    Mismos topes que el modelo (`ChargeLineItem.concept`/`amount`): el concepto vacío o el
+    monto que no alcanza el mínimo se cortan ACÁ, antes de tocar la base. No hay ningún id
+    de recurso ajeno en este payload —concepto y monto son intrínsecos—, así que validar la
+    forma antes de las guardas cross-org de la view no filtra nada de otro tenant (la
+    lección de 8.3 aplica a validaciones que LEEN el objeto ajeno, y esta no lee ninguno).
+    """
+
+    concept = serializers.CharField(max_length=120)
+    amount = serializers.DecimalField(max_digits=10, decimal_places=2, min_value=Decimal('0.01'))
+
 
 class StudentPlanAssignPaymentSerializer(serializers.Serializer):
     """Sub-payload de `payment` dentro de `assign` (8.3). Declara la vía financiera de la
@@ -1695,6 +1745,12 @@ class StudentPlanAssignPaymentSerializer(serializers.Serializer):
     `record_manual_payment`, así que el monto que no alcanza el mínimo o que falta para
     `manual` se corta ACÁ, antes de tocar la base — sin esperar a la regla cruzada de
     `StudentPlanAssignSerializer.validate()` que sí necesita ver el `plan`.
+
+    `line_items` (#12) es el desglose OPCIONAL de conceptos extra de la venta ("pesas",
+    "toalla"). Viaja dentro de `payment` porque es parte de la declaración financiera, y
+    solo tiene sentido con `manual`: `free` es beca total y un concepto COBRADO encima
+    sería la misma incoherencia que un `amount` (se rechaza, no se resuelve en silencio).
+    La matrícula (8.4) NO viaja por acá: tiene su propio eje.
     """
     METHOD_FREE = 'free'
     METHOD_MANUAL = 'manual'
@@ -1706,6 +1762,10 @@ class StudentPlanAssignPaymentSerializer(serializers.Serializer):
     method = serializers.ChoiceField(choices=METHOD_CHOICES)
     amount = serializers.DecimalField(max_digits=10, decimal_places=2, min_value=Decimal('0.01'), required=False)
     reference = serializers.CharField(max_length=120, allow_blank=True, default='')
+    # Cota de 50 por la misma clase de motivo que el tope de `student_plan` en
+    # `ManualPaymentCreateSerializer`: sin límite, el payload es un vector de inserción
+    # masiva. Un alta real trae un puñado de conceptos.
+    line_items = ChargeLineItemInputSerializer(many=True, required=False, max_length=50)
 
     def validate(self, attrs):
         method = attrs.get('method')
@@ -1725,6 +1785,15 @@ class StudentPlanAssignPaymentSerializer(serializers.Serializer):
             if attrs.get('reference'):
                 raise serializers.ValidationError({
                     'reference': 'La vía "free" no admite una referencia de pago.',
+                })
+            # `.get(...)` truthy y no `in attrs`: una lista vacía explícita no declara
+            # ningún cobro, así que no hay incoherencia que rechazar.
+            if attrs.get('line_items'):
+                raise serializers.ValidationError({
+                    'line_items': (
+                        'La vía "free" no admite conceptos adicionales: es una beca total, '
+                        'no un pago parcial.'
+                    ),
                 })
         return attrs
 
@@ -2098,6 +2167,12 @@ class PaymentTransactionAdminSerializer(serializers.ModelSerializer):
     plan_name = serializers.CharField(source='plan.name', read_only=True, allow_null=True)
     concept = serializers.SerializerMethodField()
     activated_student_plan = serializers.SerializerMethodField()
+    # Desglose (#12) de la membresía que esta transacción activó. Hoy MercadoPago no genera
+    # `ChargeLineItem` (el desglose nace solo del alta MANUAL vía `assign`), así que esto sale
+    # `[]` casi siempre — se expone igual para que el desglose del panel de transacciones
+    # tenga UNA forma de wire, no dos. `concept` (arriba) queda intacto por compat con el
+    # front actual hasta que migre a `line_items`.
+    line_items = serializers.SerializerMethodField()
 
     class Meta:
         model = PaymentTransaction
@@ -2106,7 +2181,7 @@ class PaymentTransactionAdminSerializer(serializers.ModelSerializer):
             'status', 'status_detail',
             'amount', 'plan_amount', 'enrollment_fee_amount', 'currency',
             'student_name', 'student_email', 'student_phone',
-            'plan_name', 'concept',
+            'plan_name', 'concept', 'line_items',
             'activated_student_plan', 'student_plan',
         ]
         read_only_fields = fields
@@ -2124,4 +2199,18 @@ class PaymentTransactionAdminSerializer(serializers.ModelSerializer):
 
     def get_activated_student_plan(self, obj):
         return bool(obj.student_plan_id)
+
+    def get_line_items(self, obj):
+        # El corte por organización NO es redundante: seguir `obj.student_plan` confía en
+        # la invariante `tx.organization == student_plan.organization`, que hoy se cumple
+        # en ambos caminos de escritura pero no la garantiza ninguna constraint (un plan
+        # movido de org por superadmin + checkout de matrícula la rompe sin tocar código:
+        # `create_checkout` valida el JOIN `sp.plan.organization`, no la COLUMNA
+        # `sp.organization_id`). Es el patrón documentado "FK propia sin organización",
+        # cortado acá en la lectura: ante la incoherencia, el desglose ajeno no viaja.
+        # `student_plan` viene por `select_related` y los items por prefetch, así que la
+        # comparación no agrega queries.
+        if obj.student_plan_id is None or obj.student_plan.organization_id != obj.organization_id:
+            return []
+        return ChargeLineItemSerializer(obj.student_plan.charge_line_items.all(), many=True).data
 
