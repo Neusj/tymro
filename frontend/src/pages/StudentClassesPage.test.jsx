@@ -13,7 +13,7 @@ vi.mock('../api/client', () => ({
   getMyMemberships: vi.fn(),
 }))
 
-import { classesApi, enrollmentsApi, recurringEnrollmentsApi, getMyMemberships } from '../api/client'
+import { classesApi, classTemplatesApi, enrollmentsApi, recurringEnrollmentsApi, getMyMemberships } from '../api/client'
 import StudentClassesPage from './StudentClassesPage'
 
 function renderPage(mode = 'available') {
@@ -449,5 +449,169 @@ describe('StudentClassesPage — bulk con selector de plan (#9 T4 fix)', () => {
     await waitFor(() => expect(enrollmentsApi.create).toHaveBeenCalledTimes(2))
     expect(enrollmentsApi.create).toHaveBeenCalledWith({ gym_class: 701, status: 'active', student_plan_id: 22 })
     expect(enrollmentsApi.create).toHaveBeenCalledWith({ gym_class: 702, status: 'active', student_plan_id: 22 })
+  })
+})
+
+// R1b — el backend ahora acepta/exige student_plan_id en la suscripción a una serie
+// recurrente (recurring-enroll). Reusa el MISMO selector/diálogo que reserva
+// individual/rebook/bulk (#9 T4): 1 plan usable → sin selector; 2+ → selector
+// obligatorio antes de disparar el POST. La reactivación de una serie pausada
+// (PATCH is_active) sigue sin selector ni student_plan_id: el backend lo ignora ahí.
+describe('StudentClassesPage — suscripción a serie recurrente con selector de plan (R1b)', () => {
+  beforeEach(() => {
+    // Vista escritorio: la fila de "Clases disponibles" expone el botón de
+    // recurrencia detrás de "Abrir acciones" (RowActionsDropdown); en modo
+    // 'available' el mobilePrimary siempre define un botón (Reservar/Cancelar),
+    // así que la tarjeta móvil NO pinta su propio dropdown y no hay ambigüedad.
+    window.matchMedia = (query) => ({
+      matches: query.includes('min-width'),
+      addEventListener() {},
+      removeEventListener() {},
+      addListener() {},
+      removeListener() {},
+    })
+  })
+
+  function seedRecurringClass() {
+    classesApi.list
+      .mockResolvedValueOnce([
+        {
+          id: 801,
+          name: 'Yoga serie',
+          status: 'scheduled',
+          start_datetime: FUTURE_ISO,
+          end_datetime: FUTURE_ISO,
+          capacity: 10,
+          enrollments_count: 0,
+          branch_name: 'Sede',
+          teacher_name: 'Prof',
+          discipline_name: 'Yoga',
+          class_template: 55,
+          class_template_name: 'Yoga Lunes',
+        },
+      ])
+      .mockResolvedValueOnce([])
+    enrollmentsApi.my.mockResolvedValue([])
+    recurringEnrollmentsApi.my.mockResolvedValue([])
+    classTemplatesApi.recurringEnroll.mockResolvedValue({})
+  }
+
+  it('con una membresía usable, inscribirse a la serie manda el POST sin student_plan_id y sin selector', async () => {
+    seedRecurringClass()
+    getMyMemberships.mockResolvedValue([
+      { id: 1, plan_name: 'Plan Básico', remaining_classes: 10, unlimited_classes: false, validity_status: 'active' },
+    ])
+
+    renderPage('available')
+    const user = userEvent.setup()
+
+    await user.click((await screen.findAllByRole('button', { name: 'Abrir acciones' }))[0])
+    await user.click(await screen.findByRole('button', { name: 'Inscribirme a esta serie semanal' }))
+
+    // Con una sola membresía usable no hace falta elegir: no aparece diálogo.
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+
+    await waitFor(() =>
+      expect(classTemplatesApi.recurringEnroll).toHaveBeenCalledWith(55, {
+        start_date: FUTURE_ISO.slice(0, 10),
+        recurrence_type: 'weekly',
+      }),
+    )
+  })
+
+  it('con 2+ membresías usables, el diálogo exige elegir un plan antes de suscribir y lo manda como student_plan_id', async () => {
+    seedRecurringClass()
+    getMyMemberships.mockResolvedValue([
+      { id: 11, plan_name: 'Plan A', remaining_classes: 3, unlimited_classes: false, validity_status: 'active' },
+      { id: 12, plan_name: 'Plan B', remaining_classes: null, unlimited_classes: true, validity_status: 'active' },
+    ])
+
+    renderPage('available')
+    const user = userEvent.setup()
+
+    await user.click((await screen.findAllByRole('button', { name: 'Abrir acciones' }))[0])
+    await user.click(await screen.findByRole('button', { name: 'Inscribirme a esta serie semanal' }))
+
+    const dialog = await screen.findByRole('dialog')
+    const confirmButton = within(dialog).getByRole('button', { name: 'Inscribirme' })
+
+    // Sin elegir plan, el diálogo no deja confirmar y el POST no se dispara.
+    expect(confirmButton).toBeDisabled()
+    expect(classTemplatesApi.recurringEnroll).not.toHaveBeenCalled()
+
+    const select = within(dialog).getByRole('combobox')
+    expect(within(select).getByText('Plan A — quedan 3')).toBeInTheDocument()
+    expect(within(select).getByText('Plan B — clases ilimitadas')).toBeInTheDocument()
+
+    await user.selectOptions(select, '12')
+    expect(confirmButton).toBeEnabled()
+
+    await user.click(confirmButton)
+
+    await waitFor(() =>
+      expect(classTemplatesApi.recurringEnroll).toHaveBeenCalledWith(55, {
+        start_date: FUTURE_ISO.slice(0, 10),
+        recurrence_type: 'weekly',
+        student_plan_id: 12,
+      }),
+    )
+  })
+
+  it('reactivar una serie pausada NO muestra selector ni manda student_plan_id aunque haya 2+ membresías usables', async () => {
+    classesApi.list
+      .mockResolvedValueOnce([
+        {
+          id: 802,
+          name: 'Yoga serie pausada',
+          status: 'scheduled',
+          start_datetime: FUTURE_ISO,
+          end_datetime: FUTURE_ISO,
+          capacity: 10,
+          enrollments_count: 0,
+          branch_name: 'Sede',
+          teacher_name: 'Prof',
+          discipline_name: 'Yoga',
+          class_template: 66,
+          class_template_name: 'Yoga Martes',
+        },
+      ])
+      .mockResolvedValueOnce([])
+    enrollmentsApi.my.mockResolvedValue([])
+    recurringEnrollmentsApi.my.mockResolvedValue([
+      { id: 900, class_template: 66, is_active: false, can_manage_now: true },
+    ])
+    recurringEnrollmentsApi.update.mockResolvedValue({})
+    getMyMemberships.mockResolvedValue([
+      { id: 11, plan_name: 'Plan A', remaining_classes: 3, unlimited_classes: false, validity_status: 'active' },
+      { id: 12, plan_name: 'Plan B', remaining_classes: null, unlimited_classes: true, validity_status: 'active' },
+    ])
+
+    renderPage('available')
+    const user = userEvent.setup()
+
+    await user.click((await screen.findAllByRole('button', { name: 'Abrir acciones' }))[0])
+    await user.click(await screen.findByRole('button', { name: 'Reactivar recurrencia semanal' }))
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    await waitFor(() => expect(recurringEnrollmentsApi.update).toHaveBeenCalledWith(900, { is_active: true }))
+    expect(classTemplatesApi.recurringEnroll).not.toHaveBeenCalled()
+  })
+
+  it('si el backend responde 400 (plan_choice_required) al suscribir, muestra el detail real del backend', async () => {
+    seedRecurringClass()
+    getMyMemberships.mockResolvedValue([
+      { id: 1, plan_name: 'Plan Básico', remaining_classes: 10, unlimited_classes: false, validity_status: 'active' },
+    ])
+    classTemplatesApi.recurringEnroll.mockRejectedValue({
+      response: { data: { detail: 'Tienes más de un plan vigente. Elige con cuál reservar.' } },
+    })
+
+    renderPage('available')
+    const user = userEvent.setup()
+
+    await user.click((await screen.findAllByRole('button', { name: 'Abrir acciones' }))[0])
+    await user.click(await screen.findByRole('button', { name: 'Inscribirme a esta serie semanal' }))
+
+    expect(await screen.findByText('Tienes más de un plan vigente. Elige con cuál reservar.')).toBeInTheDocument()
   })
 })

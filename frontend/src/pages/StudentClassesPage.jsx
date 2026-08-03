@@ -108,6 +108,9 @@ export default function StudentClassesPage({ mode = 'available' }) {
   const [pendingRebook, setPendingRebook] = useState(null)
   // Bulk (#9 T4): con 2+ planes usables, el selector se abre UNA vez para todo el lote.
   const [pendingBulkReserve, setPendingBulkReserve] = useState(null)
+  // Suscripción nueva a una serie semanal (R1b): con 2+ planes usables, mismo diálogo
+  // compartido antes de disparar el recurring-enroll. La reactivación no pasa por acá.
+  const [pendingRecurringReserve, setPendingRecurringReserve] = useState(null)
   // Plan elegido en el selector del diálogo de confirmación (#9 T4). Se resetea al
   // abrir/cerrar cualquiera de los tres flujos de reserva.
   const [selectedPlanId, setSelectedPlanId] = useState('')
@@ -272,7 +275,12 @@ export default function StudentClassesPage({ mode = 'available' }) {
     resetPlanSelection()
   }
 
-  const subscribeOrReactivateRecurring = async (gymClass) => {
+  // Suscripción nueva a una serie semanal (R1b): igual que reserva individual/rebook/
+  // bulk (#9 T4), con 2+ planes usables el student_plan_id lo elige el alumno; con 1,
+  // se omite (el backend lo resuelve solo). La reactivación (current && !current.is_active)
+  // NUNCA manda student_plan_id: el backend la ignora ahí (la elección ya quedó grabada
+  // en la serie al crearla), así que ese branch queda intacto.
+  const subscribeOrReactivateRecurring = async (gymClass, studentPlanId) => {
     if (!gymClass.class_template) {
       return
     }
@@ -283,10 +291,14 @@ export default function StudentClassesPage({ mode = 'available' }) {
       if (current && !current.is_active) {
         await recurringEnrollmentsApi.update(current.id, { is_active: true })
       } else {
-        await classTemplatesApi.recurringEnroll(gymClass.class_template, {
+        const payload = {
           start_date: String(gymClass.start_datetime || '').slice(0, 10),
           recurrence_type: 'weekly',
-        })
+        }
+        if (requiresPlanChoice) {
+          payload.student_plan_id = Number(studentPlanId)
+        }
+        await classTemplatesApi.recurringEnroll(gymClass.class_template, payload)
       }
       await loadData()
     } catch (apiError) {
@@ -294,6 +306,30 @@ export default function StudentClassesPage({ mode = 'available' }) {
     } finally {
       setWorkingKey('')
     }
+  }
+
+  // Con 2+ planes usables y una suscripción NUEVA (no reactivación), el selector se
+  // abre antes de disparar el POST — mismo patrón UX que reserva individual/rebook/bulk.
+  const handleSubscribeOrReactivateClick = (gymClass) => {
+    const current = gymClass.class_template ? recurringByTemplate[gymClass.class_template] : null
+    const isReactivation = Boolean(current && !current.is_active)
+    if (!isReactivation && requiresPlanChoice) {
+      resetPlanSelection()
+      setPendingRecurringReserve(gymClass)
+      return
+    }
+    subscribeOrReactivateRecurring(gymClass)
+  }
+
+  const confirmPendingRecurringReserve = async () => {
+    if (!pendingRecurringReserve) {
+      return
+    }
+    const target = pendingRecurringReserve
+    const planId = selectedPlanId
+    await subscribeOrReactivateRecurring(target, planId)
+    setPendingRecurringReserve(null)
+    resetPlanSelection()
   }
 
   const toggleRecurring = async (recurringEnrollment, nextState) => {
@@ -576,7 +612,7 @@ export default function StudentClassesPage({ mode = 'available' }) {
                         toggleRecurring(recurringForTemplate, false)
                         return
                       }
-                      subscribeOrReactivateRecurring(row)
+                      handleSubscribeOrReactivateClick(row)
                     }}
                     className="w-full rounded-lg border border-brand-orange/50 px-2.5 py-1.5 text-left text-xs text-brand-white disabled:opacity-60"
                   >
@@ -828,9 +864,18 @@ export default function StudentClassesPage({ mode = 'available' }) {
   const selectedReservations = filteredReservations.filter((item) => selectedReservationIds.includes(item.id))
   const cancellableSelectedCount = selectedReservations.filter((item) => item.status === 'active' && item.can_cancel).length
 
-  // Los tres flujos de reserva (individual, rebook, bulk) comparten un único
-  // ConfirmDialog: a lo sumo uno de los tres estados pendientes está activo a la vez.
-  const pendingReserveKind = pendingReserve ? 'single' : pendingRebook ? 'rebook' : pendingBulkReserve ? 'bulk' : null
+  // Los cuatro flujos de reserva/suscripción (individual, rebook, bulk, recurring)
+  // comparten un único ConfirmDialog: a lo sumo uno de los estados pendientes está
+  // activo a la vez.
+  const pendingReserveKind = pendingReserve
+    ? 'single'
+    : pendingRebook
+      ? 'rebook'
+      : pendingBulkReserve
+        ? 'bulk'
+        : pendingRecurringReserve
+          ? 'recurring'
+          : null
   const showPlanSelector = pendingReserveKind !== null && requiresPlanChoice
   const confirmDialogOpen = pendingReserveKind !== null
   const confirmDialogLoading =
@@ -840,13 +885,17 @@ export default function StudentClassesPage({ mode = 'available' }) {
         ? workingKey === `reserve-reservation-${pendingRebook?.id}`
         : pendingReserveKind === 'bulk'
           ? workingKey === 'reserve-bulk'
-          : false
-  const confirmDialogTitle = pendingReserveKind === 'bulk' ? 'Elige tu plan' : 'Confirmar reserva'
+          : pendingReserveKind === 'recurring'
+            ? workingKey === `recurring-${pendingRecurringReserve?.id}`
+            : false
+  const confirmDialogTitle = pendingReserveKind === 'bulk' || pendingReserveKind === 'recurring' ? 'Elige tu plan' : 'Confirmar reserva'
   const confirmDialogDescription =
     pendingReserveKind === 'bulk'
       ? `Vas a reservar ${pendingBulkReserve?.length || 0} clases. Elige con qué plan.`
-      : '¿Seguro que quieres reservar esta clase? Se descontará una clase de tu plan.'
-  const confirmDialogLabel = pendingReserveKind === 'bulk' ? 'Reservar seleccionadas' : 'Reservar'
+      : pendingReserveKind === 'recurring'
+        ? 'Vas a inscribirte a esta serie semanal. Elige con qué plan reservar tus próximas clases.'
+        : '¿Seguro que quieres reservar esta clase? Se descontará una clase de tu plan.'
+  const confirmDialogLabel = pendingReserveKind === 'bulk' ? 'Reservar seleccionadas' : pendingReserveKind === 'recurring' ? 'Inscribirme' : 'Reservar'
   const confirmDialogDisabled = showPlanSelector && !selectedPlanId
   const handleConfirmDialogConfirm = () => {
     if (pendingReserveKind === 'single') {
@@ -858,12 +907,16 @@ export default function StudentClassesPage({ mode = 'available' }) {
     if (pendingReserveKind === 'bulk') {
       return confirmPendingBulkReserve()
     }
+    if (pendingReserveKind === 'recurring') {
+      return confirmPendingRecurringReserve()
+    }
     return undefined
   }
   const handleConfirmDialogCancel = () => {
     setPendingReserve(null)
     setPendingRebook(null)
     setPendingBulkReserve(null)
+    setPendingRecurringReserve(null)
     resetPlanSelection()
   }
 
