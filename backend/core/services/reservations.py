@@ -56,30 +56,67 @@ def get_active_student_plan(student, on_date=None):
     )
 
 
-def validate_student_plan_for_reservation(student, on_date=None):
-    """La membresía con la que el alumno puede reservar, o `ReservationRuleError`.
+def resolve_student_plan_for_reservation(student, *, student_plan_id=None, on_date=None):
+    """Con QUÉ membresía se descuenta esta reserva (9.1) — cierra el `TODO #9` que dejaba
+    `get_active_student_plan` (ver su docstring, líneas 26-46): ese `.first()` sigue siendo
+    arbitrario cuando el alumno tiene 2+ membresías vigentes en la misma organización (dos
+    disciplinas, p. ej. 4 BJJ + 8 kickboxing). Reemplaza, como paso de resolución DENTRO de
+    `_validate_reservation_rules`, al validador anterior (que solo confirmaba una única
+    membresía usable sin elegir entre candidatos) — es el único llamador de esta función
+    nueva. `get_active_student_plan`,
+    `_get_active_student_plan_map`, `my-plan` y el roster son DISPLAY, no CONSUMO: no se tocan y
+    siguen con su desempate arbitrario tal cual.
 
-    El saldo ya no se evalúa acá: lo resuelve `describe_student_plan`, que es la misma
-    fuente que usan el roster y el serializer. Antes era la única mitad del predicado que
-    existía en un solo lugar —este—, y por eso el roster podía ofrecer clases que la reserva
-    después rechazaba.
+    Hereda el mismo razonamiento multitenant de `get_active_student_plan`: la organización
+    del candidato la manda la COLUMNA `StudentPlan.organization` —copia de
+    `plan.organization` hecha al vender—, nunca el join `plan__organization` ni
+    `user.organization`. Filtrar solo por `user` no alcanza: `StudentPlan.user` es CASCADE
+    sobre el usuario, no sobre la organización, así que un alumno movido de tenant
+    conservaría vivas las membresías de la organización anterior.
 
-    La MATRÍCULA (8.4) tampoco se evalúa acá, pero no porque `describe_student_plan` la
-    resuelva en otro lado del predicado: es que la decisión de producto es que ya no bloquea
-    NADA. Es dato SOLO INFORMATIVO (`enrollment_fee_status`, eje aparte en la fuente única) y
-    reservar con matrícula impaga es un flujo válido. El código de error
-    `enrollment_fee_unpaid` deja de existir en la API de reservas.
+    El queryset de candidatos (`valid_on` + `describe_student_plan(...).is_usable`) es LA
+    ÚNICA FUENTE: ni el id elegido ni el conteo consultan ningún `StudentPlan` fuera de él.
+    `describe_student_plan` es la fuente única de saldo/ilimitado —la misma que usan el
+    roster y el serializer—, así que no se reimplementa el predicado acá.
 
-    El mensaje y el `code` que sí sobreviven no cambian: `reason_code` reproduce el mismo
-    valor que esta función ya devolvía (`plan_unavailable`), que el frontend maneja.
+    `student_plan_id`, si vino, se busca DENTRO de `candidates` y no con un `.get()`
+    aparte: un id que exista pero sea de otra organización, esté sin saldo, vencido, o
+    directamente no exista son la MISMA `ReservationRuleError`
+    (`chosen_plan_unavailable`). Es el mismo anti-oráculo del resto del proyecto —
+    distinguir esos casos le regalaría al alumno información sobre membresías que no son
+    suyas—, así que las cuatro causas comparten mensaje y code.
+
+    Sin `student_plan_id`, la ambigüedad que `get_active_student_plan` resolvía en
+    silencio pasa a ser explícita: 0 candidatos es el error histórico
+    (`plan_unavailable`, mismo string y code que ya manejaba el frontend); exactamente 1
+    se usa sin preguntar; 2+ exige que el alumno elija (`plan_choice_required`) en vez de
+    descontarle a uno arbitrario —"no adivinar" es la decisión de producto de #9—.
     """
     target_date = on_date or timezone.localdate()
-    student_plan = get_active_student_plan(student, on_date=target_date)
-    state = describe_student_plan(student_plan, target_date)
-    if state.is_usable:
-        return student_plan
+    candidates_qs = (
+        StudentPlan.objects
+        .filter(user=student, organization_id=student.organization_id)
+        .valid_on(target_date)
+        .order_by('-start_date', '-id')
+    )
+    candidates = [sp for sp in candidates_qs if describe_student_plan(sp, target_date).is_usable]
+
+    if student_plan_id is not None:
+        for candidate in candidates:
+            if candidate.id == student_plan_id:
+                return candidate
+        raise ReservationRuleError(
+            'El plan elegido no está disponible.', code='chosen_plan_unavailable'
+        )
+
+    if len(candidates) == 1:
+        return candidates[0]
+    if not candidates:
+        raise ReservationRuleError(
+            'No tienes clases disponibles o plan activo', code=REASON_PLAN_UNAVAILABLE
+        )
     raise ReservationRuleError(
-        'No tienes clases disponibles o plan activo', code=REASON_PLAN_UNAVAILABLE
+        'Tienes más de un plan vigente. Elige con cuál reservar.', code='plan_choice_required'
     )
 
 
@@ -108,9 +145,27 @@ def validate_plan_branch_for_class(student_plan, gym_class):
 
 
 def get_enrollment_student_plan(enrollment):
+    """De qué `StudentPlan` se descontó esta inscripción, según el `ConsumptionLog` que la
+    respalda — usado por el reverso (`rollback_consumption_for_enrollment`) como fallback
+    cuando no le pasan el plan explícito.
+
+    Espeja el filtro del backfill de `Enrollment.student_plan`
+    (`migrations/0033_enrollment_student_plan.py`): el log tiene que ser de la MISMA
+    organización que la clase (`student_plan__organization_id=F('class_instance__organization_id')`),
+    no solo matchear `user`/`class_instance`. Logs de antes del fix de scoping multitenant
+    pueden apuntar a un `student_plan` de OTRA organización (mismo alumno/clase por
+    coincidencia, plan ajeno); sin este filtro este helper le devolvía —y el reverso le
+    reembolsaba saldo— a un plan que no es de esta organización. `None` es el mismo
+    veredicto que 0033: no hay de dónde imputar de forma defendible, así que no se inventa
+    un plan ni se toca uno ajeno.
+    """
     consumption_log = (
         ConsumptionLog.objects.select_related('student_plan')
-        .filter(user=enrollment.student, class_instance=enrollment.gym_class)
+        .filter(
+            user=enrollment.student,
+            class_instance=enrollment.gym_class,
+            student_plan__organization_id=F('class_instance__organization_id'),
+        )
         .order_by('-consumed_at', '-id')
         .first()
     )
@@ -145,8 +200,26 @@ def consume_student_plan_for_enrollment(enrollment, student_plan):
     if not created:
         return False
 
-    student_plan.classes_used += 1
-    student_plan.save(update_fields=['classes_used', 'updated_at'])
+    # Simétrico al reverso (`_revert_consumption_logs`): read-modify-write en memoria
+    # pierde un +1 si dos reservas concurrentes consumen el MISMO plan (dos alumnos, o el
+    # mismo alumno con doble click, contra el plan que `resolve_student_plan_for_reservation`
+    # eligió). Se materializa el SELECT del lock (una queryset sin evaluar no dispara nada)
+    # y sirve para serializar a los competidores: no-op en SQLite, que igual serializa las
+    # escrituras; la garantía real es en Postgres (prod) y la red de fondo es el UPDATE con
+    # `F()` de abajo. Requiere estar dentro de una transacción atómica: la aporta el
+    # `@transaction.atomic` de `reserve_student_in_class`, único llamador real de esta función.
+    list(StudentPlan.objects.filter(pk=student_plan.pk).select_for_update().values_list('pk', flat=True))
+
+    # Incremento en la base y no read-modify-write: si otra reserva concurrente ya sumó
+    # su +1 sobre este plan, `F('classes_used')` lo ve y no lo pisa con un snapshot viejo.
+    StudentPlan.objects.filter(pk=student_plan.pk).update(
+        classes_used=F('classes_used') + 1,
+        updated_at=timezone.now(),
+    )
+    # La instancia en memoria no se actualiza sola con `.update()`: sin este refresh el
+    # resto del request (p. ej. el serializer de la respuesta) seguiría viendo el
+    # `classes_used` viejo.
+    student_plan.refresh_from_db(fields=['classes_used', 'updated_at'])
     return True
 
 
@@ -270,7 +343,7 @@ def revert_consumption_for_enrollment(enrollment):
     )
 
 
-def _validate_reservation_rules(*, student, gym_class, existing=None, require_plan=True):
+def _validate_reservation_rules(*, student, gym_class, existing=None, require_plan=True, student_plan_id=None):
     if student.organization_id != gym_class.organization_id:
         raise ReservationRuleError('No puedes inscribir alumnos de otra organización.', code='wrong_organization')
     if gym_class.status == GymClass.Status.CANCELLED:
@@ -313,19 +386,20 @@ def _validate_reservation_rules(*, student, gym_class, existing=None, require_pl
     if not require_plan:
         return None
 
-    student_plan = validate_student_plan_for_reservation(student)
+    student_plan = resolve_student_plan_for_reservation(student, student_plan_id=student_plan_id)
     validate_plan_branch_for_class(student_plan, gym_class)
     return student_plan
 
 
 @transaction.atomic
-def reserve_student_in_class(*, student, gym_class, recurring_enrollment=None, require_plan=True, is_trial=False):
+def reserve_student_in_class(*, student, gym_class, recurring_enrollment=None, require_plan=True, is_trial=False, student_plan_id=None):
     existing = Enrollment.objects.filter(gym_class=gym_class, student=student).first()
     student_plan = _validate_reservation_rules(
         student=student,
         gym_class=gym_class,
         existing=existing,
         require_plan=require_plan,
+        student_plan_id=student_plan_id,
     )
 
     if existing:
@@ -335,6 +409,13 @@ def reserve_student_in_class(*, student, gym_class, recurring_enrollment=None, r
         if is_trial and not existing.is_trial:
             existing.is_trial = True
             update_fields.append('is_trial')
+        # Reactivación (9.1): si esta reserva SÍ pasó por resolución de plan, se registra
+        # la imputación igual que en el alta. Si vino None —`require_plan=False` o
+        # trial—, se deja el valor previo intacto: no hay membresía nueva que atribuirle,
+        # y pisarlo a NULL borraría el registro histórico de una imputación anterior.
+        if student_plan is not None:
+            existing.student_plan = student_plan
+            update_fields.append('student_plan')
         existing.save(update_fields=update_fields)
         enrollment = existing
     else:
@@ -344,6 +425,7 @@ def reserve_student_in_class(*, student, gym_class, recurring_enrollment=None, r
             recurring_enrollment=recurring_enrollment,
             status='active',
             is_trial=is_trial,
+            student_plan=student_plan,
         )
 
     if student_plan:

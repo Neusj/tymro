@@ -107,7 +107,6 @@ from .services.reservations import (
     ReservationRuleError,
     cancel_enrollment_with_refund,
     cancel_future_recurring_enrollments,
-    consume_student_plan_for_enrollment,
     get_active_student_plan,
     get_enrollment_student_plan,
     reserve_student_in_class,
@@ -115,7 +114,6 @@ from .services.reservations import (
     revert_consumption_for_enrollment,
     rollback_consumption_for_enrollment,
     should_refund_consumption,
-    validate_student_plan_for_reservation,
 )
 from .services.teacher_payments import build_teacher_payment_summary, calculate_teacher_payment
 
@@ -604,7 +602,7 @@ def _roster_plan_balance(student_plan, state):
     organizacion ("9 clases disponibles" y reservar fallaba).
 
     OFRECER se decide con `is_usable`, no con `passes_valid_on`: es exactamente la
-    propiedad que consulta `validate_student_plan_for_reservation`, asi que el roster y la
+    propiedad que consulta `resolve_student_plan_for_reservation`, asi que el roster y la
     reserva coinciden por construccion y no por coincidencia. `passes_valid_on` dejaba
     pasar la matricula impaga —dentro de la ventana y con saldo—, y el POST moria en 400.
 
@@ -616,17 +614,6 @@ def _roster_plan_balance(student_plan, state):
     if student_plan.unlimited_classes:
         return None, state.is_usable, True
     return state.remaining_classes, state.is_usable, False
-
-
-def _validate_student_plan_for_reservation(student):
-    try:
-        return validate_student_plan_for_reservation(student)
-    except ReservationRuleError as exc:
-        raise ValidationError({'detail': 'No tienes clases disponibles o plan activo'})
-
-
-def _consume_student_plan_for_enrollment(enrollment, student_plan):
-    return consume_student_plan_for_enrollment(enrollment, student_plan)
 
 
 def _rollback_consumption_for_enrollment(enrollment, student_plan):
@@ -3197,6 +3184,15 @@ class EnrollmentViewSet(ModelViewSet):
         return Response(self.get_serializer(enrollment).data)
 
     def perform_create(self, serializer):
+        # CRÍTICO (9.1), primera línea, antes de CUALQUIER branch: `Enrollment.student_plan`
+        # es un FK real (T1). Si `student_plan_id` sigue en `validated_data` cuando se
+        # llega a un `serializer.save()` —el atajo de `requested_status != 'active'` de
+        # más abajo también cuenta—, `EnrollmentSerializer.create` hace
+        # `Enrollment.objects.create(**validated_data)`, y Django acepta `student_plan_id`
+        # como kwarg del FK sin pasar por `resolve_student_plan_for_reservation`: el
+        # cliente fijaría la imputación de consumo sin validar pertenencia, saldo,
+        # vigencia ni sucursal.
+        student_plan_id = serializer.validated_data.pop('student_plan_id', None)
         user = self.request.user
         student = serializer.validated_data.get('student')
         if _is_student(user):
@@ -3237,6 +3233,7 @@ class EnrollmentViewSet(ModelViewSet):
                         student=student,
                         gym_class=serializer.validated_data.get('gym_class'),
                         require_plan=should_validate_plan,
+                        student_plan_id=student_plan_id,
                     )
                 except ReservationRuleError as exc:
                     raise ValidationError({'detail': exc.message})
@@ -3248,7 +3245,10 @@ class EnrollmentViewSet(ModelViewSet):
                 if not gym_class or not _is_own_class_teacher(user, gym_class):
                     raise PermissionDenied('Solo puedes inscribir alumnos en tus propias clases.')
                 try:
-                    enrollment = reserve_student_in_class(student=student, gym_class=gym_class, require_plan=True)
+                    enrollment = reserve_student_in_class(
+                        student=student, gym_class=gym_class, require_plan=True,
+                        student_plan_id=student_plan_id,
+                    )
                 except ReservationRuleError as exc:
                     raise ValidationError({'detail': exc.message})
                 serializer.instance = enrollment
@@ -3260,6 +3260,7 @@ class EnrollmentViewSet(ModelViewSet):
                         student=user,
                         gym_class=serializer.validated_data.get('gym_class'),
                         require_plan=True,
+                        student_plan_id=student_plan_id,
                     )
                 except ReservationRuleError as exc:
                     raise ValidationError({'detail': exc.message})
@@ -3269,6 +3270,9 @@ class EnrollmentViewSet(ModelViewSet):
             raise PermissionDenied('No tienes permisos para crear inscripciones.')
 
     def perform_update(self, serializer):
+        # Mismo motivo que en `perform_create`: sacarlo ANTES de cualquier branch, incluido
+        # el `serializer.save()` final de más abajo (el PATCH que no cambia `status`).
+        student_plan_id = serializer.validated_data.pop('student_plan_id', None)
         user = self.request.user
         enrollment = self.get_object()
         if not (
@@ -3291,6 +3295,7 @@ class EnrollmentViewSet(ModelViewSet):
                         gym_class=serializer.validated_data.get('gym_class', enrollment.gym_class),
                         recurring_enrollment=enrollment.recurring_enrollment,
                         require_plan=True,
+                        student_plan_id=student_plan_id,
                     )
                 except ReservationRuleError as exc:
                     raise ValidationError({'detail': exc.message})

@@ -695,6 +695,15 @@ class EnrollmentSerializer(serializers.ModelSerializer):
     cancel_block_reason = serializers.SerializerMethodField()
     cancel_policy_message = serializers.SerializerMethodField()
     attendance_status = serializers.SerializerMethodField()
+    # Elección del alumno de CON QUÉ membresía reservar (9.1), write-only. NO se expone
+    # `student_plan` (el FK): ese campo se escribe SOLO a través de
+    # `resolve_student_plan_for_reservation`, nunca por asignación directa del
+    # serializer, porque saltarse esa función implica no validar pertenencia, saldo,
+    # vigencia ni sucursal. `IntegerField` y no `PrimaryKeyRelatedField` a propósito: un
+    # `PrimaryKeyRelatedField` con queryset acotado por organización sería un ORÁCULO (404
+    # vs "no es tuyo" antes de llegar al servicio); sin queryset, cualquier id pasa tal
+    # cual y la validación real la hace `resolve_student_plan_for_reservation`.
+    student_plan_id = serializers.IntegerField(required=False, allow_null=True, write_only=True)
 
     class Meta:
         model = Enrollment
@@ -722,6 +731,7 @@ class EnrollmentSerializer(serializers.ModelSerializer):
             'cancel_policy_message',
             'attendance_status',
             'is_trial',
+            'student_plan_id',
             'created_at',
         ]
         read_only_fields = ['created_at', 'recurring_enrollment', 'is_trial']
