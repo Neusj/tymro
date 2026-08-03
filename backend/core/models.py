@@ -448,6 +448,57 @@ class Attendance(TimestampedModel):
         return f'Asistencia {self.gym_class_id}-{self.student_id}'
 
 
+class AttendanceChangeLog(TimestampedModel):
+    """Registro append-only de correcciones de asistencia.
+
+    Se escribe solo cuando un admin cambia un `status` ya registrado en `Attendance`.
+    No hay endpoint de UPDATE ni de DELETE sobre estas filas: la existencia de la fila
+    es el hecho.
+    """
+
+    # Hecho SOBRE ese registro de asistencia: no significa nada sin él (mismo
+    # razonamiento que `ManualPayment.student_plan`, models.py:991-1002). PROTECT
+    # convertiría en 500 el borrado en cascada de clases/usuarios que hoy funciona.
+    attendance = models.ForeignKey(
+        Attendance,
+        on_delete=models.CASCADE,
+        related_name='change_logs',
+    )
+    previous_status = models.CharField(max_length=10, choices=Attendance.Status.choices)
+    new_status = models.CharField(max_length=10, choices=Attendance.Status.choices)
+    # Quién hizo el cambio. SET_NULL, mismo razonamiento que
+    # `ManualPayment.recorded_by` (models.py:1025-1035): perder el autor es aceptable,
+    # perder el hecho no. OJO: esta FK NO es el ancla multitenant; para eso está la
+    # columna `organization`.
+    changed_by = models.ForeignKey(
+        'accounts.CustomUser',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='attendance_changes_recorded',
+    )
+    # `default=timezone.now` y no `auto_now_add`, igual que `ManualPayment.recorded_at`
+    # (models.py:1043-1047): se llena solo pero sigue siendo escribible desde código.
+    changed_at = models.DateTimeField(default=timezone.now)
+    # Se estampa desde la organización YA VALIDADA del actor (la guarda de
+    # pertenencia corre primero en la view): nunca del payload, nunca derivada de
+    # `changed_by` (SET_NULL + el usuario puede mudarse de org). PROTECT por el mismo
+    # motivo que `ManualPayment.organization` (models.py:981-985): borrar la
+    # organización no puede llevarse la auditoría en silencio, y
+    # `OrganizationViewSet.destroy` ya captura `ProtectedError`.
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.PROTECT,
+        related_name='attendance_change_logs',
+    )
+
+    class Meta:
+        ordering = ['-changed_at', 'id']
+
+    def __str__(self):
+        return f'{self.attendance_id}: {self.previous_status} -> {self.new_status}'
+
+
 class MembershipPlan(TimestampedModel):
     PLAN_KIND_CHOICES = [
         ('monthly', 'Mensual'),

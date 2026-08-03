@@ -15,6 +15,7 @@ from .services.public_urls import trial_signup_url
 
 from .models import (
     Attendance,
+    AttendanceChangeLog,
     Branch,
     ClassTemplate,
     ClassType,
@@ -1064,6 +1065,31 @@ class AttendanceSerializer(serializers.ModelSerializer):
     def get_student_name(self, obj):
         full_name = f'{obj.student.first_name} {obj.student.last_name}'.strip()
         return full_name or obj.student.username
+
+
+class AttendanceChangeLogSerializer(serializers.ModelSerializer):
+    student = serializers.IntegerField(source='attendance.student_id', read_only=True)
+    student_name = serializers.SerializerMethodField()
+    changed_by_username = serializers.CharField(source='changed_by.username', read_only=True)
+
+    class Meta:
+        model = AttendanceChangeLog
+        fields = [
+            'id',
+            'attendance',
+            'student',
+            'student_name',
+            'previous_status',
+            'new_status',
+            'changed_by',
+            'changed_by_username',
+            'changed_at',
+        ]
+
+    def get_student_name(self, obj):
+        student = obj.attendance.student
+        full_name = f'{student.first_name} {student.last_name}'.strip()
+        return full_name or student.username
 
 
 class AttendanceItemWriteSerializer(serializers.Serializer):

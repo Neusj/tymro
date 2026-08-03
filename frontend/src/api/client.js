@@ -334,6 +334,14 @@ export const classesApi = {
     const { data } = await api.post(`/classes/${id}/attendance/`, { attendances })
     return data
   },
+  // Historial inmutable de correcciones de asistencia (solo gym_admin/superadmin;
+  // el backend responde 403 para otros roles). Lista [{id, attendance, student,
+  // student_name, previous_status, new_status, changed_by, changed_by_username,
+  // changed_at}] ordenada por -changed_at.
+  getAttendanceHistory: async (id) => {
+    const { data } = await api.get(`/classes/${id}/attendance-history/`)
+    return data
+  },
   cancel: async (id, comment) => {
     const { data } = await api.post(`/classes/${id}/cancel/`, { comment })
     return data

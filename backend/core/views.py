@@ -30,6 +30,7 @@ from accounts import roles
 
 from .models import (
     Attendance,
+    AttendanceChangeLog,
     Branch,
     ClassTemplate,
     ClassType,
@@ -56,6 +57,7 @@ from .permissions import (
 )
 from .serializers import (
     AttendanceBulkWriteSerializer,
+    AttendanceChangeLogSerializer,
     AttendanceSerializer,
     BranchSerializer,
     ClassTemplateSerializer,
@@ -2425,23 +2427,96 @@ class GymClassViewSet(ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # 10.2: tomar lista (crear) sigue abierto a profe/gym_admin/superadmin (guarda de
+        # arriba); corregir un registro YA EXISTENTE con status distinto pasa a ser
+        # exclusivo de admin. Clasificamos antes de escribir para poder aplicar esa
+        # regla todo-o-nada.
+        existing_attendances = {
+            attendance.student_id: attendance
+            for attendance in Attendance.objects.filter(gym_class=gym_class, student_id__in=incoming_ids)
+        }
+
+        creations = []
+        corrections = []
+        for item in attendances_payload:
+            existing = existing_attendances.get(item['student_id'])
+            if existing is None:
+                creations.append(item)
+            elif existing.status != item['status']:
+                corrections.append((existing, item['status']))
+            # else: mismo status que el registro existente → no-op, no se re-estampa
+            # marked_by/marked_at ni se toca nada.
+
+        # SOLO gym_admin/superadmin: `_is_gym_admin` y no `roles.is_org_admin`, que
+        # incluiría a manager — la corrección de un hecho ya registrado es superficie
+        # de admin (mismo corte que ADMIN_WRITE_ROLES), no operativa.
+        is_admin_actor = _is_superadmin(user) or (
+            _is_gym_admin(user) and gym_class.organization_id == user.organization_id
+        )
+        if corrections and not is_admin_actor:
+            # Todo-o-nada: si el payload trae aunque sea UNA corrección y quien lo manda
+            # no es admin, se rechaza el request completo antes de escribir nada (un
+            # profe no puede colar una corrección mezclada con creaciones legítimas).
+            raise PermissionDenied('Solo un administrador puede corregir una asistencia ya registrada.')
+
         with transaction.atomic():
             now = timezone.now()
-            for item in attendances_payload:
-                Attendance.objects.update_or_create(
+            for item in creations:
+                Attendance.objects.create(
                     gym_class=gym_class,
                     student_id=item['student_id'],
-                    defaults={
-                        'status': item['status'],
-                        'source': Attendance.Source.MANUAL,
-                        'marked_by': user,
-                        'marked_at': now,
-                        'checked_at': now,
-                    },
+                    status=item['status'],
+                    source=Attendance.Source.MANUAL,
+                    marked_by=user,
+                    marked_at=now,
+                    checked_at=now,
+                )
+            for existing, new_status in corrections:
+                previous_status = existing.status
+                existing.status = new_status
+                existing.source = Attendance.Source.MANUAL
+                existing.marked_by = user
+                existing.marked_at = now
+                # No tocamos checked_at: conserva el momento del check original.
+                existing.save(update_fields=['status', 'source', 'marked_by', 'marked_at'])
+                # La organización se estampa de `gym_class`, que la guarda de pertenencia
+                # YA validó como la org del actor cuando es org_admin (corre primero,
+                # lección 8.3); para superadmin (sin org propia) es el tenant donde ocurrió
+                # la corrección. NUNCA del payload y NUNCA derivada de `changed_by`
+                # (SET_NULL / el usuario puede mudarse de org) — patrón ManualPayment.
+                AttendanceChangeLog.objects.create(
+                    attendance=existing,
+                    previous_status=previous_status,
+                    new_status=new_status,
+                    changed_by=user,
+                    changed_at=now,
+                    organization_id=gym_class.organization_id,
                 )
 
         attendances = gym_class.attendances.select_related('student', 'marked_by').all()
         return Response(AttendanceSerializer(attendances, many=True).data)
+
+    @action(detail=True, methods=['get'], url_path='attendance-history')
+    def attendance_history(self, request, pk=None):
+        gym_class = self.get_object()
+        user = request.user
+
+        # El historial de correcciones es auditoría de staff (10.2): corregir una asistencia
+        # ya registrada es exclusivo de admin, así que verlas también lo es. El profe dueño
+        # de la clase queda afuera aunque pueda tomar asistencia: la corrección nunca fue suya.
+        # Mismo corte que la corrección: `_is_gym_admin`, no `is_org_admin` (manager afuera).
+        if not (
+            _is_superadmin(user)
+            or (_is_gym_admin(user) and gym_class.organization_id == user.organization_id)
+        ):
+            raise PermissionDenied('No tienes permisos para ver el historial de correcciones de asistencia.')
+
+        logs = AttendanceChangeLog.objects.filter(
+            attendance__gym_class=gym_class,
+            organization_id=gym_class.organization_id,
+        ).select_related('attendance__student', 'changed_by')
+
+        return Response(AttendanceChangeLogSerializer(logs, many=True).data)
 
     @action(detail=True, methods=['post'], url_path='cancel')
     def cancel(self, request, pk=None):

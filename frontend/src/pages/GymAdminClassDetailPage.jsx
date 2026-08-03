@@ -8,6 +8,7 @@ import FormModal from '../components/FormModal'
 import DataTable from '../components/ui/DataTable'
 import ValueBadge from '../components/ui/ValueBadge'
 import { canManageOperational } from '../utils/roles'
+import { firstApiError } from '../utils/format'
 
 function formatDateTime(value) {
   if (!value) {
@@ -18,6 +19,14 @@ function formatDateTime(value) {
     timeStyle: 'short',
   })
 }
+
+// Solo 2 estados marcables por el admin (igual que el toggle del profe en
+// TeacherClassesPage); el historial de correcciones sí puede MOSTRAR cualquier
+// status heredado (p.ej. 'late'/'excused'/'no_show' marcados antes por el profe).
+const ATTENDANCE_TOGGLE_OPTIONS = [
+  { value: 'present', label: 'Presente' },
+  { value: 'absent', label: 'Ausente' },
+]
 
 export default function GymAdminClassDetailPage() {
   const { id } = useParams()
@@ -31,6 +40,15 @@ export default function GymAdminClassDetailPage() {
   const [selectedStudentId, setSelectedStudentId] = useState('')
   const [error, setError] = useState('')
   const [deleting, setDeleting] = useState(null)
+
+  const [attendanceMap, setAttendanceMap] = useState({})
+  const [attendanceSaving, setAttendanceSaving] = useState(false)
+  const [attendanceError, setAttendanceError] = useState('')
+
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [history, setHistory] = useState([])
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [historyError, setHistoryError] = useState('')
 
   const loadData = async () => {
     setLoading(true)
@@ -50,6 +68,71 @@ export default function GymAdminClassDetailPage() {
   const enrollments = gymClass?.enrollments || []
   const activeEnrollments = enrollments.filter((item) => item.status === 'active')
   const enrolledStudentIds = useMemo(() => new Set(enrollments.map((item) => String(item.student))), [enrollments])
+
+  // Asistencia actual: viene YA en el detalle de clase (GymClassDetailSerializer →
+  // `attendances`), no hace falta un GET aparte. Default visual 'absent' para el
+  // alumno inscrito que todavía no tiene registro (mismo criterio que el profe en
+  // TeacherClassesPage).
+  useEffect(() => {
+    if (!gymClass) {
+      return
+    }
+    const attendanceByStudent = {}
+    ;(gymClass.attendances || []).forEach((item) => {
+      attendanceByStudent[item.student] = item.status
+    })
+    const draft = {}
+    ;(gymClass.enrollments || [])
+      .filter((item) => item.status === 'active')
+      .forEach((item) => {
+        draft[item.student] = attendanceByStudent[item.student] || 'absent'
+      })
+    setAttendanceMap(draft)
+  }, [gymClass])
+
+  const fetchAttendanceHistory = async () => {
+    setHistoryLoading(true)
+    setHistoryError('')
+    try {
+      const data = await classesApi.getAttendanceHistory(id)
+      setHistory(data)
+    } catch (apiError) {
+      setHistoryError(firstApiError(apiError?.response?.data, 'No se pudo cargar el historial de correcciones.'))
+    } finally {
+      setHistoryLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (historyOpen) {
+      fetchAttendanceHistory()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [historyOpen, id])
+
+  const saveAttendance = async () => {
+    if (activeEnrollments.length === 0) {
+      return
+    }
+    setAttendanceSaving(true)
+    setAttendanceError('')
+    try {
+      const payload = activeEnrollments.map((enrollment) => ({
+        student_id: enrollment.student,
+        status: attendanceMap[enrollment.student] || 'absent',
+      }))
+      await classesApi.saveAttendance(id, payload)
+      await loadData()
+      if (historyOpen) {
+        await fetchAttendanceHistory()
+      }
+    } catch (apiError) {
+      setAttendanceError(firstApiError(apiError?.response?.data, 'No se pudo guardar la asistencia.'))
+    } finally {
+      setAttendanceSaving(false)
+    }
+  }
+
   const filteredStudents = useMemo(() => {
     const query = search.trim().toLowerCase()
     return students.filter((student) => {
@@ -172,6 +255,103 @@ export default function GymAdminClassDetailPage() {
       <section className="card-surface p-5">
         <h2 className="panel-title mb-4">Alumnos inscritos</h2>
         <DataTable columns={columns} data={enrollments} loading={loading} />
+      </section>
+
+      <section className="card-surface p-5">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <h2 className="panel-title">Asistencia</h2>
+          <button
+            type="button"
+            disabled={attendanceSaving || activeEnrollments.length === 0}
+            onClick={saveAttendance}
+            className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+          >
+            {attendanceSaving ? 'Guardando...' : 'Guardar asistencia'}
+          </button>
+        </div>
+
+        {attendanceError ? (
+          <p className="mb-3 rounded-lg border border-brand-red/50 bg-brand-red/10 px-3 py-2 text-sm text-red-200">{attendanceError}</p>
+        ) : null}
+
+        {activeEnrollments.length === 0 ? (
+          <p className="text-sm text-brand-muted">No hay alumnos inscritos activos en esta clase.</p>
+        ) : (
+          <div className="space-y-2">
+            {activeEnrollments.map((enrollment) => (
+              <div
+                key={enrollment.id}
+                className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-brand-line px-3 py-2 text-sm"
+              >
+                <span className="font-semibold">{enrollment.student_name}</span>
+                <span className="flex items-center gap-2">
+                  <ValueBadge kind="attendance_status" value={attendanceMap[enrollment.student]} />
+                  <span className="flex gap-1">
+                    {ATTENDANCE_TOGGLE_OPTIONS.map((option) => {
+                      const selected = attendanceMap[enrollment.student] === option.value
+                      return (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onClick={() =>
+                            setAttendanceMap((prev) => ({
+                              ...prev,
+                              [enrollment.student]: option.value,
+                            }))
+                          }
+                          className={`rounded-lg border px-2.5 py-1 text-xs transition ${
+                            selected ? 'border-brand-blue bg-brand-blue/20 text-brand-white' : 'border-brand-line text-brand-muted hover:text-brand-white'
+                          }`}
+                        >
+                          {option.label}
+                        </button>
+                      )
+                    })}
+                  </span>
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="card-surface p-5">
+        <button
+          type="button"
+          onClick={() => setHistoryOpen((prev) => !prev)}
+          className="flex w-full items-center justify-between gap-3 text-left"
+        >
+          <h2 className="panel-title">Historial de correcciones</h2>
+          <span className="text-xs text-brand-muted">{historyOpen ? 'Ocultar ▲' : 'Ver ▼'}</span>
+        </button>
+
+        {historyOpen ? (
+          <div className="mt-4">
+            {historyLoading ? (
+              <p className="text-sm text-brand-muted">Cargando historial...</p>
+            ) : historyError ? (
+              <p className="rounded-lg border border-brand-red/50 bg-brand-red/10 px-3 py-2 text-sm text-red-200">{historyError}</p>
+            ) : history.length === 0 ? (
+              <p className="text-sm text-brand-muted">Sin correcciones registradas.</p>
+            ) : (
+              <div className="space-y-2">
+                {history.map((item) => (
+                  <div key={item.id} className="rounded-lg border border-brand-line px-3 py-2 text-sm">
+                    <p className="font-semibold">{item.student_name}</p>
+                    <div className="mt-1 flex flex-wrap items-center gap-2">
+                      <ValueBadge kind="attendance_status" value={item.previous_status} />
+                      <span className="text-brand-muted">→</span>
+                      <ValueBadge kind="attendance_status" value={item.new_status} />
+                    </div>
+                    <p className="mt-1 text-xs text-brand-muted">
+                      {item.changed_by_username || '-'} · {formatDateTime(item.changed_at)}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : null}
       </section>
 
       <FormModal open={modalOpen} onClose={() => setModalOpen(false)} title="Inscribir alumno">
