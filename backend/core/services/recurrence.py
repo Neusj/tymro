@@ -69,12 +69,33 @@ def is_holiday(value_date, organization=None, branch=None):
 
 
 def _create_enrollment_if_possible(*, recurring_enrollment, gym_class):
+    """Materializa UNA instancia de la serie imputándola a la membresía que el alumno
+    eligió en el alta (10.x).
+
+    `student_plan_id` sale de la suscripción y baja tal cual hasta
+    `resolve_student_plan_for_reservation`, que es el único que decide: no hay una segunda
+    regla de imputación acá. Las dos ramas:
+
+    * FK NULL (filas legacy y las que el backfill de 0036 dejó ambiguas) → se pasa `None` y
+      cada instancia re-resuelve como antes de 10.x: con 1 candidato usable consume, con 2+
+      queda `skipped: plan_choice_required`.
+    * FK poblada → se consume de ESE plan. Es lo que hace que un alumno con 2+ membresías
+      vigentes deje de perder la serie entera: eligió una vez, en el alta.
+
+    CONSECUENCIA VIVA (no es un bug de este cambio, es la decisión de "no adivinar"): si el
+    plan elegido se agota o vence, la serie NO salta sola a otra membresía —queda `skipped`
+    con `chosen_plan_unavailable` aunque el alumno haya renovado—, porque renovar crea una
+    fila NUEVA de `StudentPlan` y la FK sigue apuntando a la vieja. Reapuntar la elección al
+    renovar es una decisión de producto aparte (y su propio endpoint), no un efecto
+    colateral del loop.
+    """
     try:
         reserve_student_in_class(
             student=recurring_enrollment.student,
             gym_class=gym_class,
             recurring_enrollment=recurring_enrollment,
             require_plan=True,
+            student_plan_id=recurring_enrollment.student_plan_id,
         )
     except ReservationRuleError as exc:
         return False, exc.code

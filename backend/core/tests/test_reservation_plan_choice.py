@@ -230,16 +230,25 @@ def test_zero_usable_plans_is_the_pre_existing_error(setup):
 
 
 # --------------------------------------------------------------------------------------
-# h. Recurrencia: la materialización no puede adivinar. Consecuencia documentada, NO
-#    arreglada (recurrence.py no cambia): un alumno con 2+ planes usables queda `skipped`.
+# h. Recurrencia SIN elección grabada (`student_plan` NULL): la materialización no puede
+#    adivinar y un alumno con 2+ planes usables queda `skipped`.
+#
+#    ACTUALIZADO EN 10.x: la recurrencia ya NO es un callejón sin salida. El ALTA pide la
+#    elección una vez y la graba en `RecurringEnrollment.student_plan`, y el loop la
+#    propaga a cada instancia (ver `test_recurring_enrollment_plan_choice.py`). Lo que se
+#    conserva acá es el camino de la FK en NULL —filas legacy y las que el backfill de
+#    0036 dejó ambiguas—, que sigue re-resolviendo por instancia exactamente como en 9.1.
+#    Por eso la suscripción se construye por ORM directo y no por la API: por la API el
+#    alta ahora exigiría el `student_plan_id` y nunca llegaría a este skip.
 # --------------------------------------------------------------------------------------
 
 def test_recurring_materialization_skips_with_plan_choice_required_when_ambiguous(setup):
-    """`_create_enrollment_if_possible` llama `reserve_student_in_class` SIN
-    `student_plan_id` -- no hay ningún humano eligiendo en el job de materialización --,
-    así que antes de 9.1 le descontaba a una membresía arbitraria y ahora la reserva
-    queda `skipped` con `reason == 'plan_choice_required'`. Es la decisión de producto
-    ("no adivinar"), no un bug: no se toca `recurrence.py` para "arreglarlo"."""
+    """`_create_enrollment_if_possible` le pasa a `reserve_student_in_class` el
+    `student_plan_id` de la SUSCRIPCIÓN, que en esta fila es NULL: no hay ningún humano
+    eligiendo en el job de materialización, así que antes de 9.1 le descontaba a una
+    membresía arbitraria y ahora la reserva queda `skipped` con
+    `reason == 'plan_choice_required'`. Es la decisión de producto ("no adivinar"), no un
+    bug."""
     _student_plan(setup['org'], setup['student'])
     _student_plan(setup['org'], setup['student'])
     template = ClassTemplate.objects.create(

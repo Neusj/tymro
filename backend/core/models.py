@@ -1331,6 +1331,35 @@ class RecurringEnrollment(TimestampedModel):
         blank=True,
         related_name='created_recurring_enrollments',
     )
+    # Con qué membresía se re-imputan las instancias futuras de esta recurrencia. Espejo
+    # de `Enrollment.student_plan` (#9, models.py:395-401) pero RESTRICT y no SET_NULL: ahí
+    # el campo es un registro HISTÓRICO de una reserva ya hecha (perder la membresía no
+    # puede llevarse la reserva); acá es la elección VIGENTE que gobierna reservas
+    # FUTURAS todavía no generadas —si el plan elegido se borra, la recurrencia tiene que
+    # bloquear ese borrado, no caer en silencio de vuelta a la resolución arbitraria por
+    # instancia—. NULL es el comportamiento actual: el loop de recurrencia sigue
+    # resolviendo el plan por instancia vía `resolve_student_plan_for_reservation`, sin
+    # imputación fija. Sin constraint de unicidad, igual que `StudentPlan` no la tiene
+    # sobre (user, organization): varias recurrencias pueden apuntar a la misma membresía.
+    #
+    # RESTRICT y NO PROTECT (misma elección que `Plan.branch`), por la diferencia que solo
+    # aparece en las CASCADAS: los dos bloquean el borrado directo de la membresía, pero
+    # PROTECT también revienta cuando la fila que protege se borra en la MISMA operación.
+    # `RecurringEnrollment.student` y `StudentPlan.user` son ambos CASCADE sobre el alumno,
+    # así que borrar un alumno se lleva la recurrencia Y la membresía juntas: ahí no hay
+    # nada que proteger, y con PROTECT `DELETE /api/users/{id}/` respondía 500
+    # (`ProtectedError` sin capturar en `UserViewSet.perform_destroy`) para cualquier alumno
+    # con recurrencia y plan. RESTRICT permite exactamente ese caso —la referencia muere en
+    # el mismo `delete()`— y sigue levantando `RestrictedError` cuando alguien intenta
+    # quitarle al alumno la membresía que su serie tiene fijada (`remove_membership`, que la
+    # atrapa y devuelve un 400 accionable).
+    student_plan = models.ForeignKey(
+        'StudentPlan',
+        on_delete=models.RESTRICT,
+        null=True,
+        blank=True,
+        related_name='recurring_enrollments',
+    )
 
     class Meta:
         ordering = ['-created_at']

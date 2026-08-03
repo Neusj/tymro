@@ -12,7 +12,7 @@ from django.core import signing
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.mail import send_mail
 from django.db import models, transaction
-from django.db.models import ProtectedError
+from django.db.models import ProtectedError, RestrictedError
 from django.utils import timezone
 from django.utils.encoding import force_bytes, force_str
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
@@ -3773,7 +3773,43 @@ class MembershipPlanViewSet(ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        membership.delete()
+        # Segunda precondición, independiente del historial: la membresía puede estar FIJADA
+        # como imputación de una recurrencia (`RecurringEnrollment.student_plan`, RESTRICT).
+        # Una serie recién creada tiene `classes_used == 0` y cero logs, así que la guarda de
+        # arriba la deja pasar y el `.delete()` moría con `RestrictedError` → 500. El mensaje
+        # dice QUÉ hacer: sacar la recurrencia primero (`DELETE /api/recurring-enrollments/
+        # {id}/`, disponible para el admin y para el propio alumno).
+        pinned_count = membership.recurring_enrollments.count()
+        if pinned_count:
+            return Response(
+                {
+                    'detail': (
+                        'No se puede quitar esta membresia porque esta fijada como plan de '
+                        f'{pinned_count} serie(s) recurrente(s) del alumno. Elimina o cambia esas '
+                        'recurrencias antes de quitarla.'
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            membership.delete()
+        except RestrictedError:
+            # Red de fondo, mismo criterio que `OrganizationViewSet.destroy` (views.py:1633):
+            # el conteo de arriba y el DELETE no comparten lock —entre medio alguien puede
+            # crear una recurrencia fijando esta membresía— y la lista de bloqueadores está
+            # cableada a `recurring_enrollments`, así que el próximo RESTRICT que se agregue
+            # volvería a dar 500. Con RESTRICT la excepción es `RestrictedError`, no
+            # `ProtectedError`.
+            return Response(
+                {
+                    'detail': (
+                        'No se puede quitar esta membresia porque hay datos que dependen de '
+                        'ella. Revisa las recurrencias del alumno antes de quitarla.'
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 

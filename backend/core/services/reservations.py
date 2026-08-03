@@ -23,6 +23,25 @@ class ReservationRuleError(Exception):
         self.code = code
 
 
+# Vocabulario de la imputación de consumo (#9 + 10.x). Los tres son FUENTE ÚNICA: los dos
+# resolvedores (`resolve_student_plan_for_reservation` y
+# `resolve_student_plan_for_recurring_enrollment`) comparten literal y código para que la
+# reserva puntual y el alta de una recurrencia no puedan divergir en lo que el alumno lee.
+REASON_CHOSEN_PLAN_UNAVAILABLE = 'chosen_plan_unavailable'
+REASON_PLAN_CHOICE_REQUIRED = 'plan_choice_required'
+# ÚNICO code de este módulo que el wire traduce a 404 y no a 400 (ver
+# `resolve_student_plan_for_recurring_enrollment`): no es "el plan no sirve", es "ese id no
+# existe en esta organización".
+REASON_PLAN_NOT_FOUND = 'plan_not_found'
+
+CHOSEN_PLAN_UNAVAILABLE_MESSAGE = 'El plan elegido no está disponible.'
+PLAN_CHOICE_REQUIRED_MESSAGE = 'Tienes más de un plan vigente. Elige con cuál reservar.'
+# Mismo string que `ManualPaymentCreateView` (8.2): el 404 anti-oráculo de una membresía
+# tiene que leerse igual en todos los endpoints, o la diferencia de texto vuelve a ser la
+# señal que el 404 uniforme viene a borrar.
+PLAN_NOT_FOUND_MESSAGE = 'Membresía no encontrada.'
+
+
 def get_active_student_plan(student, on_date=None):
     """Membresía vigente del alumno EN SU ORGANIZACIÓN.
 
@@ -54,6 +73,34 @@ def get_active_student_plan(student, on_date=None):
         .order_by('-start_date', '-id')
         .first()
     )
+
+
+def _usable_student_plan_candidates(student, organization_id, target_date):
+    """Membresías del alumno que PUEDEN pagar un consumo en `target_date`, dentro de UNA
+    organización. FUENTE ÚNICA de "candidato" para los dos resolvedores que eligen con qué
+    plan se imputa: la reserva puntual (`resolve_student_plan_for_reservation`, #9) y el
+    alta de una recurrencia (`resolve_student_plan_for_recurring_enrollment`, 10.x).
+
+    La organización llega por PARÁMETRO y no se deriva de `student.organization_id` acá
+    adentro a propósito: los dos llamadores anclan en organizaciones distintas —la reserva
+    en la del alumno (que es también la de la clase, ya validado antes), el alta de
+    recurrencia en la de la PLANTILLA— y esa diferencia es deliberada (ver el docstring de
+    cada uno). Lo que NO cambia es que siempre se intersecta por la COLUMNA
+    `StudentPlan.organization` —quien VENDIÓ la membresía—, nunca por el join
+    `plan__organization` ni por `user.organization`: `StudentPlan.user` es CASCADE sobre el
+    usuario y no sobre el tenant, así que un alumno movido de organización conservaría
+    vivas las membresías de la anterior.
+
+    `describe_student_plan` es la fuente única de saldo/vigencia (la misma que usan el
+    roster y el serializer), así que el predicado "usable" no se reimplementa acá.
+    """
+    candidates_qs = (
+        StudentPlan.objects
+        .filter(user=student, organization_id=organization_id)
+        .valid_on(target_date)
+        .order_by('-start_date', '-id')
+    )
+    return [sp for sp in candidates_qs if describe_student_plan(sp, target_date).is_usable]
 
 
 def resolve_student_plan_for_reservation(student, *, student_plan_id=None, on_date=None):
@@ -93,20 +140,14 @@ def resolve_student_plan_for_reservation(student, *, student_plan_id=None, on_da
     descontarle a uno arbitrario —"no adivinar" es la decisión de producto de #9—.
     """
     target_date = on_date or timezone.localdate()
-    candidates_qs = (
-        StudentPlan.objects
-        .filter(user=student, organization_id=student.organization_id)
-        .valid_on(target_date)
-        .order_by('-start_date', '-id')
-    )
-    candidates = [sp for sp in candidates_qs if describe_student_plan(sp, target_date).is_usable]
+    candidates = _usable_student_plan_candidates(student, student.organization_id, target_date)
 
     if student_plan_id is not None:
         for candidate in candidates:
             if candidate.id == student_plan_id:
                 return candidate
         raise ReservationRuleError(
-            'El plan elegido no está disponible.', code='chosen_plan_unavailable'
+            CHOSEN_PLAN_UNAVAILABLE_MESSAGE, code=REASON_CHOSEN_PLAN_UNAVAILABLE
         )
 
     if len(candidates) == 1:
@@ -116,8 +157,104 @@ def resolve_student_plan_for_reservation(student, *, student_plan_id=None, on_da
             'No tienes clases disponibles o plan activo', code=REASON_PLAN_UNAVAILABLE
         )
     raise ReservationRuleError(
-        'Tienes más de un plan vigente. Elige con cuál reservar.', code='plan_choice_required'
+        PLAN_CHOICE_REQUIRED_MESSAGE, code=REASON_PLAN_CHOICE_REQUIRED
     )
+
+
+def resolve_student_plan_for_recurring_enrollment(
+    student, *, organization_id, branch_id=None, student_plan_id=None, on_date=None,
+):
+    """Con qué membresía nace una recurrencia (10.x): la misma regla de #9 —0/1/2+
+    candidatos— aplicada UNA vez en el ALTA en vez de en cada instancia.
+
+    Devuelve el `StudentPlan` elegido, o `None` cuando el alumno no tiene ningún candidato
+    usable. `None` NO es un error: la FK queda NULL y esa serie sigue con el
+    comportamiento anterior (el loop re-resuelve el plan por instancia vía
+    `resolve_student_plan_for_reservation`), así que un alumno puede suscribirse hoy y
+    comprar su plan mañana. Bloquear el alta acá rompería ese flujo sin ganar nada: la
+    reserva de cada instancia ya valida el plan por su cuenta.
+
+    DIFERENCIAS con `resolve_student_plan_for_reservation`, las tres deliberadas:
+
+    1. **La organización viene por parámetro.** Es la de la SUSCRIPCIÓN
+       (`class_template.organization_id`), no `student.organization_id` — el mismo criterio
+       que el backfill de la migración 0036. `RecurringEnrollment.student` es CASCADE sobre
+       el usuario y no sobre el tenant: si al alumno lo mueven de organización DESPUÉS del
+       alta, la fila sigue colgada de la plantilla vieja, y anclar en la organización nueva
+       del alumno le colgaría a esa serie un plan cross-tenant.
+    2. **Un id que no existe en la organización es 404 y no 400** (`plan_not_found`). El id
+       de `StudentPlan` es autoincremental y adivinable, así que responder "plan inválido"
+       para un id ajeno y "no existe" para uno inexistente convertiría el alta en un
+       oráculo de membresías de otros gimnasios (mismo criterio y mismo texto que
+       `ManualPaymentCreateView`, 8.2). La reserva puntual de #9 colapsa los cuatro casos
+       en un único 400 porque ahí el que elige es el propio alumno sobre SU lista; acá el
+       alta la puede disparar un admin con un id arbitrario, así que la frontera de tenant
+       se responde ANTES que cualquier regla de negocio y con el mismo cuerpo para "no
+       existe" y "no es de esta organización".
+    3. **Cero candidatos devuelve `None` en vez de levantar `plan_unavailable`.** Ver
+       arriba: el alta no consume nada, así que no hay nada que bloquear.
+
+    ORDEN (lección 8.3, pertenencia-primero): el lookup del id elegido corre SIEMPRE dentro
+    de un queryset acotado por organización, y solo DESPUÉS se evalúan las reglas de
+    negocio sobre el objeto ya obtenido (que sea del alumno de la suscripción, vigente y
+    con saldo) → esas sí son 400. Invertir el orden es exactamente lo que filtraría la
+    existencia de membresías ajenas.
+
+    `branch_id` (la sede de la PLANTILLA) se valida SOLO en el camino de la elección
+    explícita, y con el mismo `chosen_plan_unavailable` que el resto de las causas: fijar
+    como imputación un plan exclusivo de otra sede hacía nacer la serie MUERTA —alta 201 y
+    después cada instancia `skipped: plan_branch_mismatch`—, un fallo mudo que el alumno
+    solo descubre cuando no aparecen sus reservas. El auto-resolve (0/1/2+ sin elección) NO
+    filtra por sucursal a propósito: mantiene la semántica de #9, donde el chequeo de sede
+    corre en la materialización de cada instancia (`validate_plan_branch_for_class`).
+    """
+    target_date = on_date or timezone.localdate()
+
+    if student_plan_id is not None:
+        # PRIMERO la frontera de tenant, en su propia consulta acotada: mientras el id no
+        # se pruebe de esta organización, no se lo compara contra nada más.
+        belongs_to_organization = StudentPlan.objects.filter(
+            pk=student_plan_id, organization_id=organization_id,
+        ).exists()
+        if not belongs_to_organization:
+            raise ReservationRuleError(PLAN_NOT_FOUND_MESSAGE, code=REASON_PLAN_NOT_FOUND)
+        # RECIÉN AHORA las reglas de negocio: dentro de la organización, el id tiene que ser
+        # un candidato USABLE DEL ALUMNO de la suscripción. Un plan de otro alumno del mismo
+        # gimnasio, vencido o sin saldo cae acá (400), no en el 404 de arriba.
+        for candidate in _usable_student_plan_candidates(student, organization_id, target_date):
+            if candidate.id != student_plan_id:
+                continue
+            # Última regla de negocio, con el MISMO code/mensaje: un plan exclusivo de otra
+            # sede no puede quedar fijado en una serie que no se dicta ahí (ver docstring).
+            if branch_id is not None and not plan_covers_branch(candidate, branch_id):
+                break
+            return candidate
+        raise ReservationRuleError(
+            CHOSEN_PLAN_UNAVAILABLE_MESSAGE, code=REASON_CHOSEN_PLAN_UNAVAILABLE
+        )
+
+    candidates = _usable_student_plan_candidates(student, organization_id, target_date)
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return candidates[0]
+    raise ReservationRuleError(
+        PLAN_CHOICE_REQUIRED_MESSAGE, code=REASON_PLAN_CHOICE_REQUIRED
+    )
+
+
+def plan_covers_branch(student_plan, branch_id):
+    """¿Este plan cubre lo que se dicta en `branch_id`? PREDICADO ÚNICO del alcance por
+    sucursal, compartido por la reserva puntual (`validate_plan_branch_for_class`, que
+    mira la sede de la CLASE) y por el alta de una recurrencia (que mira la sede de la
+    PLANTILLA, porque todavía no hay instancias).
+
+    El alcance lo manda `plan.branch`: NULL = plan global (vale en toda la organización),
+    con sede = exclusivo. Nunca `student_plan.branch`, que es solo el registro histórico de
+    dónde se activó la membresía.
+    """
+    plan_branch_id = getattr(getattr(student_plan, 'plan', None), 'branch_id', None)
+    return not plan_branch_id or plan_branch_id == branch_id
 
 
 def validate_plan_branch_for_class(student_plan, gym_class):
@@ -134,10 +271,7 @@ def validate_plan_branch_for_class(student_plan, gym_class):
     (`has_used_trial`)—, no un hueco de la regla.
     """
     plan = getattr(student_plan, 'plan', None)
-    plan_branch_id = getattr(plan, 'branch_id', None)
-    if not plan_branch_id:
-        return
-    if plan_branch_id != gym_class.branch_id:
+    if not plan_covers_branch(student_plan, gym_class.branch_id):
         raise ReservationRuleError(
             f'Tu plan es exclusivo de {plan.branch.name} y no cubre las clases de esta sucursal.',
             code='plan_branch_mismatch',

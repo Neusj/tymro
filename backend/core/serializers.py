@@ -7,6 +7,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import Q
 from django.utils import timezone
 from rest_framework import serializers
+from rest_framework.exceptions import NotFound
 
 from accounts import roles
 from accounts.rut import clean_rut
@@ -38,6 +39,11 @@ from .models import (
 )
 from .services.plans import describe_student_plan
 from .services.recurrence import create_enrollments_for_recurring_subscription
+from .services.reservations import (
+    REASON_PLAN_NOT_FOUND,
+    ReservationRuleError,
+    resolve_student_plan_for_recurring_enrollment,
+)
 
 User = get_user_model()
 
@@ -1242,6 +1248,20 @@ class RecurringEnrollmentSerializer(serializers.ModelSerializer):
     can_manage_now = serializers.SerializerMethodField()
     manage_block_reason = serializers.SerializerMethodField()
     manage_policy_message = serializers.SerializerMethodField()
+    # Elección de CON QUÉ membresía se imputan las instancias de esta serie (10.x),
+    # write-only y solo en el ALTA. Espejo exacto del campo homónimo de
+    # `EnrollmentSerializer` (#9, serializers.py:699-707), incluidos sus dos motivos:
+    #
+    # * NO se expone el FK `student_plan` como escribible —sigue en `read_only_fields`—:
+    #   ese campo se escribe SOLO a través de
+    #   `resolve_student_plan_for_recurring_enrollment`, nunca por asignación directa del
+    #   serializer, porque saltarse esa función es no validar organización, pertenencia,
+    #   saldo ni vigencia.
+    # * `IntegerField` y no `PrimaryKeyRelatedField`: un `PrimaryKeyRelatedField` con
+    #   queryset acotado por organización sería un ORÁCULO (su error de "no existe" llegaría
+    #   antes que la resolución y con otro formato). Sin queryset, el id pasa tal cual y la
+    #   validación real —incluido el 404 uniforme— la hace el servicio.
+    student_plan_id = serializers.IntegerField(required=False, allow_null=True, write_only=True)
 
     class Meta:
         model = RecurringEnrollment
@@ -1269,8 +1289,19 @@ class RecurringEnrollmentSerializer(serializers.ModelSerializer):
             'can_manage_now',
             'manage_block_reason',
             'manage_policy_message',
+            # Lectura únicamente (10.x): con qué membresía se re-imputan las instancias
+            # futuras de esta recurrencia, si el alumno ya eligió una explícitamente
+            # (NULL = sigue resolviendo el plan por instancia, comportamiento actual).
+            # Va en `read_only_fields`, no declarado a mano: es exactamente lo que
+            # `ModelSerializer` genera solo para cualquier FK ahí listada —un
+            # `PrimaryKeyRelatedField(read_only=True)` que publica solo el id, sin
+            # queryset, porque no hay nada que validar en un campo que el input no
+            # puede tocar—. La ESCRITURA de la elección entra por `student_plan_id`
+            # (write-only, declarado arriba) y solo en el alta: nunca por este campo.
+            'student_plan',
+            'student_plan_id',
         ]
-        read_only_fields = ['created_by', 'created_at', 'updated_at', 'last_sync']
+        read_only_fields = ['created_by', 'created_at', 'updated_at', 'last_sync', 'student_plan']
         extra_kwargs = {
             'student': {'required': False},
         }
@@ -1326,6 +1357,17 @@ class RecurringEnrollmentSerializer(serializers.ModelSerializer):
         user = getattr(request, 'user', None)
         instance = getattr(self, 'instance', None)
 
+        # `student_plan_id` SOLO gobierna el alta. En un update se descarta acá, y no más
+        # abajo, por la trampa T1 de #9 (views.py:3280-3288): `student_plan` es un FK real,
+        # así que un `student_plan_id` que sobreviva en `validated_data` se lo come
+        # `ModelSerializer.update` como kwarg del FK y escribe la imputación sin pasar por
+        # `resolve_student_plan_for_recurring_enrollment` —sin validar organización,
+        # pertenencia, saldo ni vigencia—. Cambiar la elección de una serie YA creada es
+        # otra operación (tiene que decidir qué hacer con las instancias ya imputadas), así
+        # que hasta que exista se ignora en silencio, que es el lado cerrado.
+        if instance is not None:
+            attrs.pop('student_plan_id', None)
+
         student = attrs.get('student', getattr(instance, 'student', None))
         class_template = attrs.get('class_template', getattr(instance, 'class_template', None))
 
@@ -1374,6 +1416,47 @@ class RecurringEnrollmentSerializer(serializers.ModelSerializer):
         return attrs
 
     def create(self, validated_data):
+        """El ALTA aplica la regla de imputación del núcleo #9 (10.x).
+
+        La resolución vive acá y no en `validate` a propósito: `create` corre dentro de
+        `serializer.save()`, o sea DESPUÉS de la autorización de los dos puntos de entrada
+        —`RecurringEnrollmentViewSet.perform_create` (views.py:3091-3101) y la acción
+        `ClassTemplateViewSet.recurring-enroll` (views.py:2886-2910)—, y esa es la ÚNICA
+        posición que respeta el orden de la lección 8.3: las guardas de pertenencia
+        cross-org primero, el plan elegido después. En `validate` el lookup del id correría
+        ANTES del `PermissionDenied` de `perform_create`, y ahí la diferencia entre 404 y
+        403 le contaría a un actor de otra organización si ese id de membresía existe.
+        Bonus: al estar en `create` la regla es una sola para los dos endpoints, sin
+        duplicar nada en las views.
+
+        El pop de `student_plan_id` es lo que impide que llegue a
+        `RecurringEnrollment.objects.create(**validated_data)` como kwarg del FK (trampa T1
+        de #9): lo que se graba es la instancia que devolvió el servicio, nunca el id crudo
+        del payload.
+        """
+        chosen_plan_id = validated_data.pop('student_plan_id', None)
+        student = validated_data.get('student')
+        class_template = validated_data.get('class_template')
+        try:
+            validated_data['student_plan'] = resolve_student_plan_for_recurring_enrollment(
+                student,
+                # La organización de la SUSCRIPCIÓN, igual que el backfill de 0036: la
+                # plantilla es la que ancla el tenant de la serie, no `student.organization`
+                # (que puede cambiar después del alta).
+                organization_id=class_template.organization_id,
+                # La sede de la PLANTILLA: acá todavía no hay instancias que mirar, y es la
+                # sede en la que se van a dictar todas.
+                branch_id=class_template.branch_id,
+                student_plan_id=chosen_plan_id,
+            )
+        except ReservationRuleError as exc:
+            if exc.code == REASON_PLAN_NOT_FOUND:
+                # 404 uniforme para "no existe" y "es de otra organización": ver el
+                # docstring del servicio.
+                raise NotFound(exc.message)
+            # Reglas de negocio sobre un plan que ya se probó de esta organización. Mismo
+            # formato que #9 en el wire de reservas (views.py:3332): `{'detail': mensaje}`.
+            raise serializers.ValidationError({'detail': exc.message})
         recurring_enrollment = RecurringEnrollment.objects.create(**validated_data)
         create_enrollments_for_recurring_subscription(recurring_enrollment=recurring_enrollment)
         return recurring_enrollment
