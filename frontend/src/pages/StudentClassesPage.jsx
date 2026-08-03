@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { classTemplatesApi, classesApi, enrollmentsApi, getMyPlan, recurringEnrollmentsApi } from '../api/client'
+import { classTemplatesApi, classesApi, enrollmentsApi, getMyMemberships, recurringEnrollmentsApi } from '../api/client'
 import ConfirmDialog from '../components/ConfirmDialog'
 import DashboardHeader from '../components/DashboardHeader'
 import FilterDropdown from '../components/FilterDropdown'
@@ -94,7 +94,7 @@ export default function StudentClassesPage({ mode = 'available' }) {
   const [workingKey, setWorkingKey] = useState('')
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
-  const [myPlan, setMyPlan] = useState(null)
+  const [memberships, setMemberships] = useState([])
 
   const [classFilters, setClassFilters] = useState(initialAvailableClassFilters)
   const [reservationFilters, setReservationFilters] = useState(initialReservationFilters)
@@ -103,17 +103,25 @@ export default function StudentClassesPage({ mode = 'available' }) {
   const [selectedReservationIds, setSelectedReservationIds] = useState([])
   // Clase pendiente de confirmar antes de reservar (#24). null = sin diálogo abierto.
   const [pendingReserve, setPendingReserve] = useState(null)
+  // Rebook desde "Mis reservas" cuando hay 2+ planes usables: mismo diálogo de confirmación,
+  // pero la clase-origen es una reserva cancelada, no una fila de "Clases disponibles".
+  const [pendingRebook, setPendingRebook] = useState(null)
+  // Bulk (#9 T4): con 2+ planes usables, el selector se abre UNA vez para todo el lote.
+  const [pendingBulkReserve, setPendingBulkReserve] = useState(null)
+  // Plan elegido en el selector del diálogo de confirmación (#9 T4). Se resetea al
+  // abrir/cerrar cualquiera de los tres flujos de reserva.
+  const [selectedPlanId, setSelectedPlanId] = useState('')
 
   const loadData = async () => {
     setLoading(true)
     setError('')
     try {
-      const [scheduledClasses, completedClasses, myReservations, myRecurring, myPlanResult] = await Promise.allSettled([
+      const [scheduledClasses, completedClasses, myReservations, myRecurring, myMemberships] = await Promise.allSettled([
         classesApi.list({ status_in: 'scheduled,in_progress,cancelled', ordering: 'start_datetime' }),
         classesApi.list({ mine: true, status_in: 'completed,completed_early', ordering: '-start_datetime' }),
         enrollmentsApi.my(),
         recurringEnrollmentsApi.my(),
-        getMyPlan(),
+        getMyMemberships(),
       ])
       if (scheduledClasses.status === 'fulfilled') {
         setAvailableClasses(scheduledClasses.value)
@@ -127,8 +135,8 @@ export default function StudentClassesPage({ mode = 'available' }) {
       if (myRecurring.status === 'fulfilled') {
         setRecurringItems(myRecurring.value)
       }
-      if (myPlanResult.status === 'fulfilled') {
-        setMyPlan(myPlanResult.value || null)
+      if (myMemberships.status === 'fulfilled') {
+        setMemberships(Array.isArray(myMemberships.value) ? myMemberships.value : [])
       }
 
       const failed = [scheduledClasses, completedClasses, myReservations, myRecurring].find((result) => result.status === 'rejected')
@@ -199,8 +207,21 @@ export default function StudentClassesPage({ mode = 'available' }) {
     [filteredAvailableForBooking, activeReservationByClass],
   )
   const reservationKpis = useMemo(() => calculateReservationKpis(filteredReservations), [filteredReservations])
-  const remainingClasses = Math.max((myPlan?.total_classes || 0) - (myPlan?.classes_used || 0), 0)
-  const hasPlanBalance = remainingClasses > 0
+  // Fuente única de saldo: `getMyMemberships` (no se deriva vigencia/saldo en el cliente).
+  // `remaining_classes === null` = ilimitado, así que NUNCA entra en la suma de abajo.
+  const usableMemberships = useMemo(
+    () => memberships.filter((item) => item.remaining_classes === null || item.remaining_classes > 0),
+    [memberships],
+  )
+  const hasPlanBalance = usableMemberships.length > 0
+  const hasUnlimitedUsableMembership = usableMemberships.some((item) => item.remaining_classes === null)
+  const totalRemainingClasses = usableMemberships.reduce((sum, item) => sum + (item.remaining_classes || 0), 0)
+  const balanceChipLabel = hasUnlimitedUsableMembership ? 'Clases ilimitadas' : `${totalRemainingClasses} clases`
+  // Regla del contrato (#9 T4): con 2+ planes usables, TODA creación de reserva debe
+  // mandar student_plan_id (el alumno elige); con exactamente 1, se omite (lo resuelve
+  // el backend); con 0 el bloqueo de siempre (hasPlanBalance) sigue vigente.
+  const requiresPlanChoice = usableMemberships.length >= 2
+  const resetPlanSelection = () => setSelectedPlanId('')
 
   useEffect(() => {
     setSelectedReservationIds((prev) => prev.filter((id) => filteredReservations.some((item) => item.id === id)))
@@ -210,7 +231,7 @@ export default function StudentClassesPage({ mode = 'available' }) {
     setSelectedAvailableIds((prev) => prev.filter((id) => filteredAvailableForBooking.some((item) => item.id === id)))
   }, [filteredAvailableForBooking])
 
-  const reserveClass = async (gymClass) => {
+  const reserveClass = async (gymClass, studentPlanId) => {
     if (!hasPlanBalance) {
       setError('Sin clases disponibles')
       return
@@ -218,7 +239,11 @@ export default function StudentClassesPage({ mode = 'available' }) {
     setWorkingKey(`reserve-${gymClass.id}`)
     setError('')
     try {
-      await enrollmentsApi.create({ gym_class: gymClass.id, status: 'active' })
+      const payload = { gym_class: gymClass.id, status: 'active' }
+      if (requiresPlanChoice) {
+        payload.student_plan_id = Number(studentPlanId)
+      }
+      await enrollmentsApi.create(payload)
       await loadData()
     } catch (apiError) {
       setError(firstApiError(apiError?.response?.data, 'No se pudo reservar la clase.'))
@@ -227,14 +252,24 @@ export default function StudentClassesPage({ mode = 'available' }) {
     }
   }
 
+  // Abre el diálogo de confirmación (#24) para una reserva individual desde "Clases
+  // disponibles". Siempre pasa por el diálogo; el selector de plan aparece adentro
+  // solo si hay 2+ planes usables (requiresPlanChoice).
+  const openSingleReserveConfirm = (row) => {
+    resetPlanSelection()
+    setPendingReserve(row)
+  }
+
   // Confirma la reserva pendiente (#24): reserva y cierra el diálogo al terminar.
   const confirmPendingReserve = async () => {
     if (!pendingReserve) {
       return
     }
     const target = pendingReserve
-    await reserveClass(target)
+    const planId = selectedPlanId
+    await reserveClass(target, planId)
     setPendingReserve(null)
+    resetPlanSelection()
   }
 
   const subscribeOrReactivateRecurring = async (gymClass) => {
@@ -289,17 +324,44 @@ export default function StudentClassesPage({ mode = 'available' }) {
     }
   }
 
-  const reserveFromReservation = async (reservation) => {
+  const reserveFromReservation = async (reservation, studentPlanId) => {
     setWorkingKey(`reserve-reservation-${reservation.id}`)
     setError('')
     try {
-      await enrollmentsApi.create({ gym_class: reservation.gym_class, status: 'active' })
+      const payload = { gym_class: reservation.gym_class, status: 'active' }
+      if (requiresPlanChoice) {
+        payload.student_plan_id = Number(studentPlanId)
+      }
+      await enrollmentsApi.create(payload)
       await loadData()
     } catch (apiError) {
       setError(firstApiError(apiError?.response?.data, 'No se pudo reservar la clase.'))
     } finally {
       setWorkingKey('')
     }
+  }
+
+  // Rebook desde "Mis reservas": con 2+ planes usables hay que elegir, así que se
+  // enruta por el mismo diálogo de confirmación (pendingRebook); con 0 o 1, se
+  // mantiene el comportamiento directo de siempre (sin diálogo).
+  const handleReserveFromReservationClick = (reservation) => {
+    if (requiresPlanChoice) {
+      resetPlanSelection()
+      setPendingRebook(reservation)
+      return
+    }
+    reserveFromReservation(reservation)
+  }
+
+  const confirmPendingRebook = async () => {
+    if (!pendingRebook) {
+      return
+    }
+    const target = pendingRebook
+    const planId = selectedPlanId
+    await reserveFromReservation(target, planId)
+    setPendingRebook(null)
+    resetPlanSelection()
   }
 
   const cancelSelectedReservations = async () => {
@@ -332,6 +394,39 @@ export default function StudentClassesPage({ mode = 'available' }) {
     }
   }
 
+  // Ejecuta el batch de creates ya con el plan resuelto (o sin él, si no hace falta
+  // elegir). Compartido entre el camino directo (0/1 plan usable) y el confirmado
+  // desde el selector bulk (2+ planes usables).
+  const runBulkReserve = async (reservables, studentPlanId) => {
+    setWorkingKey('reserve-bulk')
+    setError('')
+    setNotice('')
+    try {
+      const results = await Promise.allSettled(
+        reservables.map((item) => {
+          const payload = { gym_class: item.id, status: 'active' }
+          if (requiresPlanChoice) {
+            payload.student_plan_id = Number(studentPlanId)
+          }
+          return enrollmentsApi.create(payload)
+        }),
+      )
+      const successCount = results.filter((item) => item.status === 'fulfilled').length
+      const failedCount = results.length - successCount
+      await loadData()
+      setSelectedAvailableIds([])
+      if (failedCount > 0) {
+        setError(`Se reservaron ${successCount} clases y ${failedCount} fallaron.`)
+      } else {
+        setNotice(`Se reservaron ${successCount} clases correctamente.`)
+      }
+    } catch (apiError) {
+      setError(firstApiError(apiError?.response?.data, 'No se pudieron reservar las clases seleccionadas.'))
+    } finally {
+      setWorkingKey('')
+    }
+  }
+
   const reserveSelectedAvailable = async () => {
     if (!hasPlanBalance) {
       setError('Sin clases disponibles')
@@ -351,27 +446,26 @@ export default function StudentClassesPage({ mode = 'available' }) {
       return
     }
 
-    setWorkingKey('reserve-bulk')
-    setError('')
-    setNotice('')
-    try {
-      const results = await Promise.allSettled(
-        reservables.map((item) => enrollmentsApi.create({ gym_class: item.id, status: 'active' })),
-      )
-      const successCount = results.filter((item) => item.status === 'fulfilled').length
-      const failedCount = results.length - successCount
-      await loadData()
-      setSelectedAvailableIds([])
-      if (failedCount > 0) {
-        setError(`Se reservaron ${successCount} clases y ${failedCount} fallaron.`)
-      } else {
-        setNotice(`Se reservaron ${successCount} clases correctamente.`)
-      }
-    } catch (apiError) {
-      setError(firstApiError(apiError?.response?.data, 'No se pudieron reservar las clases seleccionadas.'))
-    } finally {
-      setWorkingKey('')
+    // Con 2+ planes usables, el selector se abre UNA vez para todo el lote; el
+    // batch recién corre al confirmar (confirmPendingBulkReserve).
+    if (requiresPlanChoice) {
+      resetPlanSelection()
+      setPendingBulkReserve(reservables)
+      return
     }
+
+    await runBulkReserve(reservables)
+  }
+
+  const confirmPendingBulkReserve = async () => {
+    if (!pendingBulkReserve) {
+      return
+    }
+    const reservables = pendingBulkReserve
+    const planId = selectedPlanId
+    await runBulkReserve(reservables, planId)
+    setPendingBulkReserve(null)
+    resetPlanSelection()
   }
 
   const availableColumns = useMemo(
@@ -412,7 +506,7 @@ export default function StudentClassesPage({ mode = 'available' }) {
             <button
               type="button"
               disabled={!canReserve || workingKey === `reserve-${row.id}`}
-              onClick={() => setPendingReserve(row)}
+              onClick={() => openSingleReserveConfirm(row)}
               title={!hasPlanBalance ? 'Sin clases disponibles' : ''}
               className="rounded-lg border border-brand-blue bg-brand-blue/10 px-3 py-2 text-xs font-semibold text-brand-white disabled:opacity-60"
             >
@@ -453,7 +547,7 @@ export default function StudentClassesPage({ mode = 'available' }) {
                   <button
                     type="button"
                     disabled={!canReserveWithPlan || workingKey === `reserve-${row.id}`}
-                    onClick={() => setPendingReserve(row)}
+                    onClick={() => openSingleReserveConfirm(row)}
                     className="w-full rounded-lg border border-brand-blue px-2.5 py-1.5 text-left text-xs text-brand-white disabled:opacity-60"
                     title={!hasPlanBalance ? 'Sin clases disponibles' : ''}
                   >
@@ -582,7 +676,7 @@ export default function StudentClassesPage({ mode = 'available' }) {
                 <button
                   type="button"
                   disabled={isPausedSeries || workingKey === `reserve-reservation-${row.id}` || workingKey === `cancel-${row.id}`}
-                  onClick={() => reserveFromReservation(row)}
+                  onClick={() => handleReserveFromReservationClick(row)}
                   className="w-full rounded-lg border border-brand-blue px-2.5 py-1.5 text-left text-xs text-brand-white disabled:opacity-60"
                 >
                   {workingKey === `reserve-reservation-${row.id}` ? 'Reservando...' : 'Reservar'}
@@ -618,7 +712,7 @@ export default function StudentClassesPage({ mode = 'available' }) {
         },
       },
     ],
-    [recurringById, recurringByTemplate, workingKey],
+    [recurringById, recurringByTemplate, requiresPlanChoice, workingKey],
   )
 
   const historyColumns = useMemo(
@@ -734,6 +828,45 @@ export default function StudentClassesPage({ mode = 'available' }) {
   const selectedReservations = filteredReservations.filter((item) => selectedReservationIds.includes(item.id))
   const cancellableSelectedCount = selectedReservations.filter((item) => item.status === 'active' && item.can_cancel).length
 
+  // Los tres flujos de reserva (individual, rebook, bulk) comparten un único
+  // ConfirmDialog: a lo sumo uno de los tres estados pendientes está activo a la vez.
+  const pendingReserveKind = pendingReserve ? 'single' : pendingRebook ? 'rebook' : pendingBulkReserve ? 'bulk' : null
+  const showPlanSelector = pendingReserveKind !== null && requiresPlanChoice
+  const confirmDialogOpen = pendingReserveKind !== null
+  const confirmDialogLoading =
+    pendingReserveKind === 'single'
+      ? workingKey === `reserve-${pendingReserve?.id}`
+      : pendingReserveKind === 'rebook'
+        ? workingKey === `reserve-reservation-${pendingRebook?.id}`
+        : pendingReserveKind === 'bulk'
+          ? workingKey === 'reserve-bulk'
+          : false
+  const confirmDialogTitle = pendingReserveKind === 'bulk' ? 'Elige tu plan' : 'Confirmar reserva'
+  const confirmDialogDescription =
+    pendingReserveKind === 'bulk'
+      ? `Vas a reservar ${pendingBulkReserve?.length || 0} clases. Elige con qué plan.`
+      : '¿Seguro que quieres reservar esta clase? Se descontará una clase de tu plan.'
+  const confirmDialogLabel = pendingReserveKind === 'bulk' ? 'Reservar seleccionadas' : 'Reservar'
+  const confirmDialogDisabled = showPlanSelector && !selectedPlanId
+  const handleConfirmDialogConfirm = () => {
+    if (pendingReserveKind === 'single') {
+      return confirmPendingReserve()
+    }
+    if (pendingReserveKind === 'rebook') {
+      return confirmPendingRebook()
+    }
+    if (pendingReserveKind === 'bulk') {
+      return confirmPendingBulkReserve()
+    }
+    return undefined
+  }
+  const handleConfirmDialogCancel = () => {
+    setPendingReserve(null)
+    setPendingRebook(null)
+    setPendingBulkReserve(null)
+    resetPlanSelection()
+  }
+
   return (
     <div className="space-y-6">
       <DashboardHeader title="Student · Mis clases" subtitle="Agenda clara para reserva individual y recurrencia semanal." />
@@ -748,7 +881,7 @@ export default function StudentClassesPage({ mode = 'available' }) {
             <div className="flex items-center gap-2 rounded-lg border border-brand-line bg-black/20 px-3 py-2 text-xs">
               <span className="text-brand-muted">Te quedan</span>
               <span className={`inline-flex rounded-full border px-2 py-0.5 font-semibold ${hasPlanBalance ? 'border-emerald-500/40 text-emerald-200' : 'border-brand-red/40 text-red-200'}`}>
-                {remainingClasses} clases
+                {balanceChipLabel}
               </span>
             </div>
             <KpiStrip
@@ -818,14 +951,38 @@ export default function StudentClassesPage({ mode = 'available' }) {
       </section>
 
       <ConfirmDialog
-        open={Boolean(pendingReserve)}
-        title="Confirmar reserva"
-        description="¿Seguro que quieres reservar esta clase? Se descontará una clase de tu plan."
-        confirmLabel="Reservar"
-        loading={Boolean(pendingReserve) && workingKey === `reserve-${pendingReserve.id}`}
-        onConfirm={confirmPendingReserve}
-        onCancel={() => setPendingReserve(null)}
-      />
+        open={confirmDialogOpen}
+        title={confirmDialogTitle}
+        description={confirmDialogDescription}
+        confirmLabel={confirmDialogLabel}
+        loading={confirmDialogLoading}
+        confirmDisabled={confirmDialogDisabled}
+        onConfirm={handleConfirmDialogConfirm}
+        onCancel={handleConfirmDialogCancel}
+      >
+        {showPlanSelector ? (
+          <div className="mt-3 space-y-1 text-left">
+            <label className="text-xs text-brand-muted" htmlFor="reserve-plan-select">
+              Elige con qué plan reservar
+            </label>
+            <select
+              id="reserve-plan-select"
+              value={selectedPlanId}
+              onChange={(event) => setSelectedPlanId(event.target.value)}
+              className="w-full rounded-lg border border-brand-line bg-black/20 px-3 py-2 text-sm text-brand-white"
+            >
+              <option value="">Selecciona un plan</option>
+              {usableMemberships.map((membership) => (
+                <option key={membership.id} value={membership.id}>
+                  {membership.remaining_classes === null
+                    ? `${membership.plan_name} — clases ilimitadas`
+                    : `${membership.plan_name} — quedan ${membership.remaining_classes}`}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : null}
+      </ConfirmDialog>
     </div>
   )
 }

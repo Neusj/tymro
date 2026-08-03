@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import useBodyScrollLock from '../hooks/useBodyScrollLock'
 
-export default function ConfirmDialog({ open, title, description, confirmLabel = 'Confirmar', onConfirm, onCancel, loading = false }) {
+export default function ConfirmDialog({ open, title, description, confirmLabel = 'Confirmar', onConfirm, onCancel, loading = false, confirmDisabled = false, children }) {
   useBodyScrollLock(open)
 
   useEffect(() => {
@@ -37,6 +37,7 @@ export default function ConfirmDialog({ open, title, description, confirmLabel =
         <div className="overflow-y-auto p-5">
           <h3 className="text-lg font-semibold">{title}</h3>
           <p className="mt-2 text-sm text-brand-muted">{description}</p>
+          {children}
         </div>
         <div className="flex justify-end gap-2 border-t border-brand-line px-5 py-4">
           <button type="button" onClick={onCancel} className="rounded-xl border border-brand-line px-4 py-2 text-sm text-brand-muted">
@@ -44,7 +45,7 @@ export default function ConfirmDialog({ open, title, description, confirmLabel =
           </button>
           <button
             type="button"
-            disabled={loading}
+            disabled={loading || confirmDisabled}
             onClick={onConfirm}
             className="rounded-xl bg-brand-red px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
           >
