@@ -3,9 +3,10 @@ from datetime import datetime, timedelta
 from django.db import transaction
 from django.utils import timezone
 
-from ..models import ClassTemplate, GymClass, Holiday, RecurringEnrollment
+from ..models import ClassTemplate, Enrollment, GymClass, Holiday, RecurringEnrollment
 from .reservations import (
     ReservationRuleError,
+    cancel_enrollment_with_refund,
     reserve_student_in_class,
     revert_consumption_for_class,
 )
@@ -319,20 +320,58 @@ def delete_template_safely(template):
 
 @transaction.atomic
 def cancel_future_instances_for_template(template, actor=None, comment='Cancelacion masiva de serie'):
+    """Cancela en bloque las instancias futuras SCHEDULED/IN_PROGRESS de la serie Y
+    devuelve el consumo de sus inscripciones activas (10.1).
+
+    El `.update()` de abajo cambia el `status` de las clases a CANCELLED en una sola
+    sentencia SQL, sin pasar por ningún reverso: antes de este fix, las `Enrollment`
+    activas de esas instancias quedaban `active` sobre una clase ya `CANCELLED` y el
+    alumno solo recuperaba el saldo si cancelaba su reserva a mano (deuda que
+    documentaba `views.py`, guarda de `ClassTemplateViewSet.destroy`).
+
+    Los ids se materializan ANTES del `.update()` y el `.update()` corre sobre ESE
+    snapshot (`GymClass.objects.filter(id__in=instance_ids)`), no sobre el queryset
+    original re-evaluado: si se re-evaluara, una instancia que otra transacción
+    concurrente commiteó entre el SELECT y el UPDATE (p. ej. una regeneración de la
+    serie que crea/reprograma una clase a SCHEDULED en el mismo rango) quedaría
+    CANCELLED por este `.update()` sin haber estado en `instance_ids` — se cancela algo
+    que nunca se reembolsa. Fijar el `.update()` al snapshot garantiza que "lo que se
+    cancela" y "lo que se busca para reembolsar" sean EXACTAMENTE el mismo conjunto de
+    ids, sin ventana entre ambas lecturas.
+
+    El reembolso usa `cancel_enrollment_with_refund` —el mismo camino que ya usa la
+    cancelación individual de una clase, `_refund_active_enrollments_for_cancelled_class`
+    en views.py—: reembolsa vía el núcleo unificado (`revert_consumption`, FK primero,
+    con lock) y deja la inscripción `cancelled`. El `select_related('gym_class')` lee
+    la clase DESPUÉS del `.update()` de arriba, así que ya ve el status CANCELLED
+    nuevo y `should_refund_consumption` lo detecta sin depender de la fecha de la
+    clase.
+    """
     now = timezone.now()
-    queryset = GymClass.objects.filter(
-        class_template=template,
-        start_datetime__gt=now,
-        status__in=[GymClass.Status.SCHEDULED, GymClass.Status.IN_PROGRESS],
+    instance_ids = list(
+        GymClass.objects.filter(
+            class_template=template,
+            start_datetime__gt=now,
+            status__in=[GymClass.Status.SCHEDULED, GymClass.Status.IN_PROGRESS],
+        ).values_list('id', flat=True)
     )
-    updated_count = queryset.update(
+    updated_count = GymClass.objects.filter(id__in=instance_ids).update(
         status=GymClass.Status.CANCELLED,
         is_active=False,
         closure_comment=comment,
         closed_by=actor if actor else None,
         closed_at=now,
     )
-    return {'updated_count': updated_count}
+
+    cancelled_enrollments = 0
+    active_enrollments = Enrollment.objects.filter(
+        gym_class_id__in=instance_ids, status='active',
+    ).select_related('gym_class')
+    for enrollment in active_enrollments:
+        cancel_enrollment_with_refund(enrollment)
+        cancelled_enrollments += 1
+
+    return {'updated_count': updated_count, 'cancelled_enrollments': cancelled_enrollments}
 
 
 @transaction.atomic

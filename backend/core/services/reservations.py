@@ -224,27 +224,25 @@ def consume_student_plan_for_enrollment(enrollment, student_plan):
 
 
 def rollback_consumption_for_enrollment(enrollment, student_plan=None):
+    """Camino de CANCELAR: exige `status=='active'` y respeta la ventana de reembolso
+    (`should_refund_consumption`) — a diferencia de `revert_consumption_for_enrollment`
+    (el camino de DELETE), que es incondicional.
+
+    La MECÁNICA del reverso (a qué plan se le devuelve y cómo) ya no vive acá: se
+    delega a `revert_consumption` (10.1), el núcleo único. Antes este reverso hacía
+    read-modify-write en Python sin lock (`consumption_log.delete();
+    resolved_plan.classes_used -= 1; save()`) y, para colmo, nunca leía el FK
+    `enrollment.student_plan` — resolvía siempre por `get_enrollment_student_plan`
+    (inferencia vía `ConsumptionLog`), aunque el FK ya fuera la fuente canónica desde
+    #9. `revert_consumption` reordena esa prioridad (FK primero, helper solo si es
+    NULL) y reemplaza el read-modify-write por el mismo lock + idempotencia que ya
+    usa `_revert_consumption_logs`.
+    """
     if enrollment.status != 'active':
-        return False
-    resolved_plan = student_plan or get_enrollment_student_plan(enrollment)
-    if not resolved_plan:
         return False
     if not should_refund_consumption(enrollment):
         return False
-
-    consumption_log = ConsumptionLog.objects.filter(
-        user=enrollment.student,
-        class_instance=enrollment.gym_class,
-        student_plan=resolved_plan,
-    ).first()
-    if not consumption_log:
-        return False
-
-    consumption_log.delete()
-    if resolved_plan.classes_used > 0:
-        resolved_plan.classes_used -= 1
-        resolved_plan.save(update_fields=['classes_used', 'updated_at'])
-    return True
+    return bool(revert_consumption(enrollment, student_plan=student_plan))
 
 
 def _revert_consumption_logs(log_queryset):
@@ -307,12 +305,71 @@ def _revert_consumption_logs(log_queryset):
 
 
 @transaction.atomic
+def revert_consumption(enrollment, student_plan=None):
+    """Núcleo único del reverso de consumo POR INSCRIPCIÓN (10.1).
+
+    Resuelve QUÉ `StudentPlan` respalda esta inscripción con la misma prioridad que
+    consolidó #9: el FK `enrollment.student_plan` (T1, registro histórico de la
+    imputación) manda; solo cuando es NULL se cae a `get_enrollment_student_plan`, que
+    infiere por el `ConsumptionLog` y ya devuelve `None` ante un log cross-org (ver su
+    docstring) — no se reintroduce esa inferencia como camino primario. Un
+    `student_plan` explícito por parámetro pisa a ambos: es para el llamador que ya lo
+    tiene resuelto en memoria y no quiere pagar una resolución redundante; no cambia la
+    prioridad FK-primero cuando no lo pasan.
+
+    Sin plan resuelto no hay a quién reembolsar: devuelve `0` sin tocar nada (alumno
+    con FK NULL y sin log defendible — trial, reserva sin plan, o log histórico
+    cross-org).
+
+    Acota el reverso a los logs de ESTA inscripción (`user`, `class_instance`) Y de ESE
+    plan puntual: con el alumno con 2+ planes vigentes, el saldo vuelve al que
+    efectivamente la respalda, no a cualquiera. Delega el borrado + decremento a
+    `_revert_consumption_logs`, que ya trae el lock (`select_for_update` sobre los
+    logs) y la idempotencia ante dos reversos concurrentes del mismo consumo — no se
+    duplica ese patrón acá.
+
+    NO es el núcleo de `revert_consumption_for_class` ni de
+    `revert_consumption_for_enrollment` (el camino de DELETE): esos dos revierten TODO
+    lo que cuelga de la clase o de (alumno, clase) sin importar el plan —incluso logs
+    cross-org, por diseño, ver sus docstrings—, así que acotar por plan los rompería.
+    Ambos siguen yendo directo a `_revert_consumption_logs`.
+
+    Defensa en profundidad: el camino FK (`enrollment.student_plan`) no vuelve a
+    validar organización acá —hoy esa invariante la sostienen todos los escritores del
+    FK (la resolución de #9 y el backfill de la migración 0033, ambos org-scopeados)—,
+    pero el filtro de abajo (`student_plan__organization_id=F(...)`, el mismo
+    predicado que ya usa `get_enrollment_student_plan`) es la misma red por si algún
+    escritor futuro rompe esa invariante en silencio: si el plan resuelto no es de la
+    organización de la clase, el filtro no matchea ningún log y el reverso devuelve
+    `0` — el mismo veredicto que "sin plan defendible", nunca un reembolso cross-org.
+    """
+    resolved_plan = student_plan or enrollment.student_plan or get_enrollment_student_plan(enrollment)
+    if not resolved_plan:
+        return 0
+    return _revert_consumption_logs(
+        ConsumptionLog.objects.filter(
+            user_id=enrollment.student_id,
+            class_instance_id=enrollment.gym_class_id,
+            student_plan=resolved_plan,
+            student_plan__organization_id=F('class_instance__organization_id'),
+        )
+    )
+
+
+@transaction.atomic
 def revert_consumption_for_class(gym_class):
     """Devuelve al saldo de cada alumno los consumos de esta clase y borra sus logs.
 
     Se usa ANTES de eliminar una clase: `ConsumptionLog.class_instance` es CASCADE, así
     que el borrado se llevaría los logs sin tocar `StudentPlan.classes_used` y dejaría
     clases consumidas fantasma.
+
+    Incondicional y SIN acotar por plan ni por organización (a propósito, igual que
+    `revert_consumption_for_enrollment`): borra TODO lo que cuelga de la clase, incluso
+    un log cross-org, porque sostener `classes_used == count(ConsumptionLog)` importa
+    más que la atribución. No pasa por `revert_consumption` (10.1) —ese resuelve UN
+    plan por FK para UNA inscripción— sino directo por `_revert_consumption_logs`, el
+    núcleo mecánico que ambos comparten.
     """
     return _revert_consumption_logs(ConsumptionLog.objects.filter(class_instance=gym_class))
 
@@ -334,6 +391,12 @@ def revert_consumption_for_enrollment(enrollment):
     A diferencia de `rollback_consumption_for_enrollment` —el camino de CANCELAR, que
     mantiene el registro y por eso sí respeta la ventana de reembolso y exige
     status='active'—, acá el reverso es incondicional: ver `_revert_consumption_logs`.
+
+    Tampoco acota por plan (a propósito, igual que `revert_consumption_for_class`): si
+    un log histórico cross-org quedó colgado de (alumno, clase), este DELETE también
+    se lo lleva y le devuelve su +1 al plan ajeno que lo respaldaba — es la misma
+    excepción documentada arriba. No pasa por `revert_consumption` (10.1), que sí
+    acota por plan; va directo a `_revert_consumption_logs`.
     """
     return _revert_consumption_logs(
         ConsumptionLog.objects.filter(

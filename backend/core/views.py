@@ -2837,18 +2837,17 @@ class ClassTemplateViewSet(ModelViewSet):
         # —ni acá ni por `bulk-action`—. Al manager le quedan desactivar, cancelar futuras y
         # regenerar, que no borran la fila.
         #
-        # OJO: "no borra la fila" no es lo mismo que "inocuo". Quedan dos huecos conocidos:
-        # 1. Las dos cancelaciones masivas del manager se comportan al REVÉS entre sí:
-        #    `classes/bulk-close` con `action='cancel'` devuelve el consumo, y
-        #    `class-templates/bulk-action` con `cancel_future_instances` NO —hace un
-        #    `queryset.update()` en bloque (`cancel_future_instances_for_template`)—. Como
-        #    tampoco cancela las `Enrollment`, quedan `active` sobre una clase `CANCELLED`:
-        #    el alumno recupera el saldo SOLO si cancela su reserva a mano. No es
-        #    irreversible, es que el silencio lo paga el alumno.
-        # 2. `DELETE /api/classes/{id}/` sigue abierto al manager (vía `roles.is_org_admin`),
-        #    así que puede borrar las instancias de la serie una por una. Ese borrado sí es
-        #    íntegro (pasa por `revert_consumption_for_class`), pero destruye el mismo
-        #    historial que esta guarda protege.
+        # OJO: "no borra la fila" no es lo mismo que "inocuo". Queda un hueco conocido:
+        # `DELETE /api/classes/{id}/` sigue abierto al manager (vía `roles.is_org_admin`),
+        # así que puede borrar las instancias de la serie una por una. Ese borrado sí es
+        # íntegro (pasa por `revert_consumption_for_class`), pero destruye el mismo
+        # historial que esta guarda protege.
+        #
+        # (10.1: el punto que documentaba esta nota —`cancel_future_instances_for_template`
+        # dejaba las `Enrollment` `active` sobre una clase `CANCELLED` sin devolver el
+        # saldo— ya no aplica: ese servicio ahora reembolsa vía `cancel_enrollment_with_refund`
+        # y cancela cada inscripción activa, igual que `classes/bulk-close` con
+        # `action='cancel'`. Ver `core/services/recurrence.py`.)
         if not _can_manage_org_resource(request.user, template.organization_id):
             raise PermissionDenied('No tienes permisos para eliminar esta plantilla.')
         can_delete, reason = can_delete_template(template)
