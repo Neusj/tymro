@@ -1531,17 +1531,35 @@ class AttendanceQrCheckInView(APIView):
             )
 
         now = timezone.now()
-        attendance, created = Attendance.objects.update_or_create(
-            gym_class=gym_class,
-            student=request.user,
-            defaults={
-                'status': Attendance.Status.PRESENT,
-                'source': Attendance.Source.QR,
-                'marked_by': request.user,
-                'marked_at': now,
-                'checked_at': now,
-            },
-        )
+        # H1 (10.2): si YA había un registro con un status distinto de PRESENT (p.ej. un
+        # admin lo corrigió a `absent`), el QR lo pisa a `present` — pero eso no puede
+        # pasar en silencio: deja el mismo rastro que una corrección manual, en la MISMA
+        # transacción que el update_or_create (todo-o-nada). Si no había registro previo
+        # (primer marcado normal), el comportamiento es idéntico al de antes: sin log.
+        # `changed_by` es el alumno que hace el check-in; la organización se estampa de
+        # `gym_class` (ya validada contra la org del actor arriba), nunca del payload.
+        with transaction.atomic():
+            attendance, created = Attendance.objects.update_or_create(
+                gym_class=gym_class,
+                student=request.user,
+                defaults={
+                    'status': Attendance.Status.PRESENT,
+                    'source': Attendance.Source.QR,
+                    'marked_by': request.user,
+                    'marked_at': now,
+                    'checked_at': now,
+                },
+            )
+            if existing is not None and existing.status != Attendance.Status.PRESENT:
+                AttendanceChangeLog.objects.create(
+                    attendance=attendance,
+                    previous_status=existing.status,
+                    new_status=Attendance.Status.PRESENT,
+                    changed_by=request.user,
+                    changed_at=now,
+                    organization_id=gym_class.organization_id,
+                    source=Attendance.Source.QR,
+                )
         return Response(
             {
                 'status': 'registered',
@@ -2491,6 +2509,7 @@ class GymClassViewSet(ModelViewSet):
                     changed_by=user,
                     changed_at=now,
                     organization_id=gym_class.organization_id,
+                    source=Attendance.Source.MANUAL,
                 )
 
         attendances = gym_class.attendances.select_related('student', 'marked_by').all()

@@ -337,7 +337,18 @@ export default function GymAdminClassDetailPage() {
               <div className="space-y-2">
                 {history.map((item) => (
                   <div key={item.id} className="rounded-lg border border-brand-line px-3 py-2 text-sm">
-                    <p className="font-semibold">{item.student_name}</p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="font-semibold">{item.student_name}</p>
+                      <span
+                        className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                          item.source === 'qr'
+                            ? 'border-brand-blue/40 text-blue-200'
+                            : 'border-brand-line text-brand-muted'
+                        }`}
+                      >
+                        {item.source === 'qr' ? 'QR' : 'Manual'}
+                      </span>
+                    </div>
                     <div className="mt-1 flex flex-wrap items-center gap-2">
                       <ValueBadge kind="attendance_status" value={item.previous_status} />
                       <span className="text-brand-muted">→</span>

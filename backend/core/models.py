@@ -466,6 +466,10 @@ class AttendanceChangeLog(TimestampedModel):
     )
     previous_status = models.CharField(max_length=10, choices=Attendance.Status.choices)
     new_status = models.CharField(max_length=10, choices=Attendance.Status.choices)
+    # Distingue la corrección manual de admin (10.2) de la pisada por check-in QR
+    # (10.2-H1: un alumno que se marca por QR sobre un status ya corregido). Default
+    # MANUAL para que las filas existentes, todas de corrección manual, queden coherentes.
+    source = models.CharField(max_length=10, choices=Attendance.Source.choices, default=Attendance.Source.MANUAL)
     # Quién hizo el cambio. SET_NULL, mismo razonamiento que
     # `ManualPayment.recorded_by` (models.py:1025-1035): perder el autor es aceptable,
     # perder el hecho no. OJO: esta FK NO es el ancla multitenant; para eso está la

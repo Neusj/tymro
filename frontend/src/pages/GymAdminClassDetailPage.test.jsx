@@ -139,6 +139,7 @@ describe('GymAdminClassDetailPage — historial de correcciones (#10.2)', () => 
         changed_by: 9,
         changed_by_username: 'admin_gym',
         changed_at: '2026-08-03T10:00:00-04:00',
+        source: 'manual',
       },
     ])
 
@@ -156,6 +157,35 @@ describe('GymAdminClassDetailPage — historial de correcciones (#10.2)', () => 
     expect(within(historySection).getByText('Ausente')).toBeInTheDocument() // previous_status
     expect(within(historySection).getByText('Presente')).toBeInTheDocument() // new_status
     expect(within(historySection).getByText(/admin_gym/)).toBeInTheDocument()
+    expect(within(historySection).getByText('Manual')).toBeInTheDocument()
+  })
+
+  it('un log con source "qr" (10.2-H1: pisada de QR) se etiqueta distinto del manual', async () => {
+    classesApi.getAttendanceHistory.mockResolvedValue([
+      {
+        id: 2,
+        attendance: 100,
+        student: 21,
+        student_name: 'Bruno Diaz',
+        previous_status: 'absent',
+        new_status: 'present',
+        changed_by: 21,
+        changed_by_username: 'bruno.diaz',
+        changed_at: '2026-08-03T10:05:00-04:00',
+        source: 'qr',
+      },
+    ])
+
+    renderPage('55')
+    const user = userEvent.setup()
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Guardar asistencia' })).toBeEnabled())
+    await user.click(screen.getByRole('button', { name: /Historial de correcciones/i }))
+    await waitFor(() => expect(classesApi.getAttendanceHistory).toHaveBeenCalledWith('55'))
+
+    const historySection = screen.getByRole('button', { name: /Historial de correcciones/i }).closest('section')
+    expect(await within(historySection).findByText('QR')).toBeInTheDocument()
+    expect(within(historySection).queryByText('Manual')).not.toBeInTheDocument()
   })
 
   it('con historial vacío muestra el texto de "sin correcciones"', async () => {

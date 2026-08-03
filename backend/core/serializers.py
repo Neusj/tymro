@@ -1084,6 +1084,7 @@ class AttendanceChangeLogSerializer(serializers.ModelSerializer):
             'changed_by',
             'changed_by_username',
             'changed_at',
+            'source',
         ]
 
     def get_student_name(self, obj):
