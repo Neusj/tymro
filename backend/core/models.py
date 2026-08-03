@@ -386,6 +386,19 @@ class Enrollment(TimestampedModel):
         default=False,
         help_text='Esta inscripción se generó mediante una clase de prueba.',
     )
+    # De dónde se descontó esta reserva (#9): registro HISTÓRICO de imputación, no la
+    # fuente del reverso del consumo —eso lo sigue resolviendo `ConsumptionLog` vía
+    # `get_enrollment_student_plan`, que no cambia—. NULL significa fila anterior al
+    # backfill sin `ConsumptionLog` que la respalde, reserva de prueba (trial) o reserva
+    # sin plan (`require_plan=False`). `SET_NULL` porque borrar la membresía no puede
+    # llevarse la reserva.
+    student_plan = models.ForeignKey(
+        'StudentPlan',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='enrollments',
+    )
 
     class Meta:
         ordering = ['created_at']
