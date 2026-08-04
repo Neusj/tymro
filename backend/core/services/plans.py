@@ -19,8 +19,10 @@ from datetime import date, timedelta
 from typing import Optional
 
 from django.db import transaction
+from django.db.models import Q
+from django.utils import timezone
 
-from core.models import PaymentTransaction, StudentPlan
+from core.models import PaymentTransaction, RecurringEnrollment, StudentPlan
 
 
 # Umbrales de aviso de vencimiento, en días. FUENTE ÚNICA: estaban duplicados como
@@ -390,6 +392,115 @@ class PlanOrganizationMismatch(Exception):
     """El plan que se intenta activar no es de la organización del alumno."""
 
 
+def _repoint_recurring_series_to_renewed_membership(new_student_plan, *, on_date):
+    """Reapunta las series recurrentes VIVAS que quedaron colgadas de una instancia
+    AGOTADA/VENCIDA/INACTIVA del MISMO plan de catálogo que `new_student_plan`.
+
+    `RecurringEnrollment.student_plan` (R1, migración 0036) es la elección VIGENTE que
+    gobierna las reservas futuras de la serie, y apunta a una INSTANCIA concreta. Renovar
+    crea una fila NUEVA (regla 7.1: `activate_student_plan` nunca reusa ni muta la
+    anterior), así que sin esto la serie sigue apuntando a la vieja y el loop la skippea
+    mudo con `chosen_plan_unavailable` (`recurrence.py:_create_enrollment_if_possible`).
+
+    Lo que este reapunte NO hace, a propósito:
+
+    * NO toca series que apuntan a instancias de OTROS planes de catálogo. Un alumno puede
+      tener N membresías vigentes a la vez (7.1: 4 BJJ + 8 kickboxing) y renovar el pack de
+      BJJ no puede reimputar la serie de kickboxing. El filtro `student_plan__plan_id` es
+      la definición de "mismo linaje".
+    * NO toca series cuya instancia vieja TODAVÍA es usable. Renovar por adelantado (la
+      vieja vence mañana, la nueva empieza mañana) deja la serie donde está: mientras la
+      elección del alumno siga sirviendo, pisarla sería adivinar. Consecuencia conocida: esa
+      serie se va a romper cuando la vieja venza, porque nadie vuelve a correr esto.
+    * NO revalida SUCURSAL. El alcance por sede lo manda `plan.branch`
+      (`plan_covers_branch`, reservations.py), y vieja y nueva comparten el MISMO `Plan`,
+      así que su cobertura de sedes es idéntica por construcción — no hay nada que chequear
+      que no fuera ya cierto antes del reapunte.
+    """
+    def _candidates():
+        """Series candidatas: mismo alumno/org/linaje y VIVAS. Factorizado en un closure
+        porque el SELECT de abajo y el UPDATE final tienen que compartir EXACTAMENTE el
+        mismo WHERE (ver el comentario junto al `.update()` — security review, hallazgo
+        BAJO 1)."""
+        return (
+            RecurringEnrollment.objects
+            .filter(
+                # La serie es del alumno que renovó.
+                student_id=new_student_plan.user_id,
+                # Regla 6: NULL = legacy / ambigua del backfill 0036. Esas re-resuelven por
+                # instancia y no se tocan.
+                student_plan__isnull=False,
+                # Regla 1: MISMO plan de catálogo (old.plan_id == new.plan_id).
+                student_plan__plan_id=new_student_plan.plan_id,
+                # Regla 2: la instancia vieja la vendió la MISMA organización. No es
+                # redundante con el filtro de `plan_id`: `StudentPlan.organization` es una
+                # COPIA de `plan.organization` hecha al vender y nada revalida las ventas
+                # históricas si el plan se mueve de tenant, así que dos instancias del
+                # mismo `Plan` pueden tener organizaciones distintas.
+                student_plan__organization_id=new_student_plan.organization_id,
+                # Regla 2: la instancia vieja es del MISMO alumno. Redundante con
+                # `student_id` salvo en filas patológicas (un pin cross-alumno que ninguna
+                # API puede crear hoy); explícito para no "repararlas" en silencio cambiando
+                # quién paga.
+                student_plan__user_id=new_student_plan.user_id,
+                # Regla 2: la serie está anclada en la organización de la SUSCRIPCIÓN
+                # (`class_template.organization_id`), MISMO criterio que el backfill de
+                # 0036 y que `resolve_student_plan_for_recurring_enrollment`
+                # (reservations.py). `RecurringEnrollment.student` es CASCADE sobre el
+                # USUARIO y no sobre el tenant: filtrar solo por alumno es el agujero
+                # multitenant recurrente del proyecto.
+                class_template__organization_id=new_student_plan.organization_id,
+            )
+            # Regla 5: serie VIVA. El corte es la FECHA y no `is_active` — una serie
+            # PAUSADA sin `end_date` vencido es reactivable desde "Mis recurrencias" y SÍ
+            # cuenta como viva (mismo criterio que 0036). Escrito en POSITIVO y no como
+            # `.exclude(end_date__lt=on_date)` para no depender de cómo Django trata los
+            # NULL al negar un lookup: `end_date` es nullable y NULL significa "sin
+            # término".
+            .filter(Q(end_date__isnull=True) | Q(end_date__gte=on_date))
+        )
+
+    series = (
+        _candidates()
+        .select_related('student_plan')
+        # `describe_student_plan` resuelve el eje de PAGO recorriendo dos FK inversas: sin
+        # esto son 2 consultas por serie. No participa de `is_usable`, pero se paga igual
+        # por preguntar el estado.
+        .prefetch_related('student_plan__origin_transactions', 'student_plan__manual_payments')
+    )
+
+    # "NO usable" se le PREGUNTA a `describe_student_plan` (más arriba en este módulo), la
+    # fuente única del predicado —la misma que usan el roster, el serializer y los dos
+    # resolvedores de imputación—. No se reimplementa como `filter()`: la mitad de saldo
+    # (`unlimited_classes` / `classes_used >= total_classes`) no se puede expresar en SQL
+    # sin duplicar la regla, que es exactamente el motivo por el que 0036 y
+    # `_usable_student_plan_candidates` también iteran en Python. El volumen es de unidades
+    # (series de UN alumno para UN plan).
+    stale_ids = [
+        recurring.pk for recurring in series
+        if not describe_student_plan(recurring.student_plan, on_date).is_usable
+    ]
+    if not stale_ids:
+        return 0
+    # `.update()` en bloque y no `save()` fila por fila: una sola sentencia, sin recorrer
+    # `full_clean()` (que valida rol/fechas/plantilla, nada de esta FK) y sin señales —el
+    # proyecto no tiene NINGÚN receiver registrado—. Mismo instrumento que el backfill de
+    # 0036 (`.update(student_plan_id=...)`) y que `cancel_future_instances_for_template`.
+    #
+    # `pk__in=stale_ids` SOLO no alcanza: entre el SELECT de arriba (`stale_ids`) y este
+    # UPDATE no hay lock (§ el diseño lo evita a propósito por el AB-BA con el importador),
+    # así que otra transacción pudo reapuntar o cerrar alguna de esas series entremedio.
+    # Repetir `_candidates()` re-chequea el WHERE completo AL MOMENTO DEL UPDATE, no al
+    # momento del SELECT: si alguna ya no matchea, el UPDATE la deja en paz en vez de
+    # pisarla en silencio.
+    return _candidates().filter(pk__in=stale_ids).update(
+        student_plan=new_student_plan,
+        # `auto_now` no corre en un `.update()`; se setea a mano para que la fila no quede
+        # con un `updated_at` que miente sobre cuándo cambió su imputación.
+        updated_at=timezone.now(),
+    )
+
+
 def activate_student_plan(*, student, plan, start_date, discount_percentage=None):
     # La membresía la vende `plan.organization` y solo la consume un alumno de esa misma
     # organización: `get_active_student_plan` y `my-memberships` filtran por ahí, así que
@@ -416,7 +527,7 @@ def activate_student_plan(*, student, plan, start_date, discount_percentage=None
         # contención sobre la fila del alumno y un AB-BA con el importador —que lockea
         # primero la fila de StudentPlan (`_commit_update`) y después la del alumno
         # (`_build_membership`)— cuyo deadlock el motor del importador no captura.
-        return StudentPlan.objects.create(
+        student_plan = StudentPlan.objects.create(
             user=student, plan=plan,
             # Copia de la organización del plan —quien vende la membresía—. Nunca
             # `student.organization`: son iguales acá porque la guarda de arriba lo exige,
@@ -432,3 +543,12 @@ def activate_student_plan(*, student, plan, start_date, discount_percentage=None
             final_price=final_price,
             is_active=True,
         )
+        # Reapunte de las series recurrentes del mismo linaje (follow-up de R1). Va ACÁ,
+        # DENTRO del mismo atomic y DESPUÉS del INSERT: si algo posterior revienta (p. ej.
+        # `record_manual_payment` en el caller, `views.py`), el rollback se lleva la
+        # membresía nueva Y el reapunte juntos, y ninguna serie queda apuntando a una
+        # membresía que no existe.
+        _repoint_recurring_series_to_renewed_membership(
+            student_plan, on_date=timezone.localdate(),
+        )
+        return student_plan

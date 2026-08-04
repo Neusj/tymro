@@ -82,12 +82,17 @@ def _create_enrollment_if_possible(*, recurring_enrollment, gym_class):
     * FK poblada → se consume de ESE plan. Es lo que hace que un alumno con 2+ membresías
       vigentes deje de perder la serie entera: eligió una vez, en el alta.
 
-    CONSECUENCIA VIVA (no es un bug de este cambio, es la decisión de "no adivinar"): si el
-    plan elegido se agota o vence, la serie NO salta sola a otra membresía —queda `skipped`
-    con `chosen_plan_unavailable` aunque el alumno haya renovado—, porque renovar crea una
-    fila NUEVA de `StudentPlan` y la FK sigue apuntando a la vieja. Reapuntar la elección al
-    renovar es una decisión de producto aparte (y su propio endpoint), no un efecto
-    colateral del loop.
+    CONSECUENCIA VIVA (ya no es la regla general, pero sigue siendo la del CAMINO
+    ANTICIPADO): si el plan elegido se agota o vence, la serie salta a la membresía nueva
+    del MISMO plan de catálogo en cuanto el alumno renueva —lo hace
+    `activate_student_plan` (`services/plans.py`,
+    `_repoint_recurring_series_to_renewed_membership`), DENTRO de la misma transacción que
+    crea la fila nueva, no este loop—. Lo que sigue sin arreglarse es la renovación
+    ANTICIPADA: si la instancia vieja todavía era usable en el momento de renovar, el
+    reapunte no la toca (adivinar cuál va a servir sería peor), y esa serie va a volver a
+    quedar `skipped: chosen_plan_unavailable` cuando la vieja venza, porque nada vuelve a
+    correr el reapunte después. El loop en sí sigue sin adivinar nada: nunca elige, solo
+    consume de la FK que ya viene resuelta.
     """
     try:
         reserve_student_in_class(
