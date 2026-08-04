@@ -3,11 +3,20 @@
 La entidad más conectada: 4 FK (sucursal obligatoria; profesor, tipo de clase
 y disciplina opcionales), todas resueltas dentro de la organización del actor.
 
-Las reglas de fila replican ClassTemplate.clean() para que el preview las
-atrape (fin > inicio, vigencia coherente, capacidad, solape de profesor contra
-BD). El commit además ejecuta full_clean(), que vuelve a validar todo dentro
-de la transacción — incluidos los solapes ENTRE filas del propio archivo,
-porque cada fila guardada ya es visible para el clean() de la siguiente.
+Las reglas de fila (fin > inicio, vigencia coherente, capacidad) replican
+ClassTemplate.clean() para que el preview las atrape. El solape de profesor
+contra BD/calendario es aparte: `_template_rules` lo reimplementa a mano
+(no delega en full_clean) porque el producto lo relajó en `ClassTemplate.clean()`
+(tarea 11.A, permite que un mismo profesor tenga clases solapadas) pero el
+importador lo sigue bloqueando en el preview — ver el comentario de
+`_template_rules` para el detalle de esa inconsistencia.
+
+El commit además ejecuta full_clean(), que vuelve a validar todo dentro de la
+transacción. Antes de la tarea 11.A esto también atrapaba los solapes de
+profesor ENTRE FILAS del propio archivo (cada fila guardada ya es visible para
+el clean() de la siguiente); al eliminarse ese chequeo de `ClassTemplate.clean()`,
+esa ruta quedó relajada — dos filas del archivo que se cruzan para el mismo
+profesor hoy se cargan ambas.
 """
 from ..registry import register
 from ..spec import EntityImportSpec, FieldSpec, FKSpec, RowError
@@ -55,16 +64,24 @@ def _template_rules(values, organization):
     if errors:
         return errors
 
-    # Solape del profesor contra el horario y las clases YA existentes (misma
-    # lógica que ClassTemplate.clean); los solapes entre filas del archivo los
-    # atrapa el full_clean del commit.
+    # Solape del profesor contra el horario y las clases YA existentes: reimplementación
+    # PROPIA del importador (no delega en ClassTemplate.clean()/full_clean()), pensada
+    # para que el preview reporte el error fila por fila antes de confirmar. Los solapes
+    # entre filas del propio archivo los atrapa el full_clean del commit.
+    #
+    # NOTA (tarea 11.A, 2026-08): el producto decidió PERMITIR que un mismo profesor
+    # tenga clases solapadas, y por eso se eliminó el chequeo equivalente de
+    # `ClassTemplate.clean()` y de `core/services/recurrence.py` (antes
+    # `_has_teacher_conflict`). Esta copia del importador NO se tocó — no es uno de los
+    # 3 puntos de esa tarea — así que HOY SIGUE BLOQUEANDO el mismo caso en el preview
+    # de la planilla, aunque la API y la generación de clases ya lo permiten. Es una
+    # inconsistencia de producto pendiente (ver reporte de la tarea 11.A).
     #
     # Ambos querysets van acotados a `organization`: sin eso barrían toda la plataforma y,
     # si el profesor tenía horarios en otra organización (FK de profesor "rancia"), el
     # preview del importador respondía "ya tiene clases que se cruzan" — un bit de la
     # agenda de otro gimnasio por fila, y una fila legítima bloqueada por un dato que el
-    # actor no puede ver ni corregir. Mismo criterio que
-    # `core/services/recurrence.py::_has_teacher_conflict`.
+    # actor no puede ver ni corregir.
     teacher = values.get('teacher')
     if teacher is not None and start_time is not None and end_time is not None:
         weekday = values.get('weekday')

@@ -1562,14 +1562,21 @@ def test_class_templates_teacher_overlap_against_db(api_client, admin_a, org_a, 
     assert 'se cruza con ese horario' in error['message']
 
 
-def test_class_templates_teacher_overlap_within_file_skips_only_conflicting(api_client, admin_a, org_a,
-                                                                            schedule_setup):
+def test_class_templates_teacher_overlap_within_file_now_creates_both_rows(api_client, admin_a, org_a,
+                                                                           schedule_setup):
+    """Tarea 11.A: el solape de profesor ENTRE FILAS del propio archivo se detectaba
+    solo indirectamente, vía `ClassTemplate.full_clean()` en el commit (la primera fila
+    ya guardada quedaba visible para el `clean()` de la segunda). Al eliminarse el
+    chequeo de solape de `ClassTemplate.clean()` (relajación 11.A), esta ruta quedó
+    relajada SOLA, sin tocar el importador: ambas filas se cargan ahora.
+
+    Ojo: esto NO aplica al solape contra la BD/calendario ya existentes, que el
+    importador valida con su propia reimplementación en `_template_rules` (no delega
+    en full_clean) y sigue bloqueando sin cambios — ver
+    `test_class_templates_teacher_overlap_against_db` y `..._against_calendar`."""
     from core.models import ClassTemplate
 
     login(api_client, 'admin_a')
-    # Dos filas del MISMO archivo se cruzan para el mismo profesor: el validate
-    # no lo ve (no hay nada en BD). En el commit, la primera se carga y la segunda
-    # falla full_clean: con import parcial se omite SOLO la segunda (no tumba la primera).
     rows = [
         ['Sede Centro', 'Lunes', '18:00', '19:00', '', 'coach@gym.cl', '', '', '', '2026-06-15', '', ''],
         ['Sede Centro', 'Lunes', '18:30', '19:30', '', 'coach@gym.cl', '', '', '', '2026-06-15', '', ''],
@@ -1578,17 +1585,17 @@ def test_class_templates_teacher_overlap_within_file_skips_only_conflicting(api_
     resp = api_client.post('/api/imports/class-templates/validate/',
                            {'file': as_upload(file_bytes)}, format='multipart')
     body = resp.json()
-    assert body['can_commit'] is True  # el preview no puede verlo aún
+    assert body['can_commit'] is True  # el preview no puede verlo (no hay nada en BD)
 
     resp = api_client.post('/api/imports/class-templates/commit/',
                            {'file': as_upload(file_bytes), 'token': body['token']},
                            format='multipart')
     assert resp.status_code == 201, resp.content
-    assert resp.json()['created'] == 1
-    assert resp.json()['errors'] == 1
-    error = resp.json()['rows'][0]['errors'][0]
-    assert error['column'] == 'Email del profesor'
-    assert ClassTemplate.objects.count() == 1  # solo la primera se cargó
+    assert resp.json()['created'] == 2
+    assert resp.json()['errors'] == 0
+    assert ClassTemplate.objects.filter(
+        organization=org_a, teacher__email='coach@gym.cl',
+    ).count() == 2
 
 
 def test_class_templates_foreign_org_fks_not_found(api_client, admin_a, org_b, make_user,

@@ -56,9 +56,6 @@ TERMINAL_CLASS_STATUSES = {
 }
 
 
-def _overlap_filter(start_datetime, end_datetime):
-    return Q(start_datetime__lt=end_datetime, end_datetime__gt=start_datetime)
-
 def _safe_int_setting(name, default=0):
     raw = getattr(settings, name, default)
     try:
@@ -1022,20 +1019,9 @@ class GymClassSerializer(serializers.ModelSerializer):
         if capacity is not None and int(capacity) <= 0:
             raise serializers.ValidationError({'capacity': 'La capacidad debe ser mayor que cero.'})
 
-        if start_datetime and end_datetime and teacher:
-            # Acotado por organizacion, igual que en `ClassTemplate.clean()`: la
-            # agenda de un profesor movido de organizacion no puede bloquear —ni delatar—
-            # la creacion de una clase en la organizacion nueva.
-            conflicting_classes = GymClass.objects.filter(
-                organization_id=organization.id,
-                teacher=teacher,
-            ).exclude(status=GymClass.Status.CANCELLED).filter(
-                _overlap_filter(start_datetime, end_datetime)
-            )
-            if instance:
-                conflicting_classes = conflicting_classes.exclude(id=instance.id)
-            if conflicting_classes.exists():
-                raise serializers.ValidationError({'teacher': 'El profesor ya está asignado a otra clase en ese horario.'})
+        # Tarea 11.A: el producto decidió PERMITIR que un mismo profesor tenga clases
+        # solapadas (ej.: dicta dos disciplinas en paralelo y el alumno elige a cuál
+        # ir). Acá vivía el bloqueo de solape profesor+horario; se eliminó a propósito.
 
         incoming_status = attrs.get('status')
         if incoming_status in TERMINAL_CLASS_STATUSES:

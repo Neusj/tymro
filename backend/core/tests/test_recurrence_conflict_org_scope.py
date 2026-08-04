@@ -20,6 +20,15 @@ Dos efectos, ambos alcanzables por gym_admin/manager (no hace falta superadmin):
 
 `ClassTemplate.clean()` ya trata el caso bien (`if not self.teacher: return`, y sus checks
 de solape corren solo con profesor); la generación se había quedado atrás.
+
+Tarea 11.A (2026-08): el producto decidió PERMITIR que un mismo profesor tenga clases
+solapadas. `_has_teacher_conflict` y sus 3 call sites se eliminaron de
+`core/services/recurrence.py`: el reason `'teacher_conflict'` ya no existe en ningún
+`summary['skipped']`. Los tests de este archivo que verificaban "no es oráculo cross-org"
+siguen siendo válidos (nunca hubo, ni hay, conflicto por datos de otra organización); el
+que verificaba la detección real del conflicto INTRA-org se invirtió: ver
+`test_generate_still_allows_teacher_overlap_inside_the_org` y
+`test_teacher_overlap_relaxed.py` para la cobertura directa del nuevo comportamiento.
 """
 from datetime import time, timedelta
 
@@ -105,8 +114,9 @@ def test_generate_ignores_teacherless_classes_of_other_orgs(api_client, setup):
     ).count() == 1
 
 
-def test_generate_still_detects_conflicts_inside_the_org(api_client, setup):
-    """Regresión: el conflicto real —mismo profesor, misma org— sigue detectándose."""
+def test_generate_still_allows_teacher_overlap_inside_the_org(api_client, setup):
+    """Tarea 11.A: el conflicto intra-org —mismo profesor, misma org— YA NO se saltea:
+    la instancia se crea igual (antes: created_count=0, skipped=['teacher_conflict'])."""
     teacher_a = setup['admin_a'].organization.users.filter(role='teacher').first()
     if teacher_a is None:
         from django.contrib.auth import get_user_model
@@ -135,8 +145,8 @@ def test_generate_still_detects_conflicts_inside_the_org(api_client, setup):
 
     assert resp.status_code == 200, resp.content
     body = resp.json()
-    assert body['created_count'] == 0, body
-    assert [s['reason'] for s in body['skipped']] == ['teacher_conflict'], body
+    assert body['created_count'] == 1, body
+    assert not [s for s in body['skipped'] if s.get('reason') == 'teacher_conflict'], body
 
 
 def test_deleting_a_teacher_does_not_expose_the_series_to_other_orgs(api_client, setup):

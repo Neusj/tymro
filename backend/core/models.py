@@ -1281,55 +1281,11 @@ class ClassTemplate(TimestampedModel):
         if self.discipline and self.organization_id and self.discipline.organization_id != self.organization_id:
             raise ValidationError({'discipline': 'La disciplina no pertenece a la organizacion indicada.'})
 
-        if not self.teacher:
-            return
-
-        # Acotado por organizacion: sin esto el solape barria TODA la plataforma. Como
-        # la FK de profesor es SET_NULL, una persona movida de organizacion deja su
-        # agenda vieja viva, y el chequeo la encontraba: denegaba una creacion legitima
-        # y el mensaje de error confirmaba que en ese horario hay algo en la otra
-        # organizacion (oraculo). Mismo criterio que recurrence._has_teacher_conflict.
-        queryset = ClassTemplate.objects.filter(
-            organization_id=self.organization_id,
-            teacher=self.teacher,
-            weekday=self.weekday,
-            is_active=True,
-            start_time__lt=self.end_time,
-            end_time__gt=self.start_time,
-        )
-        if self.pk:
-            queryset = queryset.exclude(pk=self.pk)
-
-        if self.end_date is None:
-            queryset = queryset.filter(models.Q(end_date__isnull=True) | models.Q(end_date__gte=self.start_date))
-        else:
-            queryset = queryset.filter(models.Q(start_date__lte=self.end_date))
-            queryset = queryset.filter(models.Q(end_date__isnull=True) | models.Q(end_date__gte=self.start_date))
-
-        if queryset.exists():
-            raise ValidationError({'teacher': 'El profesor ya tiene otra plantilla activa en ese horario.'})
-
-        weekday_for_db = ((self.weekday + 1) % 7) + 1
-        class_query = GymClass.objects.filter(
-            organization_id=self.organization_id,
-            teacher=self.teacher,
-            start_datetime__week_day=weekday_for_db,
-            start_datetime__time__lt=self.end_time,
-            end_datetime__time__gt=self.start_time,
-        ).exclude(status=GymClass.Status.CANCELLED)
-        if self.pk:
-            class_query = class_query.exclude(class_template_id=self.pk)
-        if self.end_date is None:
-            class_query = class_query.filter(start_datetime__date__gte=self.start_date)
-        else:
-            class_query = class_query.filter(
-                start_datetime__date__gte=self.start_date,
-                start_datetime__date__lte=self.end_date,
-            )
-
-        if class_query.exists():
-            raise ValidationError({'teacher': 'El profesor ya tiene clases creadas que se cruzan con esta plantilla.'})
-
+        # Tarea 11.A: el producto decidió PERMITIR que un mismo profesor tenga
+        # plantillas/clases solapadas (ej.: dicta dos disciplinas en paralelo y el
+        # alumno elige a cuál ir). Acá vivían los dos chequeos de solape de profesor
+        # (plantilla-vs-plantilla y plantilla-vs-clases existentes); se eliminaron a
+        # propósito.
 
 
 class Holiday(TimestampedModel):

@@ -142,34 +142,6 @@ def create_enrollments_for_recurring_subscription(recurring_enrollment, class_in
     return summary
 
 
-def _has_teacher_conflict(template, start_datetime, end_datetime, exclude_id=None):
-    """¿El profesor de la plantilla ya tiene otra clase de ESTA organización en ese rango?
-
-    Dos acotamientos que faltaban en los tres call sites (generar, reencuadrar y reactivar):
-
-    1. **Sin profesor no hay conflicto de profesor.** `ClassTemplate.teacher` es SET_NULL y
-       el importador declara la columna opcional, así que `teacher=None` es un estado
-       normal. Con el filtro `teacher=None` el chequeo pasaba a preguntar "¿hay alguna clase
-       SIN profesor que solape?", que no es la pregunta. `ClassTemplate.clean()` ya
-       descartaba este caso.
-    2. **Acotado por organización.** Combinado con lo anterior, el queryset barría TODA la
-       plataforma: el `teacher_conflict` del summary —que se devuelve al cliente— se volvía
-       un oráculo de la agenda de otros gimnasios (un bit y una fecha por intento), y las
-       clases propias no se creaban por un dato ajeno que el actor no puede ver ni corregir.
-    """
-    if not template.teacher_id:
-        return False
-    queryset = GymClass.objects.filter(
-        organization_id=template.organization_id,
-        teacher_id=template.teacher_id,
-        start_datetime__lt=end_datetime,
-        end_datetime__gt=start_datetime,
-    ).exclude(status=GymClass.Status.CANCELLED)
-    if exclude_id is not None:
-        queryset = queryset.exclude(id=exclude_id)
-    return queryset.exists()
-
-
 def sync_recurring_enrollments_for_generated_instances(template, class_instances):
     recurring_items = RecurringEnrollment.objects.filter(class_template=template, is_active=True).select_related('student')
     for recurring_enrollment in recurring_items:
@@ -208,9 +180,8 @@ def generate_instances_for_template_range(template, from_date=None, until_date=N
         start_datetime = _combine_local_datetime(occurrence_date, template.start_time)
         end_datetime = _combine_local_datetime(occurrence_date, template.end_time)
 
-        if _has_teacher_conflict(template, start_datetime, end_datetime):
-            summary['skipped'].append({'date': occurrence_date.isoformat(), 'reason': 'teacher_conflict'})
-            continue
+        # Tarea 11.A: el solape de profesor ya no saltea la generación (el producto
+        # decidió permitirlo). Acá vivía el chequeo `_has_teacher_conflict`.
 
         gym_class = GymClass.objects.create(
             organization=template.organization,
@@ -278,12 +249,9 @@ def apply_template_updates_to_future_instances(template, now=None):
         gym_class.start_datetime = _combine_local_datetime(class_date, template.start_time)
         gym_class.end_datetime = _combine_local_datetime(class_date, template.end_time)
 
-        if _has_teacher_conflict(
-            template, gym_class.start_datetime, gym_class.end_datetime, exclude_id=gym_class.id,
-        ):
-            summary['protected_count'] += 1
-            summary['protected_ids'].append(gym_class.id)
-            continue
+        # Tarea 11.A: el solape de profesor ya no protege la instancia de la
+        # actualización (el producto decidió permitirlo). Acá vivía el chequeo
+        # `_has_teacher_conflict`.
 
         gym_class.save(
             update_fields=[
@@ -431,11 +399,8 @@ def reactivate_future_cancelled_instances_for_template(template):
         ):
             summary['skipped'].append({'id': gym_class.id, 'reason': 'holiday'})
             continue
-        if _has_teacher_conflict(
-            template, gym_class.start_datetime, gym_class.end_datetime, exclude_id=gym_class.id,
-        ):
-            summary['skipped'].append({'id': gym_class.id, 'reason': 'teacher_conflict'})
-            continue
+        # Tarea 11.A: el solape de profesor ya no saltea la reactivación (el producto
+        # decidió permitirlo). Acá vivía el chequeo `_has_teacher_conflict`.
 
         gym_class.status = GymClass.Status.SCHEDULED
         gym_class.is_active = True

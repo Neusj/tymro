@@ -1,10 +1,10 @@
 """Los chequeos de SOLAPE no pueden mirar la agenda de otras organizaciones.
 
-Misma familia que `test_recurrence_conflict_org_scope`, en los tres sitios que habían
+Misma familia que `test_recurrence_conflict_org_scope`, en los sitios que habían
 quedado afuera:
 
-    core/models.py       ClassTemplate.clean()        -> solape de profesor
-    core/serializers.py  GymClassSerializer.validate  -> solape de profesor
+    core/models.py       ClassTemplate.clean()        -> solape de profesor (*)
+    core/serializers.py  GymClassSerializer.validate  -> solape de profesor (*)
     core/services/reservations.py + core/serializers.py -> solape de ALUMNO
 
 Todos filtraban por la FK propia (`teacher=` / `student=`) sin comparar la organización.
@@ -19,6 +19,14 @@ producía dos daños a la vez:
   otra organización. Barriendo horarios se reconstruye su agenda, un bit por intento.
 
 Alcanzable por gym_admin/manager y, en el caso del alumno, por el propio alumno.
+
+(*) Tarea 11.A (2026-08): el producto decidió PERMITIR que un mismo profesor tenga
+clases solapadas (dicta dos disciplinas en paralelo). El bloqueo de solape profesor+
+horario se eliminó por completo en `ClassTemplate.clean()` y `GymClassSerializer.validate`
+— ya no es "cross-org", es que no existe. Los tests de profesor de este archivo quedan
+como regresión de que la creación NUNCA se bloquea por esto (ni con datos de otra
+organización de por medio); ver `test_teacher_overlap_relaxed.py` para la cobertura
+directa del nuevo comportamiento. El solape de ALUMNO no se tocó y sigue bloqueado.
 """
 from datetime import time, timedelta
 
@@ -131,8 +139,10 @@ def test_gym_class_overlap_ignores_other_orgs(api_client, moved_teacher):
     ).exists()
 
 
-def test_teacher_overlap_is_still_detected_inside_the_org(api_client, moved_teacher):
-    """Regresión: el solape REAL —mismo profe, misma org— sigue rebotando."""
+def test_teacher_overlap_is_now_allowed_inside_the_org(api_client, moved_teacher):
+    """Tarea 11.A: el solape mismo-profe/misma-org YA NO rebota (antes daba 400 con
+    'El profesor ya está asignado a otra clase en ese horario.'); ver
+    `test_teacher_overlap_relaxed.py` para la cobertura directa del cambio."""
     _login(api_client, moved_teacher['admin_b'])
     payload = {
         'name': 'Clase de B', 'branch': moved_teacher['branch_b'].id,
@@ -147,8 +157,10 @@ def test_teacher_overlap_is_still_detected_inside_the_org(api_client, moved_teac
 
     second = api_client.post('/api/classes/', dict(payload, name='Otra de B'), format='json')
 
-    assert second.status_code == 400, second.content
-    assert 'teacher' in second.json(), second.content
+    assert second.status_code == 201, second.content
+    assert GymClass.objects.filter(
+        organization=moved_teacher['org_b'], teacher=moved_teacher['teacher'],
+    ).count() == 2
 
 
 @pytest.fixture
