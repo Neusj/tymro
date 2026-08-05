@@ -2794,6 +2794,47 @@ class GymClassViewSet(ModelViewSet):
         )
 
 
+WEEKDAYS_PARAM = 'weekdays'
+_WEEKDAYS_ERROR = 'Debe ser una lista no vacia de enteros entre 0 (lunes) y 6 (domingo).'
+
+
+def _read_weekdays_param(data):
+    """Devuelve `(valor_crudo, vino_en_el_payload)` para el param opcional `weekdays`.
+
+    La ausencia se distingue del valor invalido a proposito: sin la key, el alta de
+    plantilla sigue el camino singular historico sin un solo cambio de comportamiento.
+    Con `QueryDict` (form-encoded) se usa `getlist` para no colapsar `weekdays=0&weekdays=2`
+    en un unico valor.
+    """
+    if not hasattr(data, 'get'):
+        # Body que no es un mapping (p.ej. una lista JSON): no es un alta en lote; el
+        # serializer del camino singular respondera su 400 habitual.
+        return None, False
+    if WEEKDAYS_PARAM not in data:
+        return None, False
+    if hasattr(data, 'getlist'):
+        return data.getlist(WEEKDAYS_PARAM), True
+    return data.get(WEEKDAYS_PARAM), True
+
+
+def _parse_weekdays_param(raw):
+    """Normaliza `weekdays` a una lista de dias unicos y ordenada, o levanta 400."""
+    if isinstance(raw, (str, bytes)) or not isinstance(raw, (list, tuple)) or not raw:
+        raise ValidationError({WEEKDAYS_PARAM: [_WEEKDAYS_ERROR]})
+    days = set()
+    for value in raw:
+        if isinstance(value, (bool, float)):
+            raise ValidationError({WEEKDAYS_PARAM: [_WEEKDAYS_ERROR]})
+        try:
+            day = int(value)
+        except (TypeError, ValueError):
+            raise ValidationError({WEEKDAYS_PARAM: [_WEEKDAYS_ERROR]})
+        if day < 0 or day > 6:
+            raise ValidationError({WEEKDAYS_PARAM: [_WEEKDAYS_ERROR]})
+        days.add(day)
+    return sorted(days)
+
+
 class ClassTemplateViewSet(ModelViewSet):
     queryset = ClassTemplate.objects.select_related('organization', 'branch', 'teacher', 'class_type', 'discipline', 'created_by').all()
     serializer_class = ClassTemplateSerializer
@@ -2829,29 +2870,98 @@ class ClassTemplateViewSet(ModelViewSet):
             queryset = queryset.filter(is_active=False)
         return _apply_ordering(queryset, ordering, ordering_map, default_ordering)
 
-    def perform_create(self, serializer):
-        user = self.request.user
+    def _can_create_templates(self, user):
+        return _is_superadmin(user) or roles.is_org_admin(user)
+
+    def _save_template_and_generate(self, serializer, user):
+        """Guarda la plantilla forzando la organizacion del actor y materializa sus clases.
+
+        Es la logica que vivia inline en `perform_create`; ahora la comparten el camino
+        singular (via `perform_create`) y el alta multi-dia (`create` con `weekdays`), para
+        que no puedan divergir: misma guarda de rol, misma forzada de `organization` para
+        org_admin y la MISMA llamada a `generate_instances_for_template_range`.
+        """
         if _is_superadmin(user):
             template = serializer.save(created_by=user)
-            generate_instances_for_template_range(
-                template=template,
-                from_date=template.start_date,
-                until_date=template.end_date,
-                created_by=user,
-                skip_holidays=True,
-            )
-            return
-        if roles.is_org_admin(user):
+        elif roles.is_org_admin(user):
             template = serializer.save(organization=user.organization, created_by=user)
-            generate_instances_for_template_range(
-                template=template,
-                from_date=template.start_date,
-                until_date=template.end_date,
-                created_by=user,
-                skip_holidays=True,
-            )
-            return
-        raise PermissionDenied('No tienes permisos para crear plantillas recurrentes.')
+        else:
+            raise PermissionDenied('No tienes permisos para crear plantillas recurrentes.')
+        generate_instances_for_template_range(
+            template=template,
+            from_date=template.start_date,
+            until_date=template.end_date,
+            created_by=user,
+            skip_holidays=True,
+        )
+        return template
+
+    def _find_duplicate_template(self, validated_data, weekday):
+        """Plantilla activa ya existente para ese mismo slot, SIEMPRE dentro de una sola org.
+
+        La organizacion sale de `validated_data` (que para org_admin el serializer ya forzo
+        a la del actor, y para superadmin es la que valido), nunca del payload crudo: una
+        plantilla identica de OTRA organizacion no debe producir `skipped` ni exponer su id
+        —eso seria un oraculo cross-tenant que confirma la agenda ajena horario por horario—.
+        """
+        return ClassTemplate.objects.filter(
+            organization=validated_data.get('organization'),
+            branch=validated_data.get('branch'),
+            teacher=validated_data.get('teacher'),
+            discipline=validated_data.get('discipline'),
+            weekday=weekday,
+            start_time=validated_data.get('start_time'),
+            is_active=True,
+        ).first()
+
+    def create(self, request, *args, **kwargs):
+        user = request.user
+        # Orden 8.3: la guarda de rol corre UNA vez y antes de cualquier detalle del payload,
+        # en AMBOS caminos. Si validara primero, los errores diferenciales del serializer
+        # (branch/teacher de otra org) serian un oraculo cross-tenant para actores sin permiso.
+        if not self._can_create_templates(user):
+            raise PermissionDenied('No tienes permisos para crear plantillas recurrentes.')
+
+        raw_weekdays, is_batch = _read_weekdays_param(request.data)
+        if not is_batch:
+            # Camino singular historico, intacto para admins: `weekday` sigue siendo
+            # obligatorio y la respuesta sigue siendo la plantilla serializada (201).
+            return super().create(request, *args, **kwargs)
+
+        weekdays = _parse_weekdays_param(raw_weekdays)
+        # `weekday` singular se ignora a proposito cuando llega `weekdays`.
+        base_payload = {
+            key: value
+            for key, value in request.data.items()
+            if key not in {WEEKDAYS_PARAM, 'weekday'}
+        }
+
+        # Todo o nada: se validan TODOS los dias antes de escribir, para que un dia invalido
+        # no deje media serie creada.
+        pending = []
+        for weekday in weekdays:
+            serializer = self.get_serializer(data={**base_payload, 'weekday': weekday})
+            serializer.is_valid(raise_exception=True)
+            pending.append((weekday, serializer))
+
+        created = []
+        skipped = []
+        with transaction.atomic():
+            for weekday, serializer in pending:
+                existing = self._find_duplicate_template(serializer.validated_data, weekday)
+                if existing is not None:
+                    skipped.append({'weekday': weekday, 'existing_id': existing.id})
+                    continue
+                self._save_template_and_generate(serializer, user)
+                created.append(serializer.data)
+
+        # Reintento idempotente (doble submit): si todo estaba ya creado no es un error, es
+        # un 200 sin novedades.
+        status_code = status.HTTP_201_CREATED if created else status.HTTP_200_OK
+        return Response({'created': created, 'skipped': skipped}, status=status_code)
+
+    def perform_create(self, serializer):
+        self._save_template_and_generate(serializer, self.request.user)
 
     def perform_update(self, serializer):
         user = self.request.user

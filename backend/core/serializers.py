@@ -1156,6 +1156,7 @@ class ClassTemplateSerializer(serializers.ModelSerializer):
         read_only_fields = ['created_by', 'created_at', 'updated_at']
         extra_kwargs = {
             'organization': {'required': False},
+            'start_date': {'required': False, 'allow_null': True},
         }
 
     def get_teacher_name(self, obj):
@@ -1195,6 +1196,17 @@ class ClassTemplateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({'class_type': 'El tipo de clase es obligatorio.'})
         if not discipline:
             raise serializers.ValidationError({'discipline': 'La disciplina es obligatoria.'})
+
+        # En creación, si no llega start_date (ausente o null explícito), se infiere "hoy".
+        # En update/patch parcial NO se toca cuando está ausente: attrs no tiene la key y el
+        # valor existente del instance se preserva más abajo (getattr(instance, 'start_date', None)).
+        # Si en un update llega null explícito, se descarta la key (en vez de propagar None) para
+        # no romper el invariante de que start_date nunca sale None del serializer.
+        if instance is None:
+            if attrs.get('start_date') is None:
+                attrs['start_date'] = timezone.localdate()
+        elif 'start_date' in attrs and attrs['start_date'] is None:
+            attrs.pop('start_date')
 
         data = {
             'organization': organization,

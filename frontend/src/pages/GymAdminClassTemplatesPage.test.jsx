@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -157,5 +157,147 @@ describe('GymAdminClassTemplatesPage — botón "Actualizar clases" (robot de ve
 
     resolveRun({ instances_created: 1, pruned_count: 0, errors: [] })
     await waitFor(() => expect(advanceClassWindowsApi.run).toHaveBeenCalledTimes(1))
+  })
+})
+
+describe('GymAdminClassTemplatesPage — formulario de creacion (multi-dia, sin fechas)', () => {
+  beforeEach(() => {
+    // Un item por catalogo para poder completar los <select required> del form.
+    branchesApi.list.mockResolvedValue([{ id: 1, name: 'Sede Centro' }])
+    usersApi.list.mockResolvedValue([{ id: 2, first_name: 'Ana', last_name: 'Prof', username: 'ana' }])
+    classTypesApi.list.mockResolvedValue([{ id: 3, name: 'Funcional' }])
+    disciplinesApi.list.mockResolvedValue([{ id: 4, name: 'Crossfit' }])
+  })
+
+  async function fillRequiredFieldsExceptDays() {
+    // Los <select> arrancan sin opciones (loadData todavia no resolvió); esperamos a que el
+    // catalogo de sucursales llegue antes de intentar seleccionar, si no selectOptions tira
+    // "option not found".
+    await screen.findByRole('option', { name: 'Sede Centro' })
+    await userEvent.selectOptions(screen.getByLabelText(/sucursal/i), '1')
+    await userEvent.selectOptions(screen.getByLabelText(/profesor/i), '2')
+    await userEvent.selectOptions(screen.getByLabelText(/^tipo$/i), '3')
+    await userEvent.selectOptions(screen.getByLabelText(/disciplina/i), '4')
+    // Los inputs type="time" son inestables con userEvent.type (steppers por segmento);
+    // fireEvent.change es el patrón robusto para setear su valor en jsdom.
+    fireEvent.change(screen.getByLabelText(/hora inicio/i), { target: { value: '08:00' } })
+    fireEvent.change(screen.getByLabelText(/hora termino/i), { target: { value: '09:00' } })
+  }
+
+  it('marcar Lunes/Miercoles/Viernes y enviar llama a create con weekdays=[0,2,4] y sin start_date/end_date/weekday', async () => {
+    classTemplatesApi.create.mockResolvedValue({ created: [{ id: 10 }, { id: 11 }, { id: 12 }], skipped: [] })
+    renderPage()
+
+    await screen.findByRole('heading', { name: /nueva serie recurrente/i })
+    await fillRequiredFieldsExceptDays()
+    await userEvent.click(screen.getByRole('checkbox', { name: /lunes/i }))
+    await userEvent.click(screen.getByRole('checkbox', { name: /miercoles/i }))
+    await userEvent.click(screen.getByRole('checkbox', { name: /viernes/i }))
+
+    await userEvent.click(screen.getByRole('button', { name: /guardar y generar clases/i }))
+
+    await waitFor(() => expect(classTemplatesApi.create).toHaveBeenCalledTimes(1))
+    const payload = classTemplatesApi.create.mock.calls[0][0]
+    expect(payload.weekdays).toEqual([0, 2, 4])
+    expect(payload).not.toHaveProperty('weekday')
+    expect(payload).not.toHaveProperty('start_date')
+    expect(payload).not.toHaveProperty('end_date')
+  })
+
+  it('enviar sin marcar ningun dia no llama al API y muestra el error', async () => {
+    renderPage()
+
+    await screen.findByRole('heading', { name: /nueva serie recurrente/i })
+    await fillRequiredFieldsExceptDays()
+
+    await userEvent.click(screen.getByRole('button', { name: /guardar y generar clases/i }))
+
+    expect(await screen.findByText('Elegi al menos un dia.')).toBeInTheDocument()
+    expect(classTemplatesApi.create).not.toHaveBeenCalled()
+  })
+
+  it('el aviso de creacion usa created.length y avisa de los duplicados salteados', async () => {
+    classTemplatesApi.create.mockResolvedValue({
+      created: [{ id: 20 }, { id: 21 }],
+      skipped: [{ weekday: 4, existing_id: 99 }],
+    })
+    renderPage()
+
+    await screen.findByRole('heading', { name: /nueva serie recurrente/i })
+    await fillRequiredFieldsExceptDays()
+    await userEvent.click(screen.getByRole('checkbox', { name: /lunes/i }))
+    await userEvent.click(screen.getByRole('checkbox', { name: /miercoles/i }))
+    await userEvent.click(screen.getByRole('checkbox', { name: /viernes/i }))
+
+    await userEvent.click(screen.getByRole('button', { name: /guardar y generar clases/i }))
+
+    expect(
+      await screen.findByText('Se crearon 2 series. Las clases se generan automaticamente. 1 ya existian y no se duplicaron.'),
+    ).toBeInTheDocument()
+  })
+
+  it('si todos los dias ya existian (created vacio) avisa que no se creo nada nuevo', async () => {
+    classTemplatesApi.create.mockResolvedValue({
+      created: [],
+      skipped: [{ weekday: 0, existing_id: 1 }, { weekday: 2, existing_id: 2 }],
+    })
+    renderPage()
+
+    await screen.findByRole('heading', { name: /nueva serie recurrente/i })
+    await fillRequiredFieldsExceptDays()
+    await userEvent.click(screen.getByRole('checkbox', { name: /lunes/i }))
+    await userEvent.click(screen.getByRole('checkbox', { name: /miercoles/i }))
+
+    await userEvent.click(screen.getByRole('button', { name: /guardar y generar clases/i }))
+
+    expect(
+      await screen.findByText('No se creo ninguna serie nueva: los 2 dias elegidos ya tenian una serie.'),
+    ).toBeInTheDocument()
+  })
+
+  it('en edicion se mantiene el selector singular de dia y el update manda weekday sin fechas', async () => {
+    classTemplatesApi.list.mockResolvedValue([
+      {
+        id: 5,
+        name: 'Serie existente',
+        branch: 1,
+        teacher: 2,
+        class_type: 3,
+        discipline: 4,
+        weekday: 3,
+        start_time: '10:00:00',
+        end_time: '11:00:00',
+        capacity: 15,
+        is_active: true,
+        is_trial_eligible: false,
+      },
+    ])
+    classTemplatesApi.update.mockResolvedValue({ id: 5 })
+    renderPage()
+
+    // Las acciones de fila viven detras del gear ("Abrir acciones", DataTable.RowActionsDropdown).
+    // DataTable duplica la fila en DOM (tabla desktop + tarjeta mobile) porque los tests corren
+    // sin CSS (vitest.config.js: css:false) y las utilidades "hidden"/"lg:block" no aplican; con
+    // el menu cerrado eso no genera ambiguedad porque los botones de accion no se montan hasta
+    // abrir, pero el propio boton "Abrir acciones" SI está duplicado. Abrimos el primero.
+    const [menuTrigger] = await screen.findAllByRole('button', { name: /abrir acciones/i })
+    await userEvent.click(menuTrigger)
+    await userEvent.click(await screen.findByRole('button', { name: /^editar$/i }))
+    await screen.findByRole('heading', { name: /editar serie/i })
+
+    // En edicion el selector es singular ("Dia semana"), no los checkboxes multi-dia.
+    expect(screen.getByLabelText(/^dia semana$/i)).toBeInTheDocument()
+    expect(screen.queryByText(/dias de la semana/i)).not.toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: /guardar cambios/i }))
+
+    await waitFor(() => expect(classTemplatesApi.update).toHaveBeenCalledTimes(1))
+    const [id, payload] = classTemplatesApi.update.mock.calls[0]
+    expect(id).toBe(5)
+    expect(payload.weekday).toBe(3)
+    expect(payload.apply_to_future_instances).toBe(true)
+    expect(payload).not.toHaveProperty('weekdays')
+    expect(payload).not.toHaveProperty('start_date')
+    expect(payload).not.toHaveProperty('end_date')
   })
 })

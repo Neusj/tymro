@@ -16,11 +16,10 @@ const initialForm = {
   class_type: '',
   discipline: '',
   weekday: 0,
+  weekdays: [],
   start_time: '',
   end_time: '',
   capacity: 20,
-  start_date: '',
-  end_date: '',
   is_active: true,
   is_trial_eligible: false,
 }
@@ -118,11 +117,10 @@ export default function GymAdminClassTemplatesPage() {
       class_type: row.class_type || '',
       discipline: row.discipline || '',
       weekday: row.weekday ?? 0,
+      weekdays: [],
       start_time: row.start_time || '',
       end_time: row.end_time || '',
       capacity: row.capacity || 20,
-      start_date: row.start_date || '',
-      end_date: row.end_date || '',
       is_active: row.is_active,
       is_trial_eligible: Boolean(row.is_trial_eligible),
     })
@@ -130,25 +128,45 @@ export default function GymAdminClassTemplatesPage() {
 
   const submit = async (event) => {
     event.preventDefault()
-    setSaving(true)
     setError('')
     setNotice('')
+
+    // Los checkboxes de dias no tienen "required" nativo de grupo (a diferencia del <select>
+    // singular que reemplazan): validamos a mano antes de tocar la API.
+    if (!editingId && form.weekdays.length === 0) {
+      setError('Elegi al menos un dia.')
+      return
+    }
+
+    setSaving(true)
     try {
+      // weekday/weekdays nunca viajan juntos: creacion manda weekdays (lista), edicion manda
+      // weekday (singular). Se separan del resto del form para no filtrar el que no corresponde.
+      const { weekday, weekdays, ...rest } = form
       const payload = {
-        ...form,
-        weekday: Number(form.weekday),
+        ...rest,
         capacity: Number(form.capacity),
-        end_date: form.end_date || null,
       }
       if (editingId) {
         await classTemplatesApi.update(editingId, {
           ...payload,
+          weekday: Number(weekday),
           apply_to_future_instances: true,
         })
         setNotice('Serie actualizada. Se aplicaron cambios a instancias futuras editables.')
       } else {
-        await classTemplatesApi.create(payload)
-        setNotice('Serie creada. Se generaron clases automaticamente para el rango definido.')
+        const data = await classTemplatesApi.create({
+          ...payload,
+          weekdays: weekdays.map(Number),
+        })
+        const created = data?.created || []
+        const skipped = data?.skipped || []
+        if (created.length > 0) {
+          const skippedText = skipped.length ? ` ${skipped.length} ya existian y no se duplicaron.` : ''
+          setNotice(`Se crearon ${created.length} series. Las clases se generan automaticamente.${skippedText}`)
+        } else {
+          setNotice(`No se creo ninguna serie nueva: los ${skipped.length} dias elegidos ya tenian una serie.`)
+        }
       }
       resetForm()
       await loadData()
@@ -352,7 +370,7 @@ export default function GymAdminClassTemplatesPage() {
     <div className="space-y-6">
       <DashboardHeader
         title="Gym Admin · Series recurrentes"
-        subtitle="Crea, edita y administra series. Al crear, las clases se generan automaticamente segun fecha inicio/fin."
+        subtitle="Crea, edita y administra series. Al crear, las clases se generan automaticamente desde hoy, sin fecha de fin."
         back={{ to: '/gym-admin/classes', label: 'Clases' }}
         extra={
           canAdvanceClassWindows ? (
@@ -375,16 +393,45 @@ export default function GymAdminClassTemplatesPage() {
             <span>Nombre visible</span>
             <input value={form.name} onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))} className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2" />
           </label>
-          <label className="space-y-1 text-sm">
-            <span>Dia semana</span>
-            <select value={form.weekday} onChange={(event) => setForm((prev) => ({ ...prev, weekday: event.target.value }))} className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2">
-              {weekdayLabels.map((label, index) => (
-                <option key={label} value={index}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </label>
+          {editingId ? (
+            <label className="space-y-1 text-sm">
+              <span>Dia semana</span>
+              <select value={form.weekday} onChange={(event) => setForm((prev) => ({ ...prev, weekday: event.target.value }))} className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2">
+                {weekdayLabels.map((label, index) => (
+                  <option key={label} value={index}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <div className="space-y-1 text-sm md:col-span-2">
+              <span>Dias de la semana</span>
+              <div className="flex flex-wrap gap-2">
+                {weekdayLabels.map((label, index) => {
+                  const checked = form.weekdays.includes(index)
+                  return (
+                    <label key={label} className="flex items-center gap-1.5 rounded-lg border border-brand-line bg-black/20 px-2.5 py-1.5 text-xs">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={(event) =>
+                          setForm((prev) => ({
+                            ...prev,
+                            weekdays: event.target.checked
+                              ? [...prev.weekdays, index].sort((a, b) => a - b)
+                              : prev.weekdays.filter((day) => day !== index),
+                          }))
+                        }
+                        className="h-4 w-4 accent-brand-orange"
+                      />
+                      {label}
+                    </label>
+                  )
+                })}
+              </div>
+            </div>
+          )}
           <label className="space-y-1 text-sm">
             <span>Sucursal</span>
             <select required value={form.branch} onChange={(event) => setForm((prev) => ({ ...prev, branch: event.target.value }))} className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2">
@@ -441,14 +488,11 @@ export default function GymAdminClassTemplatesPage() {
             <span>Capacidad</span>
             <input required min={1} type="number" value={form.capacity} onChange={(event) => setForm((prev) => ({ ...prev, capacity: event.target.value }))} className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2" />
           </label>
-          <label className="space-y-1 text-sm">
-            <span>Fecha inicio</span>
-            <input required type="date" value={form.start_date} onChange={(event) => setForm((prev) => ({ ...prev, start_date: event.target.value }))} className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2" />
-          </label>
-          <label className="space-y-1 text-sm">
-            <span>Fecha fin (opcional)</span>
-            <input type="date" value={form.end_date} onChange={(event) => setForm((prev) => ({ ...prev, end_date: event.target.value }))} className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2" />
-          </label>
+          {editingId ? null : (
+            <p className="md:col-span-2 text-xs text-brand-muted">
+              La serie arranca hoy y no tiene fecha de fin: las clases se generan automaticamente hacia adelante.
+            </p>
+          )}
           <label className="space-y-1 text-sm md:col-span-2">
             <span>Descripcion (opcional)</span>
             <textarea value={form.description} onChange={(event) => setForm((prev) => ({ ...prev, description: event.target.value }))} className="min-h-[80px] w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2" />
