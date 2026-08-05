@@ -7,7 +7,7 @@ from datetime import datetime
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.shortcuts import get_object_or_404, redirect
-from rest_framework import status
+from rest_framework import serializers, status
 from rest_framework.exceptions import PermissionDenied, ValidationError as DRFValidationError
 from rest_framework.generics import ListAPIView
 from rest_framework.pagination import PageNumberPagination
@@ -15,7 +15,8 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import PaymentAccount, PaymentTransaction, Plan, StudentPlan, WebhookEvent
+from .models import (Branch, PaymentAccount, PaymentTransaction, Plan, StudentPlan,
+                     WebhookEvent)
 from .serializers import (PaymentAccountSerializer, PaymentCheckoutRequestSerializer,
                           PaymentTransactionAdminSerializer,
                           PaymentTransactionStatusSerializer)
@@ -24,6 +25,54 @@ from .services.providers import get_payment_provider
 from .views import _is_gym_admin, _is_student, _is_superadmin   # helpers de rol existentes
 
 logger = logging.getLogger(__name__)
+
+
+# Validación de FORMA del `branch_id`, con el MISMO campo que
+# `ManualPaymentCreateSerializer.student_plan` (serializers.py:1860) — no un `int()` a mano:
+#
+# * `int()` acepta floats y bools EN SILENCIO (`int(7.9)` → 7, `int(True)` → 1), o sea el
+#   cliente pide una sede y el servidor termina operando sobre OTRA (o sobre la sede 1). El
+#   `IntegerField` de DRF los rechaza con 400.
+# * `min_value=1`: el 0 y los negativos no son ids.
+# * `max_value=2**63-1`: fuera del rango de bigint el `filter(id=...)` revienta en PostgreSQL
+#   con un 500 que SQLite no reproduce, así que la suite no lo detectaría (misma lección que
+#   `_as_id_list`, views.py:180-200).
+_branch_id_field = serializers.IntegerField(min_value=1, max_value=2 ** 63 - 1)
+
+
+def _branch_scope(user, raw_branch_id):
+    """Sucursal sobre la que opera el endpoint, o ``None`` = cuenta PRINCIPAL de la org.
+
+    Se llama SIEMPRE DESPUÉS de las guardas de rol y de organización (lección 8.3: la sede
+    se resuelve al final, nunca antes de saber quién pregunta). El lookup intersecta
+    `organization_id` del ACTOR —jamás una organización del payload—, así que una sede ajena
+    es indistinguible de una inexistente.
+
+    El 404 y no 403 es anti-oráculo: los ids de `Branch` son autoincrementales y
+    adivinables, y un 403 confirmaría "esa sede existe, pero es de otro gimnasio",
+    delatando la topología de sedes de otro tenant.
+    """
+    if raw_branch_id is None or raw_branch_id == '':
+        return None
+    try:
+        branch_id = _branch_id_field.run_validation(raw_branch_id)
+    except serializers.ValidationError as exc:
+        # 400 y no 404: el valor es malformado, no "ajeno", y este camino no revela nada de
+        # otro tenant. Se re-envuelve con la clave del campo para que el error del wire diga
+        # QUÉ dato está mal, en vez de una lista suelta de mensajes.
+        raise DRFValidationError({'branch_id': exc.detail})
+    return get_object_or_404(Branch, id=branch_id, organization_id=user.organization_id)
+
+
+def _main_account_is_connected(user):
+    """¿La organización del actor tiene su cuenta PRINCIPAL conectada?
+
+    `branch__isnull=True` + `status=connected` para el proveedor activo: una fila principal
+    DESCONECTADA (tokens vaciados, conservada como histórico) no cobra nada, así que para
+    esta pregunta es lo mismo que no tenerla."""
+    return PaymentAccount.objects.filter(
+        organization_id=user.organization_id, provider=settings.PAYMENTS_PROVIDER,
+        branch__isnull=True, status=PaymentAccount.STATUS_CONNECTED).exists()
 
 
 class PaymentConnectView(APIView):
@@ -37,7 +86,37 @@ class PaymentConnectView(APIView):
         if user.organization_id is None:
             return Response({'detail': 'Usuario sin organización.'},
                             status=status.HTTP_400_BAD_REQUEST)
-        url = payments.build_connect_url(organization=user.organization)
+        # `branch_id` OPCIONAL: sin él se conecta la cuenta PRINCIPAL de la organización,
+        # exactamente como hasta hoy. La sede viaja después dentro del state FIRMADO (ver
+        # `_sign_state`), y `connect_callback` re-valida la pertenencia antes de escribir.
+        branch = _branch_scope(user, request.data.get('branch_id'))
+        if branch is not None and not _main_account_is_connected(user):
+            # La cuenta principal es el PISO del modelo: es la que cobra por los planes
+            # globales y por toda sede sin cuenta propia. Sin ella, un gimnasio que conectara
+            # PRIMERO una sede tendría un MercadoPago funcionando y, al mismo tiempo, todo lo
+            # demás resolviendo a `NotConnected` (`resolve_payment_account` cae a la principal
+            # y no encuentra ninguna) → alumnos con "el gimnasio no tiene pagos habilitados"
+            # en una organización recién conectada. Es la trampa de onboarding que se vio en
+            # producción, y se cierra acá, en el único punto de entrada del flujo.
+            #
+            # 409 y no 400: la petición está bien formada, es el ESTADO del recurso el que no
+            # la permite (mismo código que usa el checkout para `NotConnected`).
+            #
+            # Va DESPUÉS de rol + organización + pertenencia de la sede (orden 8.3): una sede
+            # de otra organización sigue cortando con 404 antes de llegar acá, así que este
+            # 409 no se convierte en un oráculo nuevo — solo lo ve quien ya probó que la sede
+            # es suya.
+            #
+            # NO se replica en `connect_callback`: un state emitido ya pasó por esta guarda, y
+            # re-chequear ahí rompería la reconexión de una sede si la principal se desconectó
+            # en el medio. Desconectar la principal DESPUÉS de configurar sedes tampoco se
+            # bloquea (queda como decisión de producto pendiente).
+            return Response(
+                {'detail': 'Conectá primero la cuenta principal del gimnasio antes de '
+                           'configurar una cuenta por sucursal.'},
+                status=status.HTTP_409_CONFLICT,
+            )
+        url = payments.build_connect_url(organization=user.organization, branch=branch)
         return Response({'authorization_url': url})
 
 
@@ -69,6 +148,24 @@ class PaymentOAuthCallbackView(APIView):
         return redirect(f'{frontend}/ajustes/pagos?connected=1')
 
 
+def _scoped_account(user, branch):
+    """Cuenta EXACTA que administran `account`/`disconnect`, o None si no existe.
+
+    `branch=None` → `branch IS NULL` en el ORM, o sea la cuenta PRINCIPAL. El filtro por
+    sede es lo que impide que estos endpoints toquen "alguna" cuenta de la organización: con
+    el `.first()` sin acotar de antes, en cuanto una sede conecta su cuenta el orden queda
+    indefinido y `disconnect` podía apagar la cuenta equivocada —dejando sin cobro a la sede
+    que nadie tocó y creyendo el admin que desconectó la principal—."""
+    return PaymentAccount.objects.filter(
+        organization_id=user.organization_id, provider=settings.PAYMENTS_PROVIDER,
+        branch=branch).first()
+
+
+def _disconnected_payload(branch):
+    return {'status': 'disconnected', 'provider': settings.PAYMENTS_PROVIDER,
+            'branch': branch.id if branch is not None else None}
+
+
 class PaymentAccountView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -76,10 +173,12 @@ class PaymentAccountView(APIView):
         user = request.user
         if not (_is_superadmin(user) or _is_gym_admin(user)):
             return Response({'detail': 'No tienes permisos.'}, status=status.HTTP_403_FORBIDDEN)
-        account = PaymentAccount.objects.filter(
-            organization_id=user.organization_id, provider=settings.PAYMENTS_PROVIDER).first()
+        # `?branch_id=` OPCIONAL: sin él se devuelve la cuenta PRINCIPAL (`branch IS NULL`),
+        # que es lo que este endpoint devolvía cuando era la única que podía existir.
+        branch = _branch_scope(user, request.query_params.get('branch_id'))
+        account = _scoped_account(user, branch)
         if account is None:
-            return Response({'status': 'disconnected', 'provider': settings.PAYMENTS_PROVIDER})
+            return Response(_disconnected_payload(branch))
         return Response(PaymentAccountSerializer(account).data)
 
 
@@ -92,11 +191,13 @@ class PaymentDisconnectView(APIView):
             return Response({'detail': 'No tienes permisos para desconectar pagos.'},
                             status=status.HTTP_403_FORBIDDEN)
         # Mismo scoping que PaymentAccountView: SIEMPRE por la org del actor, jamás por
-        # un id recibido en el payload. Así el gym_admin solo puede tocar su propia cuenta.
-        account = PaymentAccount.objects.filter(
-            organization_id=user.organization_id, provider=settings.PAYMENTS_PROVIDER).first()
+        # un id de cuenta recibido en el payload. Así el gym_admin solo puede tocar sus
+        # propias cuentas. `branch_id` elige CUÁL de ellas (sin él, la principal) y pasa por
+        # la misma guarda de pertenencia con 404 anti-oráculo.
+        branch = _branch_scope(user, request.data.get('branch_id'))
+        account = _scoped_account(user, branch)
         if account is None:
-            return Response({'status': 'disconnected', 'provider': settings.PAYMENTS_PROVIDER})
+            return Response(_disconnected_payload(branch))
         payments.disconnect_account(account)
         return Response(PaymentAccountSerializer(account).data)
 
@@ -200,7 +301,9 @@ class PaymentTransactionListView(ListAPIView):
 
         qs = (PaymentTransaction.objects
               .filter(organization_id=user.organization_id)
-              .select_related('user', 'plan', 'student_plan')
+              # `branch` acompaña al resto: el serializer publica `branch_name`, y sin el
+              # join cada fila de la página dispararía su propia query por la sucursal.
+              .select_related('user', 'plan', 'student_plan', 'branch')
               # Espejo del `line_items` de PaymentTransactionAdminSerializer (#12): sin este
               # prefetch, cada fila de la página dispara su propia query sobre
               # `charge_line_items` al pedir el desglose.

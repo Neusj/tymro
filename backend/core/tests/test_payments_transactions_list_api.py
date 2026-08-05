@@ -148,3 +148,27 @@ def test_fecha_invalida_devuelve_400(api_client, org_a, make_user):
     api_client.force_authenticate(user=admin)
     resp = api_client.get(URL, {'date_from': '01-06-2026'})
     assert resp.status_code == 400
+
+
+def test_branch_name_trae_la_sede_y_null_cuando_no_hay(api_client, org_a, make_user):
+    """`branch_name` con VALOR, no solo el camino NULL: `source='branch.name'` + `allow_null`
+    es fácil de romper en las dos direcciones (sin `allow_null` la fila sin sede sale 500;
+    con un `source` mal escrito la fila CON sede sale siempre vacía y nadie se entera).
+
+    Es dónde se VENDIÓ la membresía, no a qué cuenta entró la plata: una sede sin cuenta
+    propia cobra en la principal y aparece igual acá."""
+    from core.models import Branch
+
+    stu = make_user('s8', organization=org_a, role='student')
+    branch = Branch.objects.create(organization=org_a, name='Sede Centro')
+    with_branch = _tx(org_a, stu, branch=branch)
+    without_branch = _tx(org_a, stu)          # plan global o fila vieja
+    admin = make_user('adm8', organization=org_a, role='gym_admin')
+    api_client.force_authenticate(user=admin)
+
+    resp = api_client.get(URL)
+
+    assert resp.status_code == 200
+    by_id = {row['id']: row['branch_name'] for row in resp.data['results']}
+    assert by_id[str(with_branch.id)] == 'Sede Centro'
+    assert by_id[str(without_branch.id)] is None

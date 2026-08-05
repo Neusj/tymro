@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import DashboardHeader from '../components/DashboardHeader'
 import ConfirmDialog from '../components/ConfirmDialog'
 import { paymentsApi } from '../api/client'
@@ -122,6 +122,13 @@ export default function GymAdminPaymentsSettingsPage() {
         subtitle="Conecta la cuenta de MercadoPago de tu gimnasio para cobrar planes en línea. El dinero va directo a tu cuenta; TYMRO no participa del cobro."
         back={{ to: '/gym-admin/dashboard', label: 'Dashboard' }}
       />
+
+      <p className="text-xs text-brand-muted">
+        ¿Necesitas que una sucursal cobre en su propia cuenta de MercadoPago?{' '}
+        <Link to="/gym-admin/branches" className="font-semibold text-brand-blue underline hover:text-brand-orange">
+          Configúralo desde Sucursales
+        </Link>.
+      </p>
 
       {error ? <p className="rounded-lg border border-brand-red/50 bg-brand-red/10 px-3 py-2 text-sm text-red-200">{error}</p> : null}
       {notice ? <p className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">{notice}</p> : null}

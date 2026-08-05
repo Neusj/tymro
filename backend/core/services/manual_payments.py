@@ -34,6 +34,12 @@ def record_manual_payment(*, student_plan, amount, reference, recorded_by, organ
     payment = ManualPayment(
         organization=organization,
         student_plan=student_plan,
+        # Sede de la membresía cobrada, derivada de la FILA y nunca del payload (mismo
+        # criterio que `organization`). NULL si la membresía es global. Se estampa acá, en la
+        # única puerta de escritura, para que el segundo caller no se olvide.
+        # `branch_id` y no `branch`: copiar el id no toca la base, mientras que leer
+        # `student_plan.branch` dispara un SELECT extra para traer una fila que no se usa.
+        branch_id=student_plan.branch_id,
         amount=amount,
         reference=reference or '',
         recorded_by=recorded_by,

@@ -2122,10 +2122,17 @@ class PublicTrialClassSerializer(serializers.ModelSerializer):
 
 
 class PaymentAccountSerializer(serializers.ModelSerializer):
+    """Estado de UNA cuenta de cobro. Sin tokens: solo lo que el panel necesita mostrar.
+
+    `branch` es el id de la sucursal dueña, y `null` significa "cuenta PRINCIPAL de la
+    organización" (la que cobra por toda sede sin cuenta propia). El front lo necesita para
+    no confundir la principal con la de una sede: sin este campo, dos respuestas de este
+    endpoint son indistinguibles entre sí."""
+
     class Meta:
         model = PaymentAccount
         fields = ['provider', 'status', 'provider_user_id', 'is_sandbox',
-                  'connected_at', 'token_expires_at']
+                  'connected_at', 'token_expires_at', 'branch']
         read_only_fields = fields
 
 
@@ -2153,6 +2160,12 @@ class PaymentTransactionAdminSerializer(serializers.ModelSerializer):
     student_email = serializers.EmailField(source='user.email', read_only=True)
     student_phone = serializers.CharField(source='user.phone', read_only=True)
     plan_name = serializers.CharField(source='plan.name', read_only=True, allow_null=True)
+    # Sucursal de la membresía cobrada (registro histórico de la transacción). `null` = plan
+    # global, o fila anterior a las cuentas por sede. `allow_null` es lo que evita el 500 en
+    # ese caso: sin él, DRF explota al recorrer `branch.name` con `branch` en NULL (mismo
+    # motivo que `plan_name`). NO dice a qué CUENTA entró el dinero —la sede puede no tener
+    # cuenta propia y cobrar en la principal—, solo dónde se vendió.
+    branch_name = serializers.CharField(source='branch.name', read_only=True, allow_null=True)
     concept = serializers.SerializerMethodField()
     activated_student_plan = serializers.SerializerMethodField()
     # Desglose (#12) de la membresía que esta transacción activó. Hoy MercadoPago no genera
@@ -2169,7 +2182,7 @@ class PaymentTransactionAdminSerializer(serializers.ModelSerializer):
             'status', 'status_detail',
             'amount', 'plan_amount', 'enrollment_fee_amount', 'currency',
             'student_name', 'student_email', 'student_phone',
-            'plan_name', 'concept', 'line_items',
+            'plan_name', 'branch_name', 'concept', 'line_items',
             'activated_student_plan', 'student_plan',
         ]
         read_only_fields = fields

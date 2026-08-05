@@ -1124,6 +1124,23 @@ class ManualPayment(TimestampedModel):
         on_delete=models.CASCADE,
         related_name='manual_payments',
     )
+    # Sucursal de la membresía cobrada. Se deriva de `student_plan.branch` en el servicio de
+    # escritura y NUNCA del payload, por el mismo motivo que `organization` (ver arriba): es
+    # el registro histórico de dónde se cobró, no un dato que el cliente pueda elegir.
+    #
+    # `SET_NULL` y no `PROTECT` como `organization`: acá NULL significa "sin sede registrada"
+    # —membresía global, o fila anterior a esta columna—, una pérdida de dato menor. No
+    # invierte ningún alcance, así que borrar la sucursal no puede corromper nada (a
+    # diferencia de `PaymentAccount.branch`, donde NULL significa "es LA cuenta principal" y
+    # por eso ahí es PROTECT). Mismo criterio que `StudentPlan.branch` y
+    # `PaymentTransaction.branch`, las dos columnas hermanas de esta.
+    branch = models.ForeignKey(
+        Branch,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='manual_payments',
+    )
     amount = models.DecimalField(
         max_digits=10,
         decimal_places=2,
@@ -1497,6 +1514,24 @@ class PaymentAccount(TimestampedModel):
     STATUS_CHOICES = [(STATUS_CONNECTED, 'Conectada'), (STATUS_DISCONNECTED, 'Desconectada')]
 
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='payment_accounts')
+    # Sucursal dueña de la cuenta. NULL = cuenta PRINCIPAL de la organización: la que cobra
+    # por todas las sedes que no tengan cuenta propia (y el estado de siempre, antes de que
+    # existieran cuentas por sede).
+    #
+    # `PROTECT` y no `SET_NULL`: acá NULL no significa "sin sede registrada" sino "es LA
+    # principal", así que un SET_NULL al borrar la sucursal ascendería su cuenta a principal
+    # de la organización —desviando en silencio el dinero de todas las demás sedes a otro
+    # MercadoPago— o chocaría con la principal ya existente. Mismo criterio que el resto de
+    # los modelos de dinero (`ManualPayment.organization`, `StudentPlan.organization`):
+    # perder la sede tiene que ser una decisión explícita. `BranchViewSet.destroy` lo
+    # traduce a un 400 en vez de dejar salir un 500.
+    branch = models.ForeignKey(
+        Branch,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='payment_accounts',
+    )
     provider = models.CharField(max_length=30, default='mercadopago')
     provider_user_id = models.CharField(max_length=64)
     # null tras desconectar: la fila se conserva (histórico + reconexión) pero sin tokens.
@@ -1512,10 +1547,27 @@ class PaymentAccount(TimestampedModel):
     connected_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
-        unique_together = [('organization', 'provider')]
+        constraints = [
+            # UNA sola cuenta principal por organización y proveedor. La condición
+            # `branch__isnull=True` no es cosmética: en SQL dos NULL nunca son iguales, así
+            # que un unique plano sobre (organización, sucursal, proveedor) dejaría crear
+            # dos principales y el cobro elegiría una al azar.
+            models.UniqueConstraint(
+                fields=['organization', 'provider'],
+                condition=models.Q(branch__isnull=True),
+                name='uniq_main_payment_account_per_org',
+            ),
+            # Y una sola cuenta propia por sucursal y proveedor.
+            models.UniqueConstraint(
+                fields=['organization', 'branch', 'provider'],
+                condition=models.Q(branch__isnull=False),
+                name='uniq_branch_payment_account',
+            ),
+        ]
 
     def __str__(self):
-        return f'{self.organization} · {self.provider} ({self.status})'
+        scope = self.branch or 'principal'
+        return f'{self.organization} · {scope} · {self.provider} ({self.status})'
 
 
 class PaymentTransaction(TimestampedModel):
@@ -1539,6 +1591,19 @@ class PaymentTransaction(TimestampedModel):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='payment_transactions')
     user = models.ForeignKey('accounts.CustomUser', on_delete=models.CASCADE, related_name='payment_transactions')
+    # Sucursal de la membresía que se está pagando: se deriva de `plan.branch` en la compra
+    # de plan y de `student_plan.branch` en la matrícula. Es un registro histórico y se
+    # estampa aunque el cobro caiga a la cuenta principal (la sede puede no tener cuenta
+    # propia). `SET_NULL` alcanza porque aquí NULL significa "sin sede registrada" —plan
+    # global o fila anterior a las cuentas por sede—, no "todas las sedes"; mismo criterio
+    # que `StudentPlan.branch`.
+    branch = models.ForeignKey(
+        Branch,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='payment_transactions',
+    )
     provider = models.CharField(max_length=30, default='mercadopago')
     provider_preference_id = models.CharField(max_length=64, null=True, blank=True)
     provider_payment_id = models.CharField(max_length=64, null=True, blank=True)
@@ -1554,6 +1619,16 @@ class PaymentTransaction(TimestampedModel):
                                             related_name='enrollment_fee_transactions')
     student_plan = models.ForeignKey(StudentPlan, on_delete=models.SET_NULL, null=True, blank=True,
                                      related_name='origin_transactions')
+    # Cuenta EXACTA que emitió la preference de este cobro. Con varias cuentas por
+    # organización (principal + sedes), el webhook tiene que validar el `collector_id` y
+    # consultar el pago con el token de ESTA cuenta: re-resolver por (organización, sede) en
+    # el webhook puede devolver otra si la topología cambió entre el checkout y la
+    # notificación —una sede conectó o desconectó su cuenta—, y eso da o un
+    # `PaymentIntegrityError` falso o un fetch con el token de un tercero.
+    # NULL = fila anterior a las cuentas por sede; ahí el webhook cae a la principal, que es
+    # la única que pudo haber cobrado entonces.
+    payment_account = models.ForeignKey(PaymentAccount, on_delete=models.SET_NULL, null=True,
+                                        blank=True, related_name='transactions')
     processed_at = models.DateTimeField(null=True, blank=True)
     metadata = models.JSONField(default=dict, blank=True)
     raw_provider_payload = models.JSONField(null=True, blank=True)

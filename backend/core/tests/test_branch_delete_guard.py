@@ -340,6 +340,39 @@ def test_delete_branch_does_not_turn_scoped_payment_rule_into_wildcard(api_clien
     )
 
 
+# --- D ter. La FK PROTECT: la cuenta de cobro propia de la sucursal -------------
+# `PaymentAccount.branch` es PROTECT porque ahí `NULL` significa "cuenta PRINCIPAL de la
+# organización": un SET_NULL ascendería la cuenta de la sede a principal y desviaría a ese
+# MercadoPago el dinero de todas las demás sedes. El endpoint tiene que traducirlo a un 400
+# entendible, nunca dejar salir el ProtectedError como 500.
+
+
+def _branch_payment_account(setup, settings):
+    from core.fields import generate_encryption_key
+    from core.models import PaymentAccount
+
+    settings.PAYMENTS_ENCRYPTION_KEY = generate_encryption_key()
+    return PaymentAccount.objects.create(
+        organization=setup['org'], branch=setup['branch'], provider='mercadopago',
+        provider_user_id='sede-collector', access_token='AT', refresh_token='RT',
+    )
+
+
+def test_delete_branch_with_payment_account_does_not_hard_delete(api_client, setup, settings):
+    account = _branch_payment_account(setup, settings)
+    _login(api_client, 'admin')
+
+    resp = api_client.delete(f'/api/branches/{setup["branch"].id}/')
+
+    assert resp.status_code == 400, resp.content
+    assert Branch.objects.filter(id=setup['branch'].id).exists()
+    setup['branch'].refresh_from_db()
+    assert setup['branch'].is_active is False
+    account.refresh_from_db()
+    assert account.branch_id == setup['branch'].id, \
+        'la cuenta de la sede no puede quedar como cuenta principal de la organización'
+
+
 # --- E. El mensaje no debe prometer lo que el sistema no hace -------------------
 
 
@@ -352,6 +385,22 @@ def test_error_message_does_not_promise_selector_filtering(api_client, setup):
     detail = api_client.delete(f'/api/branches/{setup["branch"].id}/').json()['detail'].lower()
 
     assert 'no aparecerá al crear' not in detail, 'promesa falsa: el filtro no existe'
+
+
+def test_payment_account_message_does_not_promise_an_unlink_that_does_not_exist(
+        api_client, setup, settings):
+    """El mensaje decía "Desvinculá su cuenta de pagos antes de borrarla", pero desconectar
+    (`POST /api/payments/disconnect/`) CONSERVA la fila a propósito —histórico y
+    reconexión—, así que la FK PROTECT sigue bloqueando y el admin queda en un callejón sin
+    salida siguiendo la instrucción. Hoy no existe ninguna acción que libere el bloqueador:
+    el texto no puede prometer una."""
+    _branch_payment_account(setup, settings)
+    _login(api_client, 'admin')
+
+    detail = api_client.delete(f'/api/branches/{setup["branch"].id}/').json()['detail'].lower()
+
+    assert 'desvincul' not in detail, 'promesa falsa: desconectar no borra la fila'
+    assert 'antes de borrarla' not in detail, 'no hay ningún paso previo que desbloquee'
 
 
 def test_inactive_branch_still_accepts_new_classes_today(api_client, setup):

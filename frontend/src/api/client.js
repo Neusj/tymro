@@ -681,22 +681,29 @@ export const getMyMemberships = async () => {
 // instancia autenticada `api`: los cuatro endpoints exigen token (nunca publicApi).
 // La activación real del plan la confirma el webhook del backend, no estas llamadas.
 export const paymentsApi = {
-  // gym_admin/superadmin: estado de la conexión de la org.
-  // → {status:'disconnected', provider} o {provider, status:'connected', provider_user_id,
-  //    is_sandbox, connected_at, token_expires_at}
-  getAccount: async () => {
-    const { data } = await api.get('/payments/account/')
+  // gym_admin/superadmin: estado de la conexión. Sin branchId → cuenta PRINCIPAL de la org
+  // (comportamiento de siempre). Con branchId → cuenta de ESA sucursal.
+  // → {status:'disconnected', provider} (nunca existió una fila para ese scope) o
+  //   {provider, status:'connected'|'disconnected', provider_user_id, is_sandbox,
+  //    connected_at, token_expires_at, branch} (existe fila; branch=null es la principal).
+  getAccount: async ({ branchId } = {}) => {
+    const params = branchId ? { branch_id: branchId } : undefined
+    const { data } = await api.get('/payments/account/', { params })
     return data
   },
-  // gym_admin/superadmin: inicia OAuth. → {authorization_url}
-  connect: async () => {
-    const { data } = await api.post('/payments/connect/')
+  // gym_admin/superadmin: inicia OAuth. Sin branchId → conecta la cuenta PRINCIPAL. Con
+  // branchId → conecta la cuenta PROPIA de esa sucursal (409 si la principal no está
+  // conectada todavía). → {authorization_url}
+  connect: async ({ branchId } = {}) => {
+    const payload = branchId ? { branch_id: branchId } : {}
+    const { data } = await api.post('/payments/connect/', payload)
     return data
   },
-  // gym_admin/superadmin: desconecta la cuenta de la org (borra tokens, no la fila).
-  // → {status:'disconnected', provider}
-  disconnect: async () => {
-    const { data } = await api.post('/payments/disconnect/')
+  // gym_admin/superadmin: desconecta la cuenta (borra tokens, no la fila). Sin branchId →
+  // la principal. Con branchId → SOLO la de esa sucursal. → {status:'disconnected', provider}
+  disconnect: async ({ branchId } = {}) => {
+    const payload = branchId ? { branch_id: branchId } : {}
+    const { data } = await api.post('/payments/disconnect/', payload)
     return data
   },
   // student: crea PaymentTransaction + preference. Exactamente uno de planId

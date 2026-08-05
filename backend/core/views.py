@@ -1747,10 +1747,16 @@ class BranchViewSet(ModelViewSet):
         convierte en global, y una regla acotada a una sede pasa a pagar las clases de
         todas las demás.
 
-        Las otras FKs SET_NULL —`CustomUser.branch`, `Person.branch`, `StudentPlan.branch`
-        y `ConsumptionLog.branch`— se evaluaron y se aceptan a propósito: ahí `NULL`
-        significa "sin sede registrada", que es una pérdida de dato menor y no una
-        inversión de alcance. No son un olvido.
+        La quinta tampoco es por cascada: `PaymentAccount.branch` es PROTECT, así que el
+        hard delete de una sucursal con cuenta de cobro propia reventaría con
+        `ProtectedError` (500) en vez de dar un error entendible. Es PROTECT justamente
+        porque ahí `NULL` significa "cuenta PRINCIPAL de la organización": un SET_NULL
+        ascendería la cuenta de la sede a principal y desviaría el dinero de todas las demás.
+
+        Las otras FKs SET_NULL —`CustomUser.branch`, `Person.branch`, `StudentPlan.branch`,
+        `ConsumptionLog.branch`, `PaymentTransaction.branch` y `ManualPayment.branch`— se
+        evaluaron y se aceptan a propósito: ahí `NULL` significa "sin sede registrada", que
+        es una pérdida de dato menor y no una inversión de alcance. No son un olvido.
         """
         if branch.classes.exists():
             return (
@@ -1780,6 +1786,17 @@ class BranchViewSet(ModelViewSet):
                 'eliminarse porque borrarla convertiría esos planes en planes globales '
                 'de toda la organización.'
             )
+        if branch.payment_accounts.exists():
+            # El mensaje NO puede pedir "desvinculá la cuenta antes de borrarla": desconectar
+            # (`POST /api/payments/disconnect/`) conserva la fila a propósito —histórico y
+            # reconexión—, así que la FK PROTECT sigue bloqueando y el admin quedaría dando
+            # vueltas en un callejón sin salida. Hoy NO existe ninguna acción de usuario que
+            # libere este bloqueador, y el texto tiene que decir eso.
+            return (
+                'La sucursal tiene una cuenta de cobro propia asociada: se desactivó en '
+                'vez de eliminarse. El registro de esa cuenta se conserva como histórico '
+                'de los cobros, así que la sucursal no puede eliminarse.'
+            )
         return None
 
     def destroy(self, request, *args, **kwargs):
@@ -1807,7 +1824,31 @@ class BranchViewSet(ModelViewSet):
                 instance.save(update_fields=['is_active', 'updated_at'])
             return Response({'detail': blocker}, status=status.HTTP_400_BAD_REQUEST)
 
-        instance.delete()
+        try:
+            instance.delete()
+        except (ProtectedError, RestrictedError):
+            # Red de fondo, mismo criterio que `OrganizationViewSet.destroy` (views.py:1633):
+            # el chequeo de arriba y el DELETE no comparten lock —entre medio alguien puede
+            # conectar la cuenta de cobro de la sede o crear un plan exclusivo— y la lista de
+            # bloqueadores está cableada a las FKs de hoy, así que el próximo PROTECT/RESTRICT
+            # que se agregue volvería a dar 500 en vez de un error entendible.
+            if instance.is_active:
+                instance.is_active = False
+                instance.save(update_fields=['is_active', 'updated_at'])
+            return Response(
+                {
+                    'detail': (
+                        # "por ejemplo" y no una lista cerrada: los dos casos de hoy son
+                        # `Plan.branch` (RESTRICT) y `PaymentAccount.branch` (PROTECT), pero
+                        # este `except` existe justamente para el próximo que se agregue. Y
+                        # ninguno pide una acción al usuario: no hay ninguna que los libere.
+                        'La sucursal tiene datos que no se pueden eliminar en cascada (por '
+                        'ejemplo un plan exclusivo o su cuenta de cobro propia): se '
+                        'desactivó en vez de eliminarse.'
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 

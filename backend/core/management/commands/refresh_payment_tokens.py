@@ -12,6 +12,9 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         soon = timezone.now() + payments.REFRESH_MARGIN
+        # Sin filtro por sucursal a propósito: barre TODAS las cuentas conectadas, sean la
+        # principal de la organización (`branch` NULL) o de una sede. Es mantenimiento
+        # offline de tokens, no una query de runtime con dueño.
         qs = PaymentAccount.objects.filter(
             status=PaymentAccount.STATUS_CONNECTED, token_expires_at__lte=soon)
         ok = 0
