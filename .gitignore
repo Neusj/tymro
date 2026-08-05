@@ -2,6 +2,9 @@ __pycache__/
 *.pyc
 .coverage
 .pytest_cache/
+# Estado de pytest-testmon (mapa test -> archivos que toca). Es local a cada
+# máquina y se reconstruye solo; NO versionar.
+.testmondata*
 .env
 backend/db.sqlite3
 backend/e2e.sqlite3

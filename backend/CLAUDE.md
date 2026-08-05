@@ -17,6 +17,67 @@ python -m pytest                  # suite de tests (config en pytest.ini)
 - **Tests con `pytest`** (ver `pytest.ini` y `conftest.py`); la suite vive en `core/tests/` e incluye, entre otros, `test_multitenant`, `test_auth`, `test_user_roles_matrix`, `test_role_capabilities`, `test_assignable_roles_endpoint`. No hay linter configurado.
 - Con Docker: `docker-compose.yml` levanta backend (8000) + frontend + cloudflared.
 
+## Tests — qué comando correr
+
+La suite son **1302 tests** y en serie tarda **~14 min** contra Postgres. Hay dos modos
+rápidos, **ninguno activo por defecto**: `python -m pytest` a secas sigue siendo la suite
+completa en serie.
+
+**Fijar siempre `DATABASE_URL` al Postgres de verificación** (`tymro-pg-verify`): correr a
+veces contra SQLite y a veces contra Postgres cambia el resultado de tests sensibles al
+motor, y testmon guarda un mapa único que se ensucia si alternás.
+
+```bash
+cd backend
+$env:DATABASE_URL='postgresql://tymro:tymro@127.0.0.1:55432/tymro'   # bash: export DATABASE_URL=...
+
+python -m pytest --testmon    # CICLO NORMAL: solo los tests que toca tu cambio
+python -m pytest -n auto      # GATE PRE-DEPLOY: suite completa, 1 proceso por CPU
+```
+
+| | `--testmon` | `-n auto` | `python -m pytest` |
+|---|---|---|---|
+| Qué corre | solo los afectados | los 1302 | los 1302 |
+| Tiempo medido | 0,03 s a ~2,5 min | **~3–5 min** | ~14 min |
+| Cuándo | mientras iterás sobre un cambio | **antes de mergear/pushear a `deploy/railway-prod`** | debug puntual, CI serial |
+
+### `--testmon` (ciclo de iteración)
+
+- La **primera** corrida es la suite completa instrumentada con cobertura (**~22 min**) y
+  construye `.testmondata`. Se paga **una sola vez por máquina**. Después, sin cambios,
+  la corrida es de **0 tests en 0,03 s**.
+- ⚠️ **Cuánto ahorra depende de QUÉ archivo tocás**, y en este repo la diferencia es brutal.
+  Tests que dependen de cada archivo, según el mapa real de testmon:
+
+  | Archivo tocado | Tests que se re-corren |
+  |---|---|
+  | `core/services/teacher_payments.py` | 47 (3,6 %) |
+  | `core/services/plans.py` | 265 (20 %) |
+  | `core/serializers.py` | 693 (53 %) |
+  | `core/views.py` | 795 (61 %) |
+  | `core/models.py` | 1190 (91 %) |
+  | `conftest.py` | 1302 (100 %) |
+
+  **testmon rinde en archivos hoja (`core/services/*`), no en `models.py`/`views.py`.**
+  Un cambio típico que toca models + views + serializers re-corre >1200 tests: ahí el modo
+  rápido no es testmon, es `-n auto`.
+- **`--testmon` NO es un gate de entrega.** Selecciona desde el mapa de la corrida anterior;
+  si el mapa está frío, desactualizado o venís de otra rama, subselecciona en silencio.
+  **Antes de pushear a producción corré `-n auto`, nunca testmon.**
+- `.testmondata` está en `.gitignore` (local, se reconstruye solo). Si testmon se porta raro
+  —cambio de rama, cambio de motor de BD, seleccionó de menos— borralo y dejá que se rearme.
+- **No combinar `--testmon` con `-n auto`:** testmon no soporta xdist (no falla ruidosamente,
+  así que el riesgo es una corrida que parece verde sin haber seleccionado bien).
+
+### `-n auto` (suite completa en paralelo)
+
+- Un worker por CPU lógica (12 en la máquina de referencia). `pytest-django` crea **una BD de
+  test por worker** (`test_tymro_gw0..gw11`) automáticamente contra `tymro-pg-verify`.
+- Verificado: **1302 passed, mismo resultado que en serie, cero fallos y cero flaky** en
+  `--dist load` (default) y en `--dist loadscope`. No hace falta `loadscope`.
+- Si el Postgres local sufre con 12 BDs simultáneas, bajar a `-n 6`.
+- El tiempo oscila (~3–5 min) según carga de la máquina; el serial no baja de ~14 min.
+
 ## Arquitectura
 
 - `tymro/` — config del proyecto (`settings.py`, `urls.py`).
