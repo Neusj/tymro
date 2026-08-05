@@ -184,15 +184,23 @@ describe('GymAdminClassTemplatesPage — formulario de creacion (multi-dia, sin 
     fireEvent.change(screen.getByLabelText(/hora termino/i), { target: { value: '09:00' } })
   }
 
+  // Los dias ya no son checkboxes sueltos en el form: viven dentro de MultiSelectDropdown, que
+  // los monta en un portal recien al abrirse. Hay que abrir, marcar y cerrar con "Listo".
+  async function selectDays(...dayNames) {
+    await userEvent.click(screen.getByRole('button', { name: /dias de la semana/i }))
+    for (const name of dayNames) {
+      await userEvent.click(await screen.findByRole('checkbox', { name }))
+    }
+    await userEvent.click(screen.getByRole('button', { name: /^listo$/i }))
+  }
+
   it('marcar Lunes/Miercoles/Viernes y enviar llama a create con weekdays=[0,2,4] y sin start_date/end_date/weekday', async () => {
     classTemplatesApi.create.mockResolvedValue({ created: [{ id: 10 }, { id: 11 }, { id: 12 }], skipped: [] })
     renderPage()
 
     await screen.findByRole('heading', { name: /^crear clase$/i })
     await fillRequiredFieldsExceptDays()
-    await userEvent.click(screen.getByRole('checkbox', { name: /lunes/i }))
-    await userEvent.click(screen.getByRole('checkbox', { name: /miercoles/i }))
-    await userEvent.click(screen.getByRole('checkbox', { name: /viernes/i }))
+    await selectDays(/lunes/i, /miercoles/i, /viernes/i)
 
     await userEvent.click(screen.getByRole('button', { name: /guardar y generar clases/i }))
 
@@ -202,6 +210,53 @@ describe('GymAdminClassTemplatesPage — formulario de creacion (multi-dia, sin 
     expect(payload).not.toHaveProperty('weekday')
     expect(payload).not.toHaveProperty('start_date')
     expect(payload).not.toHaveProperty('end_date')
+  })
+
+  it('el trigger resume los dias elegidos de forma legible y las opciones no estan montadas con el panel cerrado', async () => {
+    renderPage()
+    await screen.findByRole('heading', { name: /^crear clase$/i })
+
+    // Cerrado: ni una opcion en el DOM, solo el placeholder.
+    expect(screen.queryByRole('checkbox', { name: /lunes/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /dias de la semana/i })).toHaveTextContent('Elegi uno o mas dias')
+
+    await selectDays(/lunes/i, /miercoles/i, /viernes/i)
+
+    const trigger = screen.getByRole('button', { name: /dias de la semana/i })
+    expect(trigger).toHaveTextContent('Lunes, Miercoles y Viernes')
+    // Al cerrar, las opciones se desmontan de nuevo.
+    expect(screen.queryByRole('checkbox', { name: /lunes/i })).not.toBeInTheDocument()
+  })
+
+  it('marcar los 7 dias colapsa el resumen a "Todos los dias"', async () => {
+    renderPage()
+    await screen.findByRole('heading', { name: /^crear clase$/i })
+
+    await selectDays(/lunes/i, /martes/i, /miercoles/i, /jueves/i, /viernes/i, /sabado/i, /domingo/i)
+
+    expect(screen.getByRole('button', { name: /dias de la semana/i })).toHaveTextContent('Todos los dias')
+  })
+
+  it('destildar un dia lo saca de la seleccion y el orden del payload sigue el de la semana', async () => {
+    classTemplatesApi.create.mockResolvedValue({ created: [{ id: 30 }, { id: 31 }], skipped: [] })
+    renderPage()
+    await screen.findByRole('heading', { name: /^crear clase$/i })
+    await fillRequiredFieldsExceptDays()
+
+    // Se marca en desorden (Viernes antes que Lunes) y se destilda Miercoles dentro del panel.
+    await userEvent.click(screen.getByRole('button', { name: /dias de la semana/i }))
+    await userEvent.click(await screen.findByRole('checkbox', { name: /viernes/i }))
+    await userEvent.click(screen.getByRole('checkbox', { name: /miercoles/i }))
+    await userEvent.click(screen.getByRole('checkbox', { name: /lunes/i }))
+    await userEvent.click(screen.getByRole('checkbox', { name: /miercoles/i }))
+    await userEvent.click(screen.getByRole('button', { name: /^listo$/i }))
+
+    expect(screen.getByRole('button', { name: /dias de la semana/i })).toHaveTextContent('Lunes y Viernes')
+
+    await userEvent.click(screen.getByRole('button', { name: /guardar y generar clases/i }))
+
+    await waitFor(() => expect(classTemplatesApi.create).toHaveBeenCalledTimes(1))
+    expect(classTemplatesApi.create.mock.calls[0][0].weekdays).toEqual([0, 4])
   })
 
   it('enviar sin marcar ningun dia no llama al API y muestra el error', async () => {
@@ -225,9 +280,7 @@ describe('GymAdminClassTemplatesPage — formulario de creacion (multi-dia, sin 
 
     await screen.findByRole('heading', { name: /^crear clase$/i })
     await fillRequiredFieldsExceptDays()
-    await userEvent.click(screen.getByRole('checkbox', { name: /lunes/i }))
-    await userEvent.click(screen.getByRole('checkbox', { name: /miercoles/i }))
-    await userEvent.click(screen.getByRole('checkbox', { name: /viernes/i }))
+    await selectDays(/lunes/i, /miercoles/i, /viernes/i)
 
     await userEvent.click(screen.getByRole('button', { name: /guardar y generar clases/i }))
 
@@ -245,8 +298,7 @@ describe('GymAdminClassTemplatesPage — formulario de creacion (multi-dia, sin 
 
     await screen.findByRole('heading', { name: /^crear clase$/i })
     await fillRequiredFieldsExceptDays()
-    await userEvent.click(screen.getByRole('checkbox', { name: /lunes/i }))
-    await userEvent.click(screen.getByRole('checkbox', { name: /miercoles/i }))
+    await selectDays(/lunes/i, /miercoles/i)
 
     await userEvent.click(screen.getByRole('button', { name: /guardar y generar clases/i }))
 

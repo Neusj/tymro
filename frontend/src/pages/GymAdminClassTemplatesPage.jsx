@@ -5,6 +5,7 @@ import BulkActionModal from '../components/BulkActionModal'
 import ConfirmDialog from '../components/ConfirmDialog'
 import DashboardHeader from '../components/DashboardHeader'
 import DataTable from '../components/ui/DataTable'
+import MultiSelectDropdown from '../components/ui/MultiSelectDropdown'
 import ValueBadge from '../components/ui/ValueBadge'
 import { canManageAdmin } from '../utils/roles'
 
@@ -25,6 +26,8 @@ const initialForm = {
 }
 
 const weekdayLabels = ['Lunes', 'Martes', 'Miercoles', 'Jueves', 'Viernes', 'Sabado', 'Domingo']
+
+const weekdayOptions = weekdayLabels.map((label, index) => ({ value: index, label }))
 
 function formatTime(value) {
   return value?.slice(0, 5) || '-'
@@ -75,6 +78,9 @@ export default function GymAdminClassTemplatesPage() {
   const [notice, setNotice] = useState('')
   const [confirmingAdvance, setConfirmingAdvance] = useState(false)
   const [advancingWindows, setAdvancingWindows] = useState(false)
+  // Marca en rojo el selector de dias tras un submit sin dias. El <select> nativo se autovalida
+  // con "required"; un dropdown propio no, asi que el estado invalido es explicito.
+  const [weekdaysInvalid, setWeekdaysInvalid] = useState(false)
 
   const loadData = async () => {
     setLoading(true)
@@ -103,11 +109,13 @@ export default function GymAdminClassTemplatesPage() {
   const resetForm = () => {
     setForm(initialForm)
     setEditingId(null)
+    setWeekdaysInvalid(false)
   }
 
   const startEdit = (row) => {
     setError('')
     setNotice('')
+    setWeekdaysInvalid(false)
     setEditingId(row.id)
     setForm({
       name: row.name || '',
@@ -131,12 +139,14 @@ export default function GymAdminClassTemplatesPage() {
     setError('')
     setNotice('')
 
-    // Los checkboxes de dias no tienen "required" nativo de grupo (a diferencia del <select>
-    // singular que reemplazan): validamos a mano antes de tocar la API.
+    // El dropdown multi-dia no tiene "required" nativo (a diferencia del <select> singular que
+    // reemplaza): validamos a mano antes de tocar la API.
     if (!editingId && form.weekdays.length === 0) {
       setError('Elegi al menos un dia.')
+      setWeekdaysInvalid(true)
       return
     }
+    setWeekdaysInvalid(false)
 
     setSaving(true)
     try {
@@ -405,32 +415,20 @@ export default function GymAdminClassTemplatesPage() {
               </select>
             </label>
           ) : (
-            <div className="space-y-1 text-sm md:col-span-2">
-              <span>Dias de la semana</span>
-              <div className="flex flex-wrap gap-2">
-                {weekdayLabels.map((label, index) => {
-                  const checked = form.weekdays.includes(index)
-                  return (
-                    <label key={label} className="flex items-center gap-1.5 rounded-lg border border-brand-line bg-black/20 px-2.5 py-1.5 text-xs">
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={(event) =>
-                          setForm((prev) => ({
-                            ...prev,
-                            weekdays: event.target.checked
-                              ? [...prev.weekdays, index].sort((a, b) => a - b)
-                              : prev.weekdays.filter((day) => day !== index),
-                          }))
-                        }
-                        className="h-4 w-4 accent-brand-orange"
-                      />
-                      {label}
-                    </label>
-                  )
-                })}
-              </div>
-            </div>
+            <MultiSelectDropdown
+              label="Dias de la semana"
+              options={weekdayOptions}
+              value={form.weekdays}
+              onChange={(weekdays) => {
+                setForm((prev) => ({ ...prev, weekdays }))
+                if (weekdays.length > 0) {
+                  setWeekdaysInvalid(false)
+                }
+              }}
+              placeholder="Elegi uno o mas dias"
+              allSelectedLabel="Todos los dias"
+              invalid={weekdaysInvalid}
+            />
           )}
           <label className="space-y-1 text-sm">
             <span>Sucursal</span>
