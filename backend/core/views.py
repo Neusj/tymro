@@ -40,6 +40,7 @@ from .models import (
     Holiday,
     Plan,
     Organization,
+    OrganizationExpiryNotificationConfig,
     generate_attendance_screen_code,
     generate_attendance_screen_session_code,
     Person,
@@ -70,6 +71,7 @@ from .serializers import (
     HolidaySerializer,
     ManualPaymentCreateSerializer,
     ManualPaymentSerializer,
+    OrganizationExpiryNotificationConfigSerializer,
     OrganizationSerializer,
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
@@ -1673,6 +1675,41 @@ class OrganizationViewSet(ModelViewSet):
             return Response(TrialFollowupConfigurationSerializer(config).data)
 
         serializer = TrialFollowupConfigurationSerializer(config, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['get', 'put'], url_path='expiry-notification-config')
+    def expiry_notification_config(self, request, pk=None):
+        """Avisos de vencimiento de la organización (7.4), editables desde el panel (R5).
+
+        Mismo molde que `trial_followup_config`, arriba: se busca la organización SIN pasar
+        por `get_queryset()` —que la filtra a la del actor— para poder distinguir 404 (no
+        existe) de 403 (existe pero es ajena), y el permiso es `_can_manage_org_resource`
+        (superadmin, o el gym_admin de ESA organización). NO
+        `_can_manage_operational_resource`: esto es CONFIGURACIÓN de organización, no un
+        recurso operativo, y ese otro check deja entrar al manager.
+
+        Lo que se guarda acá enciende dos cosas a la vez: los correos del job y el banner
+        `show_expiry_banner` del alumno. La validación de forma de `reminder_days_before`
+        (que DRF no hereda del `clean()` del modelo) la fuerza el serializer.
+        """
+        organization = Organization.objects.filter(pk=pk).first()
+        if organization is None:
+            raise NotFound('Organización no encontrada.')
+        if not _can_manage_org_resource(request.user, organization.id):
+            raise PermissionDenied('No tienes permisos para gestionar esta configuración.')
+
+        config, _ = OrganizationExpiryNotificationConfig.objects.get_or_create(
+            organization=organization,
+        )
+
+        if request.method == 'GET':
+            return Response(OrganizationExpiryNotificationConfigSerializer(config).data)
+
+        serializer = OrganizationExpiryNotificationConfigSerializer(
+            config, data=request.data, partial=True,
+        )
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(serializer.data)

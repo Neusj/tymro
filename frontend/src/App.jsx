@@ -11,6 +11,7 @@ import GymAdminClassTypesPage from './pages/GymAdminClassTypesPage'
 import GymAdminDisciplinesPage from './pages/GymAdminDisciplinesPage'
 import GymAdminHolidaysPage from './pages/GymAdminHolidaysPage'
 import GymAdminTrialFollowupPage from './pages/GymAdminTrialFollowupPage'
+import GymAdminExpiryNotificationConfigPage from './pages/GymAdminExpiryNotificationConfigPage'
 import GymAdminImportPage from './pages/GymAdminImportPage'
 import GymAdminBranchesPage from './pages/GymAdminBranchesPage'
 import GymAdminAttendanceQrPage from './pages/GymAdminAttendanceQrPage'
@@ -343,6 +344,16 @@ export default function App() {
           <ProtectedRoute allowedRoles={['gym_admin']}>
             <ShellRoute>
               <GymAdminTrialFollowupPage />
+            </ShellRoute>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/gym-admin/settings/expiry-notification"
+        element={
+          <ProtectedRoute allowedRoles={['gym_admin']}>
+            <ShellRoute>
+              <GymAdminExpiryNotificationConfigPage />
             </ShellRoute>
           </ProtectedRoute>
         }

@@ -46,6 +46,91 @@ afterEach(() => {
   delete window.matchMedia
 })
 
+// R5 — banner de vencimiento: la página lee `show_expiry_banner` del array que YA
+// carga (getMyMemberships) y lo pasa a MembershipExpiryBanner. Nada de umbrales acá:
+// solo se verifica que el flag/mensaje del backend llegan a pantalla.
+describe('StudentClassesPage — banner de vencimiento de membresía (R5)', () => {
+  it('con show_expiry_banner true en una membresía, muestra el aviso con el mensaje del backend', async () => {
+    getMyMemberships.mockResolvedValue([
+      {
+        id: 1,
+        plan_name: 'Plan Básico',
+        remaining_classes: 10,
+        unlimited_classes: false,
+        validity_status: 'active',
+        show_expiry_banner: true,
+        days_to_expiry: 2,
+        expiry_alert_level: 'danger',
+        expiry_alert_message: 'Tu membresía vence en 2 días.',
+        end_date: '2026-08-07',
+      },
+    ])
+
+    renderPage('available')
+
+    expect(await screen.findByText('Tu membresía vence en 2 días.')).toBeInTheDocument()
+    expect(screen.getByText('Plan Básico')).toBeInTheDocument()
+  })
+
+  it('con show_expiry_banner false (o ausente), no muestra ningún aviso', async () => {
+    getMyMemberships.mockResolvedValue([
+      {
+        id: 1,
+        plan_name: 'Plan Básico',
+        remaining_classes: 10,
+        unlimited_classes: false,
+        validity_status: 'active',
+        show_expiry_banner: false,
+        days_to_expiry: 40,
+        expiry_alert_level: 'safe',
+        expiry_alert_message: 'Todo en orden.',
+        end_date: '2026-09-15',
+      },
+    ])
+
+    renderPage('available')
+    await waitFor(() => expect(getMyMemberships).toHaveBeenCalled())
+
+    expect(screen.queryByText('Todo en orden.')).not.toBeInTheDocument()
+  })
+
+  it('con DOS membresías con el flag encendido, muestra las dos distinguibles por nombre de plan', async () => {
+    getMyMemberships.mockResolvedValue([
+      {
+        id: 11,
+        plan_name: 'Plan A',
+        remaining_classes: 3,
+        unlimited_classes: false,
+        validity_status: 'active',
+        show_expiry_banner: true,
+        days_to_expiry: 2,
+        expiry_alert_level: 'danger',
+        expiry_alert_message: 'Tu Plan A vence en 2 días.',
+        end_date: '2026-08-07',
+      },
+      {
+        id: 12,
+        plan_name: 'Plan B',
+        remaining_classes: null,
+        unlimited_classes: true,
+        validity_status: 'active',
+        show_expiry_banner: true,
+        days_to_expiry: 5,
+        expiry_alert_level: 'warning',
+        expiry_alert_message: 'Tu Plan B vence en 5 días.',
+        end_date: '2026-08-10',
+      },
+    ])
+
+    renderPage('available')
+
+    expect(await screen.findByText('Tu Plan A vence en 2 días.')).toBeInTheDocument()
+    expect(screen.getByText('Tu Plan B vence en 5 días.')).toBeInTheDocument()
+    expect(screen.getByText('Plan A')).toBeInTheDocument()
+    expect(screen.getByText('Plan B')).toBeInTheDocument()
+  })
+})
+
 describe('StudentClassesPage — rango por defecto (#18)', () => {
   it('al montar, la lista de clases disponibles arranca en el rango de la semana actual', async () => {
     renderPage('available')

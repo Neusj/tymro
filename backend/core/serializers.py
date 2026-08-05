@@ -29,6 +29,7 @@ from .models import (
     Plan,
     MembershipPlan,
     Organization,
+    OrganizationExpiryNotificationConfig,
     PaymentAccount,
     PaymentTransaction,
     Person,
@@ -568,6 +569,53 @@ class TrialFollowupConfigurationSerializer(serializers.ModelSerializer):
         if not str(value).strip():
             raise serializers.ValidationError('El cuerpo no puede quedar vacío.')
         return value
+
+
+class OrganizationExpiryNotificationConfigSerializer(serializers.ModelSerializer):
+    """Avisos de vencimiento de una organización (7.4), ahora editables por API (R5).
+
+    La misma lista gobierna DOS medios: los correos del job `expire_and_notify_plans` (por
+    coincidencia exacta de día) y el encendido del banner del alumno (`show_expiry_banner`
+    en `StudentPlanSerializer`, que usa el offset MAYOR como umbral). Por eso la validación
+    no puede aflojarse "porque es solo la UI": una lista corrupta acá rompe los dos.
+
+    ⚠️ `reminder_days_before` es un `JSONField` y TODA su validación de forma —lista de
+    enteros, 1..MAX_DAYS_BEFORE, máximo MAX_REMINDERS, sin duplicados, orden descendente—
+    vive en `OrganizationExpiryNotificationConfig.clean()`, que **DRF NO invoca**. Sin el
+    `validate_reminder_days_before` de abajo la API aceptaría `["hola"]` o `[999]` y el job
+    se comería la config corrupta (que ya tiene un try/except por organización justamente
+    por eso).
+
+    La validación NO se reimplementa acá: se DELEGA en `clean()` sobre una instancia sonda y
+    se traduce la `ValidationError` de Django a la de DRF. Replicar las reglas habría dejado
+    dos copias —API y admin— libres de desincronizarse, que es exactamente el problema que
+    tener el `clean()` en el modelo resuelve.
+    """
+
+    class Meta:
+        model = OrganizationExpiryNotificationConfig
+        fields = ['reminder_days_before', 'send_expired_notice']
+        extra_kwargs = {
+            'reminder_days_before': {'required': False},
+            'send_expired_notice': {'required': False},
+        }
+
+    def validate_reminder_days_before(self, value):
+        # Instancia SONDA (sin `organization`, nunca se guarda): `clean()` solo mira
+        # `reminder_days_before`, y usarla evita mutar `self.instance` antes de que el resto
+        # de la validación haya corrido.
+        probe = OrganizationExpiryNotificationConfig(reminder_days_before=value)
+        try:
+            probe.clean()
+        except DjangoValidationError as exc:
+            detail = exc.messages
+            if hasattr(exc, 'message_dict'):
+                detail = exc.message_dict.get('reminder_days_before', exc.messages)
+            raise serializers.ValidationError(detail)
+        # Se devuelve la salida de `clean()` y no `value`: `clean()` NORMALIZA (orden
+        # descendente), y persistir `value` crudo haría que la API guardara algo distinto a
+        # lo que guarda el admin con el mismo input.
+        return probe.reminder_days_before
 
 
 class DisciplineSerializer(serializers.ModelSerializer):
@@ -1558,6 +1606,10 @@ class StudentPlanSerializer(serializers.ModelSerializer):
     days_to_expiry = serializers.SerializerMethodField()
     expiry_alert_level = serializers.SerializerMethodField()
     expiry_alert_message = serializers.SerializerMethodField()
+    # R5: el ENCENDIDO del banner de "por vencer" lo decide el backend. Es un bool y no una
+    # lista de umbrales a propósito: si viajara la config, el front reimplementaría la regla
+    # y volveríamos a tener dos definiciones de "por vencer" (la del correo y la de la UI).
+    show_expiry_banner = serializers.SerializerMethodField()
     enrollment_fee_status = serializers.SerializerMethodField()
     payment_status = serializers.SerializerMethodField()
     # `line_items`/`line_items_total` (#12): igual que `payment_status` arriba, es dato
@@ -1589,6 +1641,7 @@ class StudentPlanSerializer(serializers.ModelSerializer):
             'days_to_expiry',
             'expiry_alert_level',
             'expiry_alert_message',
+            'show_expiry_banner',
             'discount_percentage',
             'final_price',
             'enrollment_fee',
@@ -1688,6 +1741,88 @@ class StudentPlanSerializer(serializers.ModelSerializer):
 
     def get_expiry_alert_message(self, obj):
         return self._state(obj).alert_message
+
+    def _expiry_reminder_offsets(self, organization_id):
+        """Días de anticipación configurados por UNA organización, MEMOIZADOS.
+
+        CÓMO SE EVITA EL N+1: cache por `organization_id` en la instancia del serializer,
+        exactamente el mismo mecanismo (y la misma justificación) que `_state_by_membership`
+        de arriba — con `many=True` DRF reusa UN serializer hijo para todas las filas, así
+        que memoizar en `self` es memoizar por request. `my-memberships` sirve una lista de
+        UNA sola organización (filtra por `organization_id=request.user.organization_id`), o
+        sea 1 consulta en total y no una por membresía. Se elige esto y no un
+        `select_related('organization__expiry_notification_config')` en la view porque este
+        serializer lo usan cuatro superficies (`my-plan`, `my-memberships`, `assign`,
+        `memberships`) y el `select_related` habría que acordarse de repetirlo en cada una;
+        acá el N+1 no puede volver por olvido de un call site.
+
+        El `None` (organización sin config) también se cachea: si no, una lista entera de una
+        organización sin configurar consultaría una vez por fila.
+        """
+        if not hasattr(self, '_offsets_by_org'):
+            self._offsets_by_org = {}
+        if organization_id not in self._offsets_by_org:
+            config = None
+            if organization_id:
+                # La config puede NO existir: la data migration la creó para las orgs de
+                # entonces, pero una organización nueva puede no tenerla todavía. `.first()`
+                # y no el acceso a la FK inversa justamente para que ese caso sea `None` y
+                # no un `RelatedObjectDoesNotExist`.
+                config = OrganizationExpiryNotificationConfig.objects.filter(
+                    organization_id=organization_id
+                ).first()
+            raw = list(config.reminder_days_before or []) if config else []
+            # Defensivo: `reminder_days_before` es un JSONField y su forma la impone
+            # `clean()`. Una fila escrita a mano (o cargada antes de que la API validara)
+            # puede traer basura, y `max()` sobre strings reventaría el GET del alumno con un
+            # 500. El job de correos se blinda con un try/except por organización
+            # (`plan_expiry_notifications.py`); acá el equivalente es descartar lo que no sea
+            # entero. `bool` es subclase de `int` y queda afuera, igual que en `clean()`.
+            self._offsets_by_org[organization_id] = [
+                day for day in raw if isinstance(day, int) and not isinstance(day, bool)
+            ]
+        return self._offsets_by_org[organization_id]
+
+    def get_show_expiry_banner(self, obj):
+        """¿Corresponde mostrarle al alumno el banner de "tu plan está por vencer"? (R5)
+
+        MISMA fuente de verdad que los correos —`reminder_days_before` de la organización—,
+        con semántica DISTINTA a propósito y por medio:
+
+        * El job de correos dispara por COINCIDENCIA EXACTA (`days_to_expiry not in offsets`
+          → skip, `plan_expiry_notifications.py`) porque cada correo es un evento puntual.
+        * El banner es un ESTADO persistente en pantalla. Con `[10, 3]`, coincidencia exacta
+          significaría que aparece el día 10, desaparece el 9 y vuelve el 3: de cara al
+          alumno eso es un bug, no una configuración. Por eso el banner toma el offset MAYOR
+          como UMBRAL de encendido y se queda prendido hasta el vencimiento.
+
+        Sin config —o con la lista vacía— no hay banner. Es coherente con que
+        `OrganizationExpiryNotificationConfig` nace APAGADA (7.4): ninguna organización avisa
+        nada hasta pedirlo, y eso vale para el banner igual que para el correo.
+
+        `0 <=` deja afuera las ya vencidas (días negativos): esto es "por vencer", no
+        "venció". Para lo segundo está `validity_status`.
+
+        SOLO EJE FECHA, y sale gratis de la fórmula: una membresía sin saldo (`EXHAUSTED`)
+        pero con `end_date` lejano tiene un `days_to_expiry` grande y no enciende nada. No
+        hay —ni debe agregarse— una rama por saldo acá: el eje "te quedaste sin clases" ya
+        lo publican `remaining_classes` y `validity_status`.
+
+        La config se lee de la organización de la MEMBRESÍA (`obj.organization_id`, la que la
+        vendió), NO de la del usuario: es la misma columna por la que filtra `my-memberships`
+        (models.py:644), y un alumno movido de gimnasio no puede recibir el umbral del
+        gimnasio nuevo sobre una membresía del viejo.
+        """
+        offsets = self._expiry_reminder_offsets(obj.organization_id)
+        if not offsets:
+            return False
+        threshold = max(offsets)
+        state = self._state(obj)
+        return bool(
+            state.days_to_expiry is not None
+            and 0 <= state.days_to_expiry <= threshold
+            and state.passes_valid_on
+        )
 
     def get_payment_status(self, obj):
         """Eje de pago (`paid`/`unpaid`/`free`), SEPARADO de `validity_status`.

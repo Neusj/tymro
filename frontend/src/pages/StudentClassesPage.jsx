@@ -5,6 +5,7 @@ import DashboardHeader from '../components/DashboardHeader'
 import FilterDropdown from '../components/FilterDropdown'
 import FilterPanel from '../components/FilterPanel'
 import KpiStrip from '../components/KpiStrip'
+import MembershipExpiryBanner from '../components/MembershipExpiryBanner'
 import DataTable from '../components/ui/DataTable'
 import TouchTooltip from '../components/ui/TouchTooltip'
 import ValueBadge from '../components/ui/ValueBadge'
@@ -923,6 +924,8 @@ export default function StudentClassesPage({ mode = 'available' }) {
   return (
     <div className="space-y-6">
       <DashboardHeader title="Student · Mis clases" subtitle="Agenda clara para reserva individual y recurrencia semanal." />
+
+      <MembershipExpiryBanner memberships={memberships} />
 
       {error ? <p className="rounded-lg border border-brand-red/50 bg-brand-red/10 px-3 py-2 text-sm text-red-200">{error}</p> : null}
       {notice ? <p className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">{notice}</p> : null}

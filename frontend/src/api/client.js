@@ -455,6 +455,22 @@ export const trialFollowupConfigApi = {
   },
 }
 
+// Configuración de avisos de vencimiento de membresía (R5). Contrato:
+// reminder_days_before (lista de enteros, días de anticipación) + send_expired_notice
+// (bool). La MISMA lista maneja el correo que manda el backend y el banner que ve el
+// alumno en /student/classes/available (show_expiry_banner en getMyMemberships): no
+// hay dos configs separadas.
+export const expiryNotificationConfigApi = {
+  get: async (orgId) => {
+    const { data } = await api.get(`/organizations/${orgId}/expiry-notification-config/`)
+    return data
+  },
+  update: async (orgId, payload) => {
+    const { data } = await api.put(`/organizations/${orgId}/expiry-notification-config/`, payload)
+    return data
+  },
+}
+
 export const recurringEnrollmentsApi = {
   list: async (params = {}) => {
     const { data } = await api.get('/recurring-enrollments/', { params })
