@@ -1620,12 +1620,27 @@ def test_class_templates_foreign_org_fks_not_found(api_client, admin_a, org_b, m
 
 
 def test_class_templates_commit_generates_calendar(api_client, admin_a, org_a, schedule_setup):
+    from datetime import timedelta
+
+    from django.utils import timezone
+
     from core.models import ClassTemplate, GymClass
 
     login(api_client, 'admin_a')
-    # Vigencia acotada en el futuro lejano: 2030-01-07 y 2030-01-14 son lunes.
+    # Vigencia = los DOS PRÓXIMOS LUNES, calculados desde hoy.
+    #
+    # Antes esto eran dos lunes de 2030 (fechas fijas, cómodas por ser inmunes al
+    # calendario). Ya no sirven: la materialización está topeada por la ventana rodante de
+    # la organización (`Organization.class_generation_window_days`, default 21 días), así
+    # que una vigencia en 2030 no materializa NADA todavía —sus clases van a aparecer
+    # cuando la ventana avance hasta ellas— y este test dejaría de probar lo que quiere
+    # probar (que el commit del importador genera el calendario). Se calculan relativas a
+    # hoy para que caigan dentro de la ventana cualquier día que corra la suite.
+    today = timezone.localdate()
+    first_monday = today + timedelta(days=(0 - today.weekday()) % 7)
+    second_monday = first_monday + timedelta(days=7)
     rows = [['Sede Centro', 'Lunes', '18:30', '19:30', 'Yoga', 'coach@gym.cl',
-             '', '', 10, '2030-01-07', '2030-01-20', '']]
+             '', '', 10, str(first_monday), str(second_monday), '']]
     resp = import_entity(api_client, 'class-templates', rows, TEMPLATE_HEADERS)
     assert resp.status_code == 201, resp.content
 

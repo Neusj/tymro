@@ -13,6 +13,7 @@ from .views_payments import (
     PaymentWebhookView,
 )
 from .views import (
+    AdvanceClassWindowsView,
     BranchViewSet,
     AttendanceQrCheckInView,
     AttendanceQrCurrentView,
@@ -102,5 +103,11 @@ urlpatterns = [
     # Cobro registrado a mano por el gimnasio. NO va bajo `payments/`: eso es la plomería del
     # proveedor (checkout, OAuth, webhook) y esto no toca ningún proveedor. Solo POST.
     path('manual-payments/', ManualPaymentCreateView.as_view(), name='manual-payments-create'),
+    # Disparo manual del robot de la ventana rodante (el mismo del cron diario). Ruta PLANA y no
+    # una acción del router: dispara un job de toda la organización —extiende series, consolida
+    # estados y poda clases— y no cuelga de ningún recurso en particular. Colgarlo de
+    # `class-templates/<pk>/` o de `classes/` mentiría sobre su alcance. Solo POST: no es una
+    # lectura, mueve saldo y borra filas.
+    path('advance-class-windows/', AdvanceClassWindowsView.as_view(), name='advance-class-windows'),
     path('', include(router.urls)),
 ]

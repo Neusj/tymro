@@ -276,6 +276,10 @@ REST_FRAMEWORK = {
         'public_verify': '10/hour',
         # Reenviar el correo de confirmación envía un email -> acotado (calca password_reset).
         'resend_verification': os.getenv('THROTTLE_RESEND_VERIFICATION', '3/hour'),
+        # Botón "actualizar calendario" (AdvanceClassWindowsView): corre el job de la ventana
+        # rodante SÍNCRONO dentro del request -> freno de martilleo, no cupo de negocio. Con
+        # LocMemCache el conteo es por worker (~×3 en prod): freno, no garantía.
+        'advance_class_windows': os.getenv('THROTTLE_ADVANCE_CLASS_WINDOWS', '6/hour'),
     },
 }
 

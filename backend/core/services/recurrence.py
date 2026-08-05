@@ -1,9 +1,9 @@
 from datetime import datetime, timedelta
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
-from ..models import ClassTemplate, Enrollment, GymClass, Holiday, RecurringEnrollment
+from ..models import ClassTemplate, Enrollment, GymClass, Holiday, Organization, RecurringEnrollment
 from .reservations import (
     ReservationRuleError,
     cancel_enrollment_with_refund,
@@ -58,6 +58,31 @@ def _iter_template_dates(template, from_date, until_date):
         current += timedelta(days=7)
 
 
+def materialization_window_cap(organization):
+    """Última fecha que se puede MATERIALIZAR para esa organización: `hoy + ventana`.
+
+    La ventana rodante (`Organization.class_generation_window_days`, default 21) reemplaza
+    al viejo fallback de 365 días: una serie sin `end_date` ya no crea ~52 filas de
+    `GymClass` el día del alta —y, con eso, ya no le descuenta al alumno el año entero por
+    adelantado, porque el loop de recurrencia cobra cada instancia que ve—.
+
+    La organización llega SIEMPRE desde el RECURSO (`template.organization`,
+    `recurring_enrollment.class_template.organization`), nunca desde input del request:
+    ninguna firma pública acepta la ventana desde afuera, así que no hay forma de que un
+    cliente pida materializar más lejos que lo que su org tiene configurado (orden 8.3: la
+    lectura de config de org queda detrás de las guardas de pertenencia de la view, que ya
+    corrieron para poder llegar hasta acá con ese recurso).
+
+    El default del MODELO es la única fuente de verdad del 21: la rama de fallback existe
+    solo por defensa (una org sin el atributo cargado, p. ej. un objeto en memoria), y ojo
+    con `or` acá —una ventana de 0 días es válida y significa "solo hasta hoy"—.
+    """
+    days = getattr(organization, 'class_generation_window_days', None)
+    if days is None:
+        days = Organization._meta.get_field('class_generation_window_days').default
+    return timezone.localdate() + timedelta(days=int(days))
+
+
 def is_holiday(value_date, organization=None, branch=None):
     holiday_query = Holiday.objects.filter(date=value_date, is_active=True)
     holiday_query = holiday_query.filter(
@@ -103,6 +128,7 @@ def _create_enrollment_if_possible(*, recurring_enrollment, gym_class):
             student_plan_id=recurring_enrollment.student_plan_id,
         )
     except ReservationRuleError as exc:
+        # TODO RW-R2: surface skip al alumno
         return False, exc.code
     return True, None
 
@@ -116,18 +142,30 @@ def create_enrollments_for_recurring_subscription(recurring_enrollment, class_in
     effective_from = from_date or recurring_enrollment.start_date
     effective_from = max(effective_from, recurring_enrollment.start_date, template.start_date)
 
-    effective_until = until_date
+    # Normalizado a `date` antes de compararlo: abajo entra en un `min()` contra el tope de
+    # la ventana, y un `until_date` string —que el `filter(...__lte=...)` de la ORM aceptaba
+    # tal cual— reventaría ahí con TypeError.
+    effective_until = _as_date(until_date) if until_date is not None else None
     if recurring_enrollment.end_date:
         effective_until = min(effective_until, recurring_enrollment.end_date) if effective_until else recurring_enrollment.end_date
     if template.end_date:
         effective_until = min(effective_until, template.end_date) if effective_until else template.end_date
 
+    # Con `class_instances` explícitas NO se re-filtra por ventana: las trae
+    # `sync_recurring_enrollments_for_generated_instances` con lo que acaba de crear
+    # `generate_instances_for_template_range`, que ya nace dentro de la ventana (Pieza A).
     queryset = class_instances
     if queryset is None:
+        # El universo del loop se topea con la ventana rodante de la org de la SERIE
+        # (`class_template.organization`, el recurso; nunca input del request). Sin esto,
+        # el alta de la recurrencia y el "reactivar" del alumno barrían TODAS las
+        # instancias ya materializadas de la plantilla —incluidas las que dejó el
+        # horizonte viejo de 365 días— y cobraban cada una por adelantado.
+        window_cap = materialization_window_cap(template.organization)
+        horizon = min(effective_until, window_cap) if effective_until else window_cap
         queryset = GymClass.objects.filter(class_template=template)
         queryset = queryset.filter(start_datetime__date__gte=effective_from)
-        if effective_until:
-            queryset = queryset.filter(start_datetime__date__lte=effective_until)
+        queryset = queryset.filter(start_datetime__date__lte=horizon)
 
     summary = {'created_count': 0, 'skipped': []}
     for gym_class in queryset:
@@ -162,9 +200,23 @@ def generate_instances_for_template_range(template, from_date=None, until_date=N
     parsed_until = _as_date(until_date) if until_date is not None else None
 
     effective_from = max(template.start_date, parsed_from or timezone.localdate())
-    effective_until = parsed_until or template.end_date or (effective_from + timedelta(days=365))
+    # La ventana rodante de la org es el TOPE de todo el rail de materialización: manda el
+    # MÁS CORTO entre `until_date` (input ya validado del caller), `template.end_date` y
+    # `hoy + ventana`. Reemplaza al fallback de 365 días —que era lo que convertía un alta
+    # de serie en ~52 clases y ~52 consumos por adelantado—, y aplica a TODOS los callers
+    # (alta de plantilla, `POST .../generate/`, `generate_pending`, la regeneración de
+    # `apply_template_updates_to_future_instances` y el importador): que la ventana no se
+    # pueda pedir por parámetro es a propósito.
+    #
+    # Consecuencia buscada: una plantilla que arranca DESPUÉS de la ventana no materializa
+    # nada todavía (`effective_until < effective_from` → summary vacío, sin error). Sus
+    # clases van a aparecer cuando la ventana avance hasta ellas.
+    candidates = [materialization_window_cap(template.organization)]
+    if parsed_until is not None:
+        candidates.append(parsed_until)
     if template.end_date:
-        effective_until = min(effective_until, template.end_date)
+        candidates.append(template.end_date)
+    effective_until = min(candidates)
 
     summary = {'created_count': 0, 'created_ids': [], 'skipped': []}
     if not template.is_active:
@@ -188,22 +240,45 @@ def generate_instances_for_template_range(template, from_date=None, until_date=N
         # Tarea 11.A: el solape de profesor ya no saltea la generación (el producto
         # decidió permitirlo). Acá vivía el chequeo `_has_teacher_conflict`.
 
-        gym_class = GymClass.objects.create(
-            organization=template.organization,
-            class_template=template,
-            branch=template.branch,
-            teacher=template.teacher,
-            class_type=template.class_type,
-            discipline=template.discipline,
-            name=template.name or (template.class_type.name if template.class_type else f'Clase {template.get_weekday_display()}'),
-            start_datetime=start_datetime,
-            end_datetime=end_datetime,
-            capacity=template.capacity,
-            is_trial_eligible=template.is_trial_eligible,
-            status=GymClass.Status.SCHEDULED,
-            created_by=created_by or template.created_by,
-            is_active=True,
-        )
+        # El `exists()` de arriba NO alcanza: entre ese SELECT y este INSERT hay una
+        # ventana en la que otro escritor (el cron `advance_class_windows`, el botón
+        # "Actualizar clases", otra tab, otro admin) puede haber creado la misma
+        # instancia. El `atomic` exterior no serializa nada —ambas transacciones ven la
+        # tabla sin la fila del otro—, así que el desempate lo hace la BD con
+        # `uniq_class_instance_per_template_slot` y acá solo se recoge el resultado.
+        #
+        # CRÍTICO: el `atomic()` INTERNO no es decorativo. Es un savepoint: sin él,
+        # capturar IntegrityError dentro del atomic exterior deja la transacción de
+        # Postgres abortada ("current transaction is aborted") y TODA query posterior del
+        # loop revienta. Con el savepoint, solo se descarta el INSERT fallido.
+        #
+        # El perdedor de la carrera no suma a `created_ids` → su instancia no entra al
+        # sync de recurrencias de abajo → no se le descuenta saldo al alumno por una
+        # clase que el ganador ya cobró. Es exactamente el comportamiento buscado: pierde
+        # limpio, y el resultado observable es el mismo `duplicate_instance` que reporta
+        # la guarda optimista.
+        try:
+            with transaction.atomic():
+                gym_class = GymClass.objects.create(
+                    organization=template.organization,
+                    class_template=template,
+                    branch=template.branch,
+                    teacher=template.teacher,
+                    class_type=template.class_type,
+                    discipline=template.discipline,
+                    name=template.name or (template.class_type.name if template.class_type else f'Clase {template.get_weekday_display()}'),
+                    start_datetime=start_datetime,
+                    end_datetime=end_datetime,
+                    capacity=template.capacity,
+                    is_trial_eligible=template.is_trial_eligible,
+                    status=GymClass.Status.SCHEDULED,
+                    created_by=created_by or template.created_by,
+                    is_active=True,
+                )
+        except IntegrityError:
+            summary['skipped'].append({'date': occurrence_date.isoformat(), 'reason': 'duplicate_instance'})
+            continue
+
         summary['created_count'] += 1
         summary['created_ids'].append(gym_class.id)
 

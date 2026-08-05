@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
-import { branchesApi, classTemplatesApi, classTypesApi, disciplinesApi, usersApi } from '../api/client'
+import { advanceClassWindowsApi, branchesApi, classTemplatesApi, classTypesApi, disciplinesApi, usersApi } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import BulkActionModal from '../components/BulkActionModal'
+import ConfirmDialog from '../components/ConfirmDialog'
 import DashboardHeader from '../components/DashboardHeader'
 import DataTable from '../components/ui/DataTable'
 import ValueBadge from '../components/ui/ValueBadge'
@@ -53,6 +54,11 @@ export default function GymAdminClassTemplatesPage() {
   // las dos vias, ver ClassTemplateViewSet). Sin esto el manager veia un boton y una accion
   // masiva que siempre fallaban.
   const canDeleteSeries = canManageAdmin(user?.role)
+  // El robot de ventana rodante es SOLO gym_admin (ni manager ni superadmin, ver
+  // AdvanceClassWindowsView.post en el backend): mueve saldo real de alumnos y borra
+  // clases sin vuelta atras, asi que no reutiliza canManageAdmin/canManageOperational.
+  // Esto es cosmetico; la autorizacion real es el 403 del backend.
+  const canAdvanceClassWindows = user?.role === 'gym_admin'
   const [form, setForm] = useState(initialForm)
   const [editingId, setEditingId] = useState(null)
   const [templates, setTemplates] = useState([])
@@ -68,6 +74,8 @@ export default function GymAdminClassTemplatesPage() {
   const [bulkModalOpen, setBulkModalOpen] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [confirmingAdvance, setConfirmingAdvance] = useState(false)
+  const [advancingWindows, setAdvancingWindows] = useState(false)
 
   const loadData = async () => {
     setLoading(true)
@@ -246,6 +254,30 @@ export default function GymAdminClassTemplatesPage() {
     }
   }
 
+  const runAdvanceClassWindows = async () => {
+    setAdvancingWindows(true)
+    setError('')
+    setNotice('')
+    try {
+      const data = await advanceClassWindowsApi.run()
+      const created = data.instances_created || 0
+      const pruned = data.pruned_count || 0
+      const warningsText = data.errors?.length ? `, con ${data.errors.length} avisos` : ''
+      setNotice(`Se generaron ${created} clases, se eliminaron ${pruned} clases vacías${warningsText}.`)
+      await loadData()
+    } catch (apiError) {
+      setError(firstApiError(apiError?.response?.data))
+    } finally {
+      // Incondicional (éxito Y error): el ConfirmDialog es un portal full-viewport con backdrop
+      // opaco que tapa el banner de error de la página. Si solo cerrara en el path de éxito, un
+      // 403 (org suspendida a mitad de sesión) dejaría al admin mirando el diálogo sin feedback
+      // visible, creyendo que no pasó nada. Mismo patrón que
+      // GymAdminPaymentsSettingsPage.handleDisconnect (setConfirmingDisconnect en finally).
+      setConfirmingAdvance(false)
+      setAdvancingWindows(false)
+    }
+  }
+
   const columns = useMemo(
     () => [
       { key: 'name', label: 'Serie', render: (row) => row.name || `Serie #${row.id}` },
@@ -322,6 +354,18 @@ export default function GymAdminClassTemplatesPage() {
         title="Gym Admin · Series recurrentes"
         subtitle="Crea, edita y administra series. Al crear, las clases se generan automaticamente segun fecha inicio/fin."
         back={{ to: '/gym-admin/classes', label: 'Clases' }}
+        extra={
+          canAdvanceClassWindows ? (
+            <button
+              type="button"
+              disabled={advancingWindows}
+              onClick={() => setConfirmingAdvance(true)}
+              className="rounded-xl bg-brand-orange px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+            >
+              {advancingWindows ? 'Actualizando...' : 'Actualizar clases'}
+            </button>
+          ) : null
+        }
       />
 
       <section className="card-surface p-5 space-y-3">
@@ -481,6 +525,16 @@ export default function GymAdminClassTemplatesPage() {
         defaultAction="generate_pending"
         onClose={() => setBulkModalOpen(false)}
         onConfirm={runBulkAction}
+      />
+
+      <ConfirmDialog
+        open={confirmingAdvance}
+        title="Actualizar clases"
+        description="Esto va a generar las clases próximas y eliminar las clases vacías vencidas. ¿Continuar?"
+        confirmLabel="Sí, actualizar"
+        loading={advancingWindows}
+        onConfirm={runAdvanceClassWindows}
+        onCancel={() => setConfirmingAdvance(false)}
       />
     </div>
   )

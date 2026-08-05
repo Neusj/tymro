@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 // SIN mock de axios: se importa el cliente real para inspeccionar la config
 // efectiva de las instancias. Un mock de `axios.create` haría que el test
 // afirmara sobre el mock y no sobre lo que la app usa en runtime.
-import api, { authApi, dashboardApi, importsApi, publicApi } from './client'
+import api, { advanceClassWindowsApi, authApi, dashboardApi, importsApi, publicApi } from './client'
 
 // El landmine que cubren estos tests: sin `timeout`, axios usa el default 0 =
 // esperar indefinidamente. Una petición que nunca responde (red caída, proxy
@@ -79,6 +79,16 @@ describe('timeout por endpoint', () => {
     // override no puede haber desplazado el FormData.
     expect(seen[0].data.get('file')).toBeInstanceOf(File)
     expect(seen[0].data.get('token')).toBe('tok-preview')
+  })
+
+  it('el robot de ventana rodante (botón "Actualizar clases") espera 60s: corre síncrono en el request con solo 3 workers gunicorn en prod', async () => {
+    await advanceClassWindowsApi.run()
+
+    expect(seen).toHaveLength(1)
+    expect(seen[0].url).toBe('/advance-class-windows/')
+    expect(seen[0].timeout).toBe(60000)
+    // El body NO se lee en el backend (la org sale del actor): el front tampoco manda uno.
+    expect(seen[0].data).toBeUndefined()
   })
 
   it('el resto de los endpoints conserva el default de 10s', async () => {

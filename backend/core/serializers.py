@@ -109,6 +109,8 @@ class OrganizationSerializer(serializers.ModelSerializer):
             'public_registration_enabled',
             'public_registration_url',
             'trial_validity_days',
+            'class_generation_window_days',
+            'class_pruning_grace_days',
             'branches_count',
         ]
         read_only_fields = [

@@ -20,6 +20,11 @@ const LOGIN_TIMEOUT_MS = 40000
 // Importador: validate parsea el XLSX completo y commit escribe fila por fila
 // dentro de una transacción, ambos antes de responder.
 const IMPORT_TIMEOUT_MS = 60000
+// Robot de la ventana rodante disparado a mano (botón "actualizar clases" del
+// gym_admin): corre SÍNCRONO dentro del propio request (extensión de series +
+// sync de estados + poda), sin cola de background. En prod solo hay 3 workers
+// gunicorn, así que puede tardar bastante más que el default de 10s.
+const ADVANCE_CLASS_WINDOWS_TIMEOUT_MS = 60000
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -402,6 +407,19 @@ export const classTemplatesApi = {
   },
   recurringEnroll: async (id, payload = {}) => {
     const { data } = await api.post(`/class-templates/${id}/recurring-enroll/`, payload)
+    return data
+  },
+}
+
+// Botón "actualizar clases" del gym_admin (panel de series recurrentes): dispara a
+// mano el mismo robot que corre el cron diario, para la organización del actor. El
+// backend no lee body (la org sale del token) y el 403 es la autorización real
+// (solo gym_admin con org activa); acá NO se decide quién puede llamarlo.
+export const advanceClassWindowsApi = {
+  run: async () => {
+    const { data } = await api.post('/advance-class-windows/', undefined, {
+      timeout: ADVANCE_CLASS_WINDOWS_TIMEOUT_MS,
+    })
     return data
   },
 }

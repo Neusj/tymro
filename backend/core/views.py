@@ -103,6 +103,10 @@ from .services.charge_line_items import (
     record_charge_line_items,
 )
 from .services.class_dashboard import get_class_dashboard_summary
+# El sync de estados vive en `services/class_status.py` desde que el job diario
+# (`rolling_window`, fase 2) también lo corre. Se importa con el nombre viejo a propósito: los
+# call sites de este módulo no cambian y `_class_sync_scope(user)` sigue siendo su scoping.
+from .services.class_status import sync_class_statuses as _sync_class_statuses
 from .services.manual_payments import (
     ManualPaymentOrganizationMismatch,
     record_manual_payment,
@@ -121,6 +125,9 @@ from .services.reservations import (
     rollback_consumption_for_enrollment,
     should_refund_consumption,
 )
+# El robot de la ventana rodante, el mismo que corre el cron diario: `AdvanceClassWindowsView` lo
+# dispara para UNA org (la del actor) y no reimplementa ni una línea de sus tres fases.
+from .services.rolling_window import advance_windows_for_org
 from .services.teacher_payments import build_teacher_payment_summary, calculate_teacher_payment
 
 User = get_user_model()
@@ -168,19 +175,6 @@ def _is_teacher(user):
 
 def _is_student(user):
     return _user_role(user) == User.Role.STUDENT
-
-
-def _sync_class_statuses(base_queryset):
-    # El queryset es OBLIGATORIO a proposito: esta funcion ESCRIBE (status, is_active,
-    # closed_at, Attendance y TeacherPaymentRecord). Con un default global, un call site
-    # futuro que se olvide del argumento reintroduce en silencio la escritura sobre todas
-    # las organizaciones. Usar `_class_sync_scope(user)`.
-    queryset = base_queryset
-    candidates = queryset.filter(status__in=[GymClass.Status.SCHEDULED, GymClass.Status.IN_PROGRESS])
-    for gym_class in candidates:
-        gym_class.refresh_status_from_schedule(save=True)
-        if gym_class.status in {GymClass.Status.COMPLETED, GymClass.Status.COMPLETED_EARLY}:
-            calculate_teacher_payment(gym_class)
 
 
 def _as_id_list(raw_ids):
@@ -3033,6 +3027,132 @@ class ClassTemplateViewSet(ModelViewSet):
         summary['updated_count'] = len(summary['updated_ids'])
         summary['deleted_count'] = len(summary['deleted_ids'])
         return Response(summary)
+
+
+def _sanitized_job_errors(summary):
+    """Las tres listas de errores del robot, aplanadas en el orden del pipeline (extender → sync →
+    podar) y SIN el detalle de la excepción.
+
+    El servicio las formatea como `'<qué> <id>: <ExcepciónClass>: <mensaje>'` (ver
+    `rolling_window._error_line`) porque el cron las imprime para el operador, que necesita el
+    detalle. Por HTTP no: la clase de la excepción y su mensaje son internals —un `IntegrityError`
+    trae el SQL y los nombres de las constraints— y del otro lado hay un tenant. Se conserva solo el
+    PREFIJO identificatorio (`plantilla 42`, `clase 118`, `sync 7`), que es lo único accionable para
+    el gimnasio: le dice CUÁL de sus propias filas quedó afuera para que la revise o la reporte. El
+    detalle completo sigue en `logger.exception` de cada fase, que es donde se lo mira.
+
+    El servicio NO se toca: sanear acá deja intacta la salida del comando y mantiene una sola
+    definición del formato de error.
+    """
+    lines = summary['extension_errors'] + summary['sync_errors'] + summary['prune_errors']
+    sanitized = []
+    for line in lines:
+        prefix, separator, _detail = line.partition(': ')
+        # Sin separador el formato no es el esperado: se descarta la línea ENTERA en vez de
+        # arriesgar que el detalle viaje como prefijo. Falla cerrada.
+        sanitized.append(f'{prefix}: no se pudo procesar' if separator else 'no se pudo procesar')
+    return sanitized
+
+
+class AdvanceClassWindowsView(APIView):
+    """`POST /api/advance-class-windows/` — dispara A MANO el robot de la ventana rodante para la
+    organización del actor. Es el botón "actualizar calendario" de la UI.
+
+    QUÉ DISPARA. Exactamente el mismo trabajo que el cron diario (`advance_class_windows` →
+    `services/rolling_window.py`), pero para UNA organización: extender la materialización de las
+    series hasta el tope de hoy (`class_generation_window_days`), consolidar el estado de lo que
+    ya arrancó (`sync_class_statuses`, con el `TeacherPaymentRecord` del profe cuando hay regla)
+    y podar las clases pasadas que quedaron vacías fuera del colchón de gracia. Nada de eso se
+    reimplementa acá: esta vista es SOLO la puerta. Si el tope, el cobro o el criterio de poda
+    cambian, cambian en el servicio y este endpoint los hereda.
+
+    SOLO `gym_admin`, y no por prolijidad de roles: la fase 1 AUTO-INSCRIBE las recurrencias en
+    las instancias nuevas y eso DESCUENTA SALDO real de las membresías de los alumnos (regla #9),
+    y la fase 3 BORRA clases de forma IRREVERSIBLE. Un botón que mueve plata y borra filas no es
+    una lectura: ni manager, ni monitor, ni teacher, ni student.
+
+    Y tampoco `superadmin`, mismo racional que `ManualPaymentCreateView` (se cita por NOMBRE, sin
+    número de línea: las dos vistas se mueven): es rol de PLATAFORMA y no tiene organización, así
+    que no habría org que anclar sin creerle al payload — y creerle es justo lo que este endpoint no
+    puede hacer. Su camino para operar sobre una org ajena es el comando, que exige acceso al shell
+    y deja rastro en los logs del job.
+
+    EL BODY NO SE LEE. `request.data` no se toca en ningún momento: la organización es SIEMPRE la
+    del actor (orden 8.3, igual que `materialization_window_cap` y `_pruning_cutoff`, que solo
+    aceptan la org que les llega del queryset del job). Un `organization`/`org_id` en el payload
+    no es un error de validación, simplemente no existe: aceptarlo convertiría este endpoint en un
+    "consumí saldo y borrá clases en el gimnasio que yo diga". Por la misma razón no hay
+    equivalente HTTP de `--include-inactive`: si la organización del actor está suspendida, el job
+    no corre (no puede seguir descontándole membresías a sus alumnos), y el override queda solo
+    para el operador que arregla un calendario a mano desde el shell.
+
+    DOBLE CLICK. No hace falta candado: la idempotencia ya la garantiza el servicio (la generación
+    skipea `duplicate_instance` y lo ya podado no vuelve a ser candidato), así que la segunda
+    corrida es inocua y devuelve `instances_created: 0`.
+
+    LOS ERRORES SALEN GENÉRICOS. El servicio arma sus líneas con la clase y el mensaje de la
+    excepción (`_error_line`) porque el cron las imprime para el operador; por HTTP eso sería
+    filtrarle internals de la base a un tenant, así que la vista las reescribe conservando SOLO el
+    prefijo identificatorio (`_sanitized_job_errors`). El detalle vive en `logger.exception` de las
+    tres fases, que es donde el operador lo necesita.
+
+    La restricción vive ACÁ, en el backend. El control del frontend es cosmético.
+    """
+
+    permission_classes = [IsAuthenticated]
+    # Freno de MARTILLEO, no cupo de negocio: el job corre síncrono dentro del request y en prod
+    # (single-service, 3 workers de gunicorn) varios clicks seguidos ocupan workers que sirven el
+    # resto de la app. OJO: con `LocMemCache` el contador es POR WORKER, así que el límite efectivo
+    # es ~×3 — es un freno, no una garantía (mismo caveat que el throttle de login).
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'advance_class_windows'
+    # Sin metadata: el `OPTIONS` default de DRF publica el docstring de la vista a cualquier usuario
+    # autenticado (de cualquier organización), y este docstring documenta el flujo del operador de
+    # plataforma. Con `None`, DRF responde 405 y no hay nada que leer.
+    metadata_class = None
+
+    def post(self, request):
+        user = request.user
+        # El check va inline y no en una clase de permiso porque además del ROL exige el ANCLA:
+        # sin `organization_id` no hay organización sobre la que correr el job, y una clase que
+        # solo mire `role` no lo expresa (calco de `ManualPaymentCreateView`).
+        if not (_is_gym_admin(user) and user.organization_id):
+            raise PermissionDenied(
+                'Solo el administrador del gimnasio puede ejecutar la actualización de clases.'
+            )
+
+        # La org se resuelve DESPUÉS de la guarda y desde el actor, nunca desde el request: acá
+        # ya está garantizado que `organization_id` no es NULL, así que la FK siempre trae fila.
+        org = user.organization
+        if not org.is_active:
+            # Un gimnasio suspendido no materializa (ni cobra) clases nuevas por su cuenta, y
+            # tampoco a pedido de su propio admin: el token sobrevive a la suspensión, así que sin
+            # esta guarda un POST viejo seguiría descontándoles saldo a los alumnos. Es el mismo
+            # guard que el barrido del comando; lo que no existe por HTTP es el override.
+            raise PermissionDenied(
+                'La organización está suspendida: no se puede actualizar el calendario de clases.'
+            )
+
+        summary = advance_windows_for_org(org)
+        # ATRIBUCIÓN. La acción es irreversible (borra clases) y mueve plata (consume saldos), y el
+        # repo todavía no tiene auditoría: que al menos quede en los logs de Railway QUIÉN la
+        # disparó y qué produjo. Va después del servicio para poder incluir los conteos; el detalle
+        # de cada falla ya lo logueó `logger.exception` adentro de cada fase.
+        logger.info(
+            'advance_class_windows manual: user=%s org=%s creadas=%s podadas=%s errores=%s',
+            user.id, org.id, summary['instances_created'], summary['pruned_count'],
+            len(summary['extension_errors']) + len(summary['sync_errors']) + len(summary['prune_errors']),
+        )
+        # Se devuelve un SUBCONJUNTO del summary a propósito: los dos conteos que la UI muestra y
+        # la lista de errores ya aplanada (extensión + sync + poda) y saneada, que es como el
+        # operador la necesita —una sola lista— sin que el front tenga que conocer las tres fases.
+        # `org_id`, `org_name` y `templates_processed` quedan afuera: son internos del job y el
+        # front ya sabe en qué organización está.
+        return Response({
+            'instances_created': summary['instances_created'],
+            'pruned_count': summary['pruned_count'],
+            'errors': _sanitized_job_errors(summary),
+        })
 
 
 class RecurringEnrollmentViewSet(ModelViewSet):

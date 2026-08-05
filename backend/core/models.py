@@ -3,7 +3,7 @@ from datetime import timedelta
 from decimal import Decimal
 
 from django.core.exceptions import ValidationError
-from django.core.validators import MinValueValidator, RegexValidator
+from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
 from django.db import models
 from django.utils import timezone
 import re
@@ -96,6 +96,21 @@ class Organization(TimestampedModel):
     trial_validity_days = models.PositiveIntegerField(
         default=7,
         help_text='Días hacia adelante en que se puede agendar una clase de prueba.',
+    )
+    # Ventana de materialización de series recurrentes: cuántos días hacia adelante
+    # se generan clases concretas a partir de una serie. Configurable por org; default 21 días.
+    class_generation_window_days = models.PositiveIntegerField(
+        default=21,
+        validators=[MaxValueValidator(366)],
+        help_text='Días hacia adelante en que se materializan clases de series recurrentes.',
+    )
+    # Colchón de poda: cuántos días tiene que llevar TERMINADA una clase vacía para que el
+    # job advance_class_windows la borre. Margen para backfill tardío (pasar lista el lunes
+    # por la clase del viernes). 0 = sin colchón (podar apenas termina).
+    class_pruning_grace_days = models.PositiveIntegerField(
+        default=7,
+        validators=[MaxValueValidator(90)],
+        help_text='Días de gracia antes de podar una clase terminada sin inscripciones ni historia.',
     )
 
     class Meta:
@@ -288,6 +303,55 @@ class GymClass(TimestampedModel):
 
     class Meta:
         ordering = ['-start_datetime']
+        constraints = [
+            # Cierra la race de doble consumo del rail de materialización de series:
+            # `generate_instances_for_template_range` (services/recurrence.py) hace
+            # check-then-create —`exists()` y después `create()`— y dos escritores
+            # simultáneos (el botón "Actualizar clases", el cron `advance_class_windows`,
+            # dos tabs, dos admins) pasaban los dos el `exists()` y creaban la MISMA
+            # instancia dos veces. El daño real no era la fila repetida sino que el sync
+            # de recurrencias corre sobre cada instancia creada y le cobraba el consumo
+            # al alumno DOS veces. La unicidad tiene que vivir en la BD: en la aplicación
+            # no hay forma de cerrarlo sin un lock, y el perdedor de la carrera ahora
+            # levanta IntegrityError y se saltea limpio (sin sumar a `created_ids`, así
+            # que sin cobrar).
+            #
+            # `class_template` es nullable (SET_NULL): en Postgres y en SQLite los NULL no
+            # chocan entre sí, así que las clases creadas a mano —sin plantilla— quedan
+            # FUERA de la restricción, que es lo correcto: dos clases sueltas pueden
+            # compartir horario.
+            #
+            # Es estrictamente MÁS LAXA que la guarda que ya aplicaba el generador (que
+            # filtra por `start_datetime__date`, o sea una instancia por plantilla y por
+            # DÍA): no prohíbe nada que el rail permitiera antes.
+            #
+            # ⚠️ POR QUÉ `F(...)` Y NO `fields=[...]` (no es cosmético, no lo "simplifiques"):
+            # DRF 3.15 lee `Model._meta.constraints` y, por cada `UniqueConstraint` con
+            # `len(constraint.fields) > 1`, le inyecta al ModelSerializer un
+            # `UniqueTogetherValidator` Y marca sus campos como `required=True`
+            # (`serializers.get_uniqueness_extra_kwargs`). Con la forma `fields=[...]`,
+            # `GymClassSerializer` pasaba a exigir `class_template` en el POST y
+            # `POST /api/classes/` —la creación de una clase SUELTA, sin plantilla, que es
+            # el flujo normal del gym_admin— empezaba a responder
+            # `400 {"class_template": ["Este campo es requerido."]}`. Verificado: rompía 9
+            # tests de la suite (test_teacher_overlap_relaxed, test_overlap_checks_org_scope,
+            # test_cross_org_write_isolation, test_branch_delete_guard).
+            # Poner `required=False` en el serializer NO alcanza:
+            # `UniqueTogetherValidator.enforce_required_fields` exige la clave en `attrs`
+            # sin mirar el flag.
+            # Con expresiones, `constraint.fields` queda vacío, DRF ignora la constraint y
+            # la API se comporta EXACTAMENTE como antes; en la BD el efecto es el mismo
+            # (índice único sobre las dos columnas, NULL distintos entre sí).
+            # CONTRAPARTIDA ACEPTADA: al no haber validador de DRF, un POST a mano que
+            # mande `class_template` + un `start_datetime` ya ocupado devuelve 500
+            # (IntegrityError) en lugar de 400. No es alcanzable desde la UI (el form de
+            # clase suelta no manda plantilla) y no corrompe datos.
+            models.UniqueConstraint(
+                models.F('class_template'),
+                models.F('start_datetime'),
+                name='uniq_class_instance_per_template_slot',
+            ),
+        ]
 
     def __str__(self):
         return self.name
