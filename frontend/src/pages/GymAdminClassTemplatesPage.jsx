@@ -153,7 +153,7 @@ export default function GymAdminClassTemplatesPage() {
           weekday: Number(weekday),
           apply_to_future_instances: true,
         })
-        setNotice('Serie actualizada. Se aplicaron cambios a instancias futuras editables.')
+        setNotice('Clase actualizada. Se aplicaron cambios a las clases futuras editables.')
       } else {
         const data = await classTemplatesApi.create({
           ...payload,
@@ -163,9 +163,9 @@ export default function GymAdminClassTemplatesPage() {
         const skipped = data?.skipped || []
         if (created.length > 0) {
           const skippedText = skipped.length ? ` ${skipped.length} ya existian y no se duplicaron.` : ''
-          setNotice(`Se crearon ${created.length} series. Las clases se generan automaticamente.${skippedText}`)
+          setNotice(`Se programaron ${created.length} clases semanales. Las clases se generan automaticamente.${skippedText}`)
         } else {
-          setNotice(`No se creo ninguna serie nueva: los ${skipped.length} dias elegidos ya tenian una serie.`)
+          setNotice(`No se programo ninguna clase nueva: los ${skipped.length} dias elegidos ya tenian una clase.`)
         }
       }
       resetForm()
@@ -183,7 +183,7 @@ export default function GymAdminClassTemplatesPage() {
     setNotice('')
     try {
       await classTemplatesApi.update(row.id, { is_active: !row.is_active })
-      setNotice(row.is_active ? 'Serie desactivada.' : 'Serie activada.')
+      setNotice(row.is_active ? 'Clase desactivada.' : 'Clase activada.')
       await loadData()
     } catch (apiError) {
       setError(firstApiError(apiError?.response?.data))
@@ -226,7 +226,7 @@ export default function GymAdminClassTemplatesPage() {
   }
 
   const deleteTemplate = async (row) => {
-    const confirmed = window.confirm(`Eliminar serie ${row.name || `#${row.id}`}? Solo se permite si no tiene historial ni inscritos.`)
+    const confirmed = window.confirm(`Eliminar clase ${row.name || `#${row.id}`}? Solo se permite si no tiene historial ni inscritos.`)
     if (!confirmed) {
       return
     }
@@ -236,7 +236,7 @@ export default function GymAdminClassTemplatesPage() {
     setNotice('')
     try {
       await classTemplatesApi.remove(row.id)
-      setNotice('Serie eliminada correctamente.')
+      setNotice('Clase eliminada correctamente.')
       await loadData()
     } catch (apiError) {
       setError(firstApiError(apiError?.response?.data))
@@ -298,7 +298,7 @@ export default function GymAdminClassTemplatesPage() {
 
   const columns = useMemo(
     () => [
-      { key: 'name', label: 'Serie', render: (row) => row.name || `Serie #${row.id}` },
+      { key: 'name', label: 'Clase', render: (row) => row.name || `Clase #${row.id}` },
       { key: 'branch_name', label: 'Sucursal' },
       { key: 'teacher_name', label: 'Profesor' },
       { key: 'class_type_name', label: 'Tipo', render: (row) => <ValueBadge kind="class_type" value={row.class_type_name} /> },
@@ -369,8 +369,8 @@ export default function GymAdminClassTemplatesPage() {
   return (
     <div className="space-y-6">
       <DashboardHeader
-        title="Gym Admin · Series recurrentes"
-        subtitle="Crea, edita y administra series. Al crear, las clases se generan automaticamente desde hoy, sin fecha de fin."
+        title="Gym Admin · Crear Clase"
+        subtitle="Programa una nueva clase con profesor, tipo y cupos. Se repite cada semana en los dias que elijas y las clases se generan automaticamente desde hoy."
         back={{ to: '/gym-admin/classes', label: 'Clases' }}
         extra={
           canAdvanceClassWindows ? (
@@ -387,7 +387,7 @@ export default function GymAdminClassTemplatesPage() {
       />
 
       <section className="card-surface p-5 space-y-3">
-        <h2 className="panel-title">{editingId ? 'Editar serie' : 'Nueva serie recurrente'}</h2>
+        <h2 className="panel-title">{editingId ? 'Editar clase' : 'Crear clase'}</h2>
         <form onSubmit={submit} className="grid gap-3 md:grid-cols-2">
           <label className="space-y-1 text-sm">
             <span>Nombre visible</span>
@@ -490,7 +490,7 @@ export default function GymAdminClassTemplatesPage() {
           </label>
           {editingId ? null : (
             <p className="md:col-span-2 text-xs text-brand-muted">
-              La serie arranca hoy y no tiene fecha de fin: las clases se generan automaticamente hacia adelante.
+              La clase arranca hoy y no tiene fecha de fin: se genera automaticamente cada semana hacia adelante.
             </p>
           )}
           <label className="space-y-1 text-sm md:col-span-2">
@@ -528,7 +528,7 @@ export default function GymAdminClassTemplatesPage() {
 
       <section className="card-surface p-5">
         <div className="mb-4 flex items-center justify-between gap-3">
-          <h2 className="panel-title">Series recurrentes</h2>
+          <h2 className="panel-title">Clases programadas</h2>
           <button
             type="button"
             disabled={!selectedIds.length}
@@ -552,17 +552,17 @@ export default function GymAdminClassTemplatesPage() {
 
       <BulkActionModal
         open={bulkModalOpen}
-        title="Acciones masivas de series"
+        title="Acciones masivas de clases"
         selectedCount={selectedIds.length}
         loading={bulkWorking}
         actions={[
-          { value: 'activate', label: 'Activar series', description: 'Reanuda la serie para futuras generaciones.' },
-          { value: 'deactivate', label: 'Desactivar series', description: 'Detiene nuevas generaciones sin borrar historico.' },
+          { value: 'activate', label: 'Activar clases', description: 'Reanuda la clase para futuras generaciones.' },
+          { value: 'deactivate', label: 'Desactivar clases', description: 'Detiene nuevas generaciones sin borrar historico.' },
           { value: 'cancel_future_instances', label: 'Cancelar clases futuras', description: 'Cancela instancias futuras ya generadas.' },
           { value: 'reactivate_future_cancelled', label: 'Reactivar futuras canceladas', description: 'Intenta reactivar futuras canceladas validando seguridad.' },
-          { value: 'generate_pending', label: 'Generar rango pendiente', description: 'Genera clases faltantes dentro del rango de serie sin duplicar.' },
+          { value: 'generate_pending', label: 'Generar rango pendiente', description: 'Genera clases faltantes dentro del rango sin duplicar.' },
           ...(canDeleteSeries
-            ? [{ value: 'delete', label: 'Eliminar series seguras', description: 'Elimina solo series sin actividad bloqueante.' }]
+            ? [{ value: 'delete', label: 'Eliminar clases seguras', description: 'Elimina solo clases sin actividad bloqueante.' }]
             : []),
         ]}
         requiresCommentActions={['cancel_future_instances']}

@@ -1,3 +1,9 @@
+// TODO unificacion: esta pantalla puntual queda inerte, decidir en el rediseno si se elimina o se
+// fusiona con la de series (GymAdminClassTemplatesPage). Ya no se llega por navegacion: el boton
+// "Crear clase" del listado apunta a /gym-admin/class-templates. La ruta sigue registrada en
+// App.jsx (acceso directo por URL + e2e/tests/27-gym-admin-classes.spec.js) y el endpoint
+// POST /api/classes/ sigue vivo para el importador y la edicion.
+
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { branchesApi, classTypesApi, classesApi, disciplinesApi, usersApi } from '../api/client'

@@ -255,6 +255,8 @@ export default function App() {
           </ProtectedRoute>
         }
       />
+      {/* TODO unificacion: ruta de la pantalla puntual, inerte (sin acceso desde la UI). Se
+          mantiene registrada a proposito; decidir en el rediseno si se elimina o se fusiona. */}
       <Route
         path="/gym-admin/classes/create"
         element={

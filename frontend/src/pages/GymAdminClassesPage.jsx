@@ -148,6 +148,9 @@ export default function GymAdminClassesPage() {
       { key: 'teacher_name', label: 'Profesor' },
       { key: 'class_type_name', label: 'Tipo', render: (row) => <ValueBadge kind="class_type" value={row.class_type_name} /> },
       { key: 'discipline_name', label: 'Disciplina', render: (row) => <ValueBadge kind="discipline" value={row.discipline_name} /> },
+      // TODO unificacion: esta columna sigue diciendo "Serie" (jerga vieja) porque renombrarla a
+      // "Clase" chocaria con la columna del nombre de la clase, dos lineas mas arriba. Se resuelve
+      // en el rediseno junto con la fusion de la pantalla puntual y la de series.
       { key: 'class_template_name', label: 'Serie', render: (row) => row.class_template_name || '-' },
       { key: 'start_datetime', label: 'Inicio', render: (row) => formatDateTime(row.start_datetime) },
       { key: 'end_datetime', label: 'Termino', render: (row) => formatDateTime(row.end_datetime) },
@@ -222,7 +225,11 @@ export default function GymAdminClassesPage() {
         subtitle="Gestion operativa de clases con filtros, KPIs y acciones seguras."
         extra={
           canManage ? (
-            <Link to="/gym-admin/classes/create" className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white">
+            // TODO unificacion: desvio temporal. "Crear clase" ahora lleva a la pantalla de series
+            // recurrentes (/gym-admin/class-templates), que es la unica que soporta multi-dia. La
+            // pantalla puntual (/gym-admin/classes/create) queda inerte pero viva: se decide en el
+            // rediseno si se elimina o se fusiona con la de series.
+            <Link to="/gym-admin/class-templates" className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white">
               Crear clase
             </Link>
           ) : null

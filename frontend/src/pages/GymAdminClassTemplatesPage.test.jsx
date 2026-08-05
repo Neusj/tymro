@@ -188,7 +188,7 @@ describe('GymAdminClassTemplatesPage — formulario de creacion (multi-dia, sin 
     classTemplatesApi.create.mockResolvedValue({ created: [{ id: 10 }, { id: 11 }, { id: 12 }], skipped: [] })
     renderPage()
 
-    await screen.findByRole('heading', { name: /nueva serie recurrente/i })
+    await screen.findByRole('heading', { name: /^crear clase$/i })
     await fillRequiredFieldsExceptDays()
     await userEvent.click(screen.getByRole('checkbox', { name: /lunes/i }))
     await userEvent.click(screen.getByRole('checkbox', { name: /miercoles/i }))
@@ -207,7 +207,7 @@ describe('GymAdminClassTemplatesPage — formulario de creacion (multi-dia, sin 
   it('enviar sin marcar ningun dia no llama al API y muestra el error', async () => {
     renderPage()
 
-    await screen.findByRole('heading', { name: /nueva serie recurrente/i })
+    await screen.findByRole('heading', { name: /^crear clase$/i })
     await fillRequiredFieldsExceptDays()
 
     await userEvent.click(screen.getByRole('button', { name: /guardar y generar clases/i }))
@@ -223,7 +223,7 @@ describe('GymAdminClassTemplatesPage — formulario de creacion (multi-dia, sin 
     })
     renderPage()
 
-    await screen.findByRole('heading', { name: /nueva serie recurrente/i })
+    await screen.findByRole('heading', { name: /^crear clase$/i })
     await fillRequiredFieldsExceptDays()
     await userEvent.click(screen.getByRole('checkbox', { name: /lunes/i }))
     await userEvent.click(screen.getByRole('checkbox', { name: /miercoles/i }))
@@ -232,7 +232,7 @@ describe('GymAdminClassTemplatesPage — formulario de creacion (multi-dia, sin 
     await userEvent.click(screen.getByRole('button', { name: /guardar y generar clases/i }))
 
     expect(
-      await screen.findByText('Se crearon 2 series. Las clases se generan automaticamente. 1 ya existian y no se duplicaron.'),
+      await screen.findByText('Se programaron 2 clases semanales. Las clases se generan automaticamente. 1 ya existian y no se duplicaron.'),
     ).toBeInTheDocument()
   })
 
@@ -243,7 +243,7 @@ describe('GymAdminClassTemplatesPage — formulario de creacion (multi-dia, sin 
     })
     renderPage()
 
-    await screen.findByRole('heading', { name: /nueva serie recurrente/i })
+    await screen.findByRole('heading', { name: /^crear clase$/i })
     await fillRequiredFieldsExceptDays()
     await userEvent.click(screen.getByRole('checkbox', { name: /lunes/i }))
     await userEvent.click(screen.getByRole('checkbox', { name: /miercoles/i }))
@@ -251,7 +251,7 @@ describe('GymAdminClassTemplatesPage — formulario de creacion (multi-dia, sin 
     await userEvent.click(screen.getByRole('button', { name: /guardar y generar clases/i }))
 
     expect(
-      await screen.findByText('No se creo ninguna serie nueva: los 2 dias elegidos ya tenian una serie.'),
+      await screen.findByText('No se programo ninguna clase nueva: los 2 dias elegidos ya tenian una clase.'),
     ).toBeInTheDocument()
   })
 
@@ -283,7 +283,7 @@ describe('GymAdminClassTemplatesPage — formulario de creacion (multi-dia, sin 
     const [menuTrigger] = await screen.findAllByRole('button', { name: /abrir acciones/i })
     await userEvent.click(menuTrigger)
     await userEvent.click(await screen.findByRole('button', { name: /^editar$/i }))
-    await screen.findByRole('heading', { name: /editar serie/i })
+    await screen.findByRole('heading', { name: /^editar clase$/i })
 
     // En edicion el selector es singular ("Dia semana"), no los checkboxes multi-dia.
     expect(screen.getByLabelText(/^dia semana$/i)).toBeInTheDocument()
