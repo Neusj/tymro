@@ -1886,6 +1886,16 @@ class StudentPlanAssignPaymentSerializer(serializers.Serializer):
     solo tiene sentido con `manual`: `free` es beca total y un concepto COBRADO encima
     sería la misma incoherencia que un `amount` (se rechaza, no se resuelve en silencio).
     La matrícula (8.4) NO viaja por acá: tiene su propio eje.
+
+    `manual_method` (P3.2) es el instrumento del cobro manual -`ManualPayment.method`,
+    `cash`/`transfer`- y viaja bajo ESTE nombre, nunca `method`: el campo `method` de acá
+    arriba ya significa otra cosa (la vía de venta, `free`/`manual`) y reusar el nombre
+    dejaría un `payment['method'] == 'manual'` conviviendo con un
+    `payment['manual_method'] == 'transfer'` en el mismo dict, una trampa de lectura para
+    el próximo que toque `views.py`. Mismas reglas que `amount`: obligatorio con la vía
+    `manual` (mirror del error de `amount` de más abajo) y rechazado con `free` (mirror del
+    rechazo de `amount`/`reference`/`line_items`): una beca total no tiene instrumento de
+    cobro que declarar.
     """
     METHOD_FREE = 'free'
     METHOD_MANUAL = 'manual'
@@ -1897,6 +1907,10 @@ class StudentPlanAssignPaymentSerializer(serializers.Serializer):
     method = serializers.ChoiceField(choices=METHOD_CHOICES)
     amount = serializers.DecimalField(max_digits=10, decimal_places=2, min_value=Decimal('0.01'), required=False)
     reference = serializers.CharField(max_length=120, allow_blank=True, default='')
+    # `required=False` acá y no en la entrada de `ManualPaymentCreateSerializer` (ahí es
+    # obligatorio sin condición): la obligatoriedad de este campo depende de `method`, así
+    # que se exige a mano en `validate()` de abajo, igual que `amount`.
+    manual_method = serializers.ChoiceField(choices=ManualPayment.METHOD_CHOICES, required=False)
     # Cota de 50 por la misma clase de motivo que el tope de `student_plan` en
     # `ManualPaymentCreateSerializer`: sin límite, el payload es un vector de inserción
     # masiva. Un alta real trae un puñado de conceptos.
@@ -1909,6 +1923,10 @@ class StudentPlanAssignPaymentSerializer(serializers.Serializer):
                 raise serializers.ValidationError({
                     'amount': 'El monto es obligatorio para declarar un pago manual.',
                 })
+            if attrs.get('manual_method') is None:
+                raise serializers.ValidationError({
+                    'manual_method': 'El método de pago (efectivo/transferencia) es obligatorio para declarar un pago manual.',
+                })
         else:
             # Free ES beca total, no un descuento parcial: un monto o una referencia de cobro
             # encima serían incoherentes con "no se cobró nada", así que no se resuelven en
@@ -1920,6 +1938,12 @@ class StudentPlanAssignPaymentSerializer(serializers.Serializer):
             if attrs.get('reference'):
                 raise serializers.ValidationError({
                     'reference': 'La vía "free" no admite una referencia de pago.',
+                })
+            # Mismo argumento que `amount`/`reference` arriba: la vía "free" no cobra nada,
+            # así que no hay instrumento de cobro (efectivo/transferencia) que declarar.
+            if attrs.get('manual_method') is not None:
+                raise serializers.ValidationError({
+                    'manual_method': 'La vía "free" no admite un método de pago: es una beca total, no un pago parcial.',
                 })
             # `.get(...)` truthy y no `in attrs`: una lista vacía explícita no declara
             # ningún cobro, así que no hay incoherencia que rechazar.
@@ -2010,6 +2034,11 @@ class ManualPaymentCreateSerializer(serializers.Serializer):
         decimal_places=2,
         min_value=Decimal('0.01'),
     )
+    # REQUERIDO, sin default ni `allow_blank` (P3.2): `''` en `ManualPayment.method` existe
+    # solo para las filas legacy de antes de esta columna, NO es una opción que este
+    # endpoint ofrezca. Todo cobro nuevo declara `cash` o `transfer` sí o sí -mismo criterio
+    # que el resto del contrato acá: la forma se valida en la entrada, no se infiere.
+    method = serializers.ChoiceField(choices=ManualPayment.METHOD_CHOICES)
     reference = serializers.CharField(max_length=120, allow_blank=True, default='')
 
 
@@ -2025,11 +2054,16 @@ class ManualPaymentSerializer(serializers.ModelSerializer):
 
     Tampoco viaja `recorded_by`: es el propio actor, o sea información que el cliente ya
     tiene. Menos campos, menos superficie.
+
+    `method` (P3.2) SÍ se agrega acá pese a la regla de arriba: no es parte del eje
+    financiero que el monitor tiene vedado (`payment_status`), es el eco del propio dato
+    que el actor acaba de declarar en el POST -no hay superficie nueva, el cliente ya lo
+    tiene en la mano antes de recibir la respuesta.
     """
 
     class Meta:
         model = ManualPayment
-        fields = ['id', 'student_plan', 'amount', 'reference', 'recorded_at']
+        fields = ['id', 'student_plan', 'amount', 'method', 'reference', 'recorded_at']
         read_only_fields = fields
 
 

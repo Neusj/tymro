@@ -839,8 +839,8 @@ def test_the_manual_payment_stamps_the_branch_of_the_membership(make_organizatio
     membership = _membership(org, student, _plan(org, branch=branch), branch=branch)
 
     payment = record_manual_payment(
-        student_plan=membership, amount=Decimal('30000'), reference='',
-        recorded_by=None, organization=org)
+        student_plan=membership, amount=Decimal('30000'), method=ManualPayment.METHOD_CASH,
+        reference='', recorded_by=None, organization=org)
 
     assert payment.branch_id == branch.id
 
@@ -851,8 +851,8 @@ def test_the_manual_payment_of_a_global_membership_has_no_branch(make_organizati
     membership = _membership(org, student, _plan(org, branch=None))
 
     payment = record_manual_payment(
-        student_plan=membership, amount=Decimal('30000'), reference='',
-        recorded_by=None, organization=org)
+        student_plan=membership, amount=Decimal('30000'), method=ManualPayment.METHOD_CASH,
+        reference='', recorded_by=None, organization=org)
 
     assert payment.branch_id is None
 
@@ -868,8 +868,8 @@ def test_deleting_the_branch_keeps_the_manual_payment(make_organization, make_us
     student = make_user('stu-mp3', organization=org, role='student')
     membership = _membership(org, student, _plan(org, branch=None), branch=branch)
     payment = record_manual_payment(
-        student_plan=membership, amount=Decimal('30000'), reference='',
-        recorded_by=None, organization=org)
+        student_plan=membership, amount=Decimal('30000'), method=ManualPayment.METHOD_CASH,
+        reference='', recorded_by=None, organization=org)
 
     branch.delete()
 

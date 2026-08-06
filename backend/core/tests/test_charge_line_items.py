@@ -48,8 +48,8 @@ def _manual_payload(world, line_items):
     return {
         'user': world['student'].id, 'plan': world['plan'].id, 'start_date': str(TODAY),
         'payment': {
-            'method': 'manual', 'amount': '27000.00', 'reference': 'efectivo',
-            'line_items': line_items,
+            'method': 'manual', 'amount': '27000.00', 'manual_method': 'cash',
+            'reference': 'efectivo', 'line_items': line_items,
         },
     }
 
@@ -184,7 +184,7 @@ def test_cross_org_plan_with_line_items_answers_exactly_like_without_them(api_cl
 
     base = {
         'user': student_b.id, 'plan': plan_b.id, 'start_date': str(TODAY),
-        'payment': {'method': 'manual', 'amount': '27000.00'},
+        'payment': {'method': 'manual', 'amount': '27000.00', 'manual_method': 'cash'},
     }
     with_items = {
         **base,

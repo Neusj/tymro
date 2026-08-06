@@ -73,8 +73,28 @@ describe('AssignPlanPage — vía de pago', () => {
 
     await waitFor(() => expect(assignPlanToUser).toHaveBeenCalled())
     const payload = assignPlanToUser.mock.calls[0][0]
-    expect(payload.payment).toEqual({ method: 'manual', amount: '20000', reference: 'transferencia caja 2' })
+    expect(payload.payment).toEqual({
+      method: 'manual', amount: '20000', manual_method: 'cash', reference: 'transferencia caja 2',
+    })
     expect(Object.keys(payload)).toContain('discount_percentage')
+  })
+
+  it('vía pago: "Método de pago" default es efectivo, y cambiar a transferencia lo manda en manual_method', async () => {
+    renderPage()
+    await fillUserAndPlan()
+
+    // Default sin tocar el selector: "cash" viaja igual, nunca queda vacío.
+    expect(screen.getByLabelText('Método de pago')).toHaveValue('cash')
+
+    await userEvent.selectOptions(screen.getByLabelText('Método de pago'), 'transfer')
+    await userEvent.type(screen.getByLabelText('Monto cobrado'), '20000')
+    await userEvent.click(screen.getByRole('button', { name: 'Asignar plan' }))
+
+    await waitFor(() => expect(assignPlanToUser).toHaveBeenCalled())
+    const payload = assignPlanToUser.mock.calls[0][0]
+    expect(payload.payment).toEqual({
+      method: 'manual', amount: '20000', manual_method: 'transfer', reference: '',
+    })
   })
 
   it('vía pago con monto vacío, 0 o negativo: no llama a la API y muestra el error local', async () => {
@@ -117,6 +137,7 @@ describe('AssignPlanPage — vía de pago', () => {
     expect(payload.payment).toEqual({
       method: 'manual',
       amount: '20000',
+      manual_method: 'cash',
       reference: '',
       line_items: [
         { concept: 'Pesas', amount: '3000' },

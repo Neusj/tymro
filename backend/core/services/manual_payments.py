@@ -14,7 +14,7 @@ class ManualPaymentOrganizationMismatch(Exception):
     """La membresía que se intenta pagar no es de la organización que registra el cobro."""
 
 
-def record_manual_payment(*, student_plan, amount, reference, recorded_by, organization):
+def record_manual_payment(*, student_plan, amount, reference, recorded_by, organization, method):
     """Registra un cobro fuera de línea sobre `student_plan`. Devuelve la fila creada.
 
     Vuelve a exigir la coherencia de organización aunque el llamador ya la haya validado:
@@ -25,6 +25,22 @@ def record_manual_payment(*, student_plan, amount, reference, recorded_by, organ
     Espejo de `activate_student_plan` + `PlanOrganizationMismatch` (`services/plans.py`):
     excepción de dominio propia, no `PermissionDenied` de DRF, para que el servicio no sepa
     nada de HTTP.
+
+    `method` es un keyword REQUERIDO, sin default (P3.2): esta función es LA puerta de
+    escritura -el comentario de arriba ya lo dice- y un default acá sería precisamente el
+    agujero que esta columna existe para cerrar. Obligarlo acá convierte el olvido en un
+    `TypeError` en desarrollo en vez de un dato mudo en producción.
+
+    OJO: el kwarg obligatorio por sí solo NO cierra el agujero -solo fuerza a PASAR algo,
+    no a pasar algo VÁLIDO-. Nada impide `method=''` o `method=None` a nivel de firma, y
+    ambos crearían una fila nueva indistinguible de las legacy (`method=None` ni siquiera
+    llega tan lejos: revienta como `IntegrityError` en el INSERT si algo se saltea
+    `full_clean()`). Quien de verdad corta ese caso es `ManualPayment.clean()`
+    (`models.py`), que rechaza `method` vacío en toda fila NUEVA (`self._state.adding`) y
+    deja pasar sin problema las filas legacy existentes. Como esta función ya llama
+    `full_clean()` más abajo, la guarda real de "no nace vacía" vive ahí y no acá -que es
+    justo lo que también protege al próximo caller (la carga histórica de CSV) sin que
+    tenga que acordarse de repetir el chequeo.
     """
     if student_plan.organization_id != organization.id:
         raise ManualPaymentOrganizationMismatch(
@@ -41,13 +57,15 @@ def record_manual_payment(*, student_plan, amount, reference, recorded_by, organ
         # `student_plan.branch` dispara un SELECT extra para traer una fila que no se usa.
         branch_id=student_plan.branch_id,
         amount=amount,
+        method=method,
         reference=reference or '',
         recorded_by=recorded_by,
     )
-    # `full_clean()` y no solo `save()`: corre `clean()` —la misma coherencia de organización
-    # a nivel de modelo— y el validador de `amount`. Mismo criterio que usa el importador
-    # sobre `StudentPlan`. Es un solo INSERT, así que no hace falta `transaction.atomic()`:
-    # no hay secuencia leer-y-después-escribir que proteger.
+    # `full_clean()` y no solo `save()`: corre `clean()` —la coherencia de organización Y el
+    # corte de `method` vacío en fila nueva, los dos a nivel de modelo— y el validador de
+    # `amount`. Mismo criterio que usa el importador sobre `StudentPlan`. Es un solo INSERT,
+    # así que no hace falta `transaction.atomic()`: no hay secuencia leer-y-después-escribir
+    # que proteger.
     payment.full_clean()
     payment.save()
     return payment

@@ -93,7 +93,7 @@ def test_manual_assign_creates_the_membership_and_the_manual_payment(api_client,
 
     resp = api_client.post(ASSIGN_URL, {
         'user': student.id, 'plan': plan.id, 'start_date': str(TODAY),
-        'payment': {'method': 'manual', 'amount': '20000.00', 'reference': 'efectivo'},
+        'payment': {'method': 'manual', 'amount': '20000.00', 'manual_method': 'cash', 'reference': 'efectivo'},
     }, format='json')
 
     assert resp.status_code == 201, resp.data
@@ -138,7 +138,7 @@ def test_manual_assign_rolls_back_the_membership_if_the_payment_fails(api_client
 
     resp = api_client.post(ASSIGN_URL, {
         'user': student.id, 'plan': plan.id, 'start_date': str(TODAY),
-        'payment': {'method': 'manual', 'amount': '20000.00'},
+        'payment': {'method': 'manual', 'amount': '20000.00', 'manual_method': 'cash'},
     }, format='json')
 
     assert resp.status_code == 400, resp.data
@@ -195,7 +195,7 @@ def test_manual_with_full_discount_is_rejected(api_client, world):
     resp = api_client.post(ASSIGN_URL, {
         'user': student.id, 'plan': plan.id, 'start_date': str(TODAY),
         'discount_percentage': 100,
-        'payment': {'method': 'manual', 'amount': '20000.00'},
+        'payment': {'method': 'manual', 'amount': '20000.00', 'manual_method': 'cash'},
     }, format='json')
 
     assert resp.status_code == 400, resp.data
@@ -218,7 +218,7 @@ def test_superadmin_manual_needs_an_org_but_free_does_not(api_client, world, mak
 
     manual_resp = api_client.post(ASSIGN_URL, {
         'user': student.id, 'plan': plan.id, 'start_date': str(TODAY),
-        'payment': {'method': 'manual', 'amount': '20000.00'},
+        'payment': {'method': 'manual', 'amount': '20000.00', 'manual_method': 'cash'},
     }, format='json')
 
     assert manual_resp.status_code == 400, manual_resp.data
@@ -254,7 +254,7 @@ def test_free_then_manual_assign_coexist_for_the_same_student(api_client, world)
 
     manual_resp = api_client.post(ASSIGN_URL, {
         'user': student.id, 'plan': plan.id, 'start_date': str(TODAY),
-        'payment': {'method': 'manual', 'amount': '15000.00'},
+        'payment': {'method': 'manual', 'amount': '15000.00', 'manual_method': 'cash'},
     }, format='json')
     assert manual_resp.status_code == 201, manual_resp.data
     second = StudentPlan.objects.get(id=manual_resp.data['id'])
@@ -286,7 +286,7 @@ def test_cross_org_gym_admin_cannot_assign_with_a_manual_payment(api_client,
 
     resp = api_client.post(ASSIGN_URL, {
         'user': student_b.id, 'plan': plan_b.id, 'start_date': str(TODAY),
-        'payment': {'method': 'manual', 'amount': '20000.00'},
+        'payment': {'method': 'manual', 'amount': '20000.00', 'manual_method': 'cash'},
     }, format='json')
 
     assert resp.status_code == 403, resp.data
@@ -318,11 +318,11 @@ def test_manual_cross_org_plan_price_does_not_leak_via_status_code(api_client, m
 
     resp_free_plan = api_client.post(ASSIGN_URL, {
         'user': student_b.id, 'plan': plan_b_free.id, 'start_date': str(TODAY),
-        'payment': {'method': 'manual', 'amount': '20000.00'},
+        'payment': {'method': 'manual', 'amount': '20000.00', 'manual_method': 'cash'},
     }, format='json')
     resp_priced_plan = api_client.post(ASSIGN_URL, {
         'user': student_b.id, 'plan': plan_b_priced.id, 'start_date': str(TODAY),
-        'payment': {'method': 'manual', 'amount': '20000.00'},
+        'payment': {'method': 'manual', 'amount': '20000.00', 'manual_method': 'cash'},
     }, format='json')
 
     assert resp_free_plan.status_code == 403, resp_free_plan.data
@@ -350,7 +350,7 @@ def test_manual_assign_maps_plan_organization_mismatch_to_403(api_client, world,
 
     resp = api_client.post(ASSIGN_URL, {
         'user': student.id, 'plan': plan.id, 'start_date': str(TODAY),
-        'payment': {'method': 'manual', 'amount': '20000.00'},
+        'payment': {'method': 'manual', 'amount': '20000.00', 'manual_method': 'cash'},
     }, format='json')
 
     assert resp.status_code == 403, resp.data
@@ -370,7 +370,7 @@ def test_only_superadmin_or_gym_admin_can_assign(api_client, world, make_user, r
 
     resp = api_client.post(ASSIGN_URL, {
         'user': student.id, 'plan': plan.id, 'start_date': str(TODAY),
-        'payment': {'method': 'manual', 'amount': '20000.00'},
+        'payment': {'method': 'manual', 'amount': '20000.00', 'manual_method': 'cash'},
     }, format='json')
 
     assert resp.status_code == 403, resp.data
@@ -393,7 +393,7 @@ def test_payload_garbage_does_not_override_the_actors_organization(api_client, w
         'user': student.id, 'plan': plan.id, 'start_date': str(TODAY),
         'organization': other_org.id,
         'payment': {
-            'method': 'manual', 'amount': '20000.00',
+            'method': 'manual', 'amount': '20000.00', 'manual_method': 'cash',
             'organization': other_org.id, 'recorded_by': 999999, 'student_plan': 999999,
         },
     }, format='json')

@@ -170,7 +170,7 @@ def test_a_rollback_leaves_the_series_pointing_at_the_old_membership(api_client,
 
     resp = api_client.post(ASSIGN_URL, {
         'user': setup['student'].id, 'plan': plan.id, 'start_date': str(TODAY),
-        'payment': {'method': 'manual', 'amount': '30000.00'},
+        'payment': {'method': 'manual', 'amount': '30000.00', 'manual_method': 'cash'},
     }, format='json')
 
     assert resp.status_code == 400, resp.content

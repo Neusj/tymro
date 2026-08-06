@@ -46,7 +46,7 @@ def test_assign_ignores_payload_classes_for_finite_plan(api_client, make_organiz
             'unlimited_classes': True,    # intento de inyección
             # `manual` (no `free`): `free` fija `final_price` en 0 y este test no lo mira,
             # pero mantenerlo con precio real deja el fixture parejo con el resto de la suite.
-            'payment': {'method': 'manual', 'amount': '30000.00'},
+            'payment': {'method': 'manual', 'amount': '30000.00', 'manual_method': 'cash'},
         },
         format='json',
     )
@@ -77,7 +77,7 @@ def test_assign_derives_unlimited_from_plan(api_client, make_organization, make_
             'start_date': '2026-06-11',
             'total_classes': 9999,        # intento de inyección
             'unlimited_classes': False,   # intento de inyección
-            'payment': {'method': 'manual', 'amount': '30000.00'},
+            'payment': {'method': 'manual', 'amount': '30000.00', 'manual_method': 'cash'},
         },
         format='json',
     )

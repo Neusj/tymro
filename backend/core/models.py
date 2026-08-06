@@ -1147,6 +1147,56 @@ class ManualPayment(TimestampedModel):
         validators=[MinValueValidator(Decimal('0.01'))],
         help_text='Monto cobrado. Debe ser mayor a cero.',
     )
+    # Instrumento del cobro (P3.2): efectivo o transferencia. Hasta acá "transferencia"
+    # solo existía como texto libre dentro de `reference` -un gimnasio podía escribir
+    # "transf", "Transferencia", "TRANSF." o nada- y un reporte no puede filtrar ni sumar
+    # sobre texto que cada quien redacta distinto. Esta columna estructura ESA pregunta
+    # para que P3.4 (reporte por medio de pago) tenga una columna que agrupar, y deja
+    # `reference` para lo que sigue siendo texto libre de verdad: el folio, el nº de
+    # operación, la nota.
+    #
+    # `blank=True, default=''` es DELIBERADO. `''` significa "método no registrado" y NO es
+    # una opción que el API ofrezca: `ManualPaymentCreateSerializer.method` es un
+    # `ChoiceField` sin `allow_blank` ni default, así que todo cobro nuevo declara
+    # `cash` o `transfer` sí o sí. El vacío existe SOLO para las filas que ya viven en
+    # producción desde 8.2/8.3, de antes de que esta columna existiera.
+    # Mismo criterio que `reference` un poco más abajo (`blank=True, default=''`, no
+    # `null=True`): un solo valor vacío para "no hay dato", la convención del resto del
+    # esquema para texto ausente.
+    #
+    # Por eso la migración que agrega esta columna NO hace backfill a `cash`: las filas
+    # viejas pudieron ser efectivo O transferencia y no hay forma de saberlo desde acá.
+    # Adivinar `cash` por ser el caso más común fabricaría historia -exactamente el dato
+    # que esta columna existe para dejar de inferir- y ensuciaría desde el día uno el
+    # reporte que la motiva.
+    #
+    # SIN `CheckConstraint` que exija no vacío, a diferencia de `amount__gt=0` en `Meta` más
+    # abajo: esa constraint reventaría contra las filas legacy en `''` en cualquier `save()`
+    # futuro sobre ellas (una corrección de `reference`, por ejemplo), y esas filas no van
+    # a dejar de existir.
+    #
+    # `blank=True` también significa que `clean_fields()` SALTEA la validación de choices
+    # para valores vacíos ("Skip validation for empty fields with blank=True",
+    # django/db/models/base.py): un `full_clean()` sobre una fila NUEVA con `method=''` (o
+    # `None`, que ni siquiera dispara el choice-check y muere como `IntegrityError` en el
+    # INSERT si se salta `full_clean()`) pasaría sin queja si dependiéramos solo de eso. Por
+    # eso la fila-nueva-vacía se corta aparte, a mano, en `clean()` más abajo -ver ese método
+    # para el motivo de por qué esa validación NO puede vivir en una `CheckConstraint` ni en
+    # `blank=False` (ambas reventarían las filas legacy) y sí puede vivir ahí sin duplicar la
+    # validación de choices que este campo ya trae.
+    METHOD_CASH = 'cash'
+    METHOD_TRANSFER = 'transfer'
+    METHOD_CHOICES = (
+        (METHOD_CASH, 'Efectivo'),
+        (METHOD_TRANSFER, 'Transferencia'),
+    )
+    method = models.CharField(
+        max_length=16,
+        choices=METHOD_CHOICES,
+        blank=True,
+        default='',
+        help_text='Efectivo o transferencia. Vacío solo en filas históricas anteriores a P3.2.',
+    )
     # Texto libre OPCIONAL: nº de transferencia, folio de boleta, "efectivo caja 2". Se deja
     # vacío a propósito: el efectivo NO tiene comprobante, y exigir el campo obligaría al
     # administrador a inventar un valor —ensuciando justo la columna que existe para
@@ -1213,6 +1263,34 @@ class ManualPayment(TimestampedModel):
             raise ValidationError(
                 {'organization': 'La organización debe ser la misma que la de la membresía.'}
             )
+        # `method` vacío ('' o None) es el estado LEGÍTIMO de las filas de 8.2/8.3, de antes
+        # de que P3.2 agregara esta columna, y esas filas tienen que poder seguir pasando por
+        # `full_clean()` sin reventar (una corrección de `reference`, por ejemplo). Pero una
+        # fila NUEVA con `method` vacío es otra cosa: es el kwarg obligatorio de
+        # `record_manual_payment` cumplido a medias -pasa algo, no pasa algo VÁLIDO- y
+        # `clean_fields()` no lo frena porque el campo es `blank=True` (ver el comentario del
+        # campo más arriba). Sin este corte, ese caller crearía en silencio una fila nueva
+        # indistinguible de las legacy, y es exactamente el caller que este archivo anticipa:
+        # una carga histórica de cobros viejos desde CSV, donde una columna vacía llega justo
+        # como ''.
+        #
+        # `self._state.adding` y no `self.pk is None`: es la señal explícita que el propio
+        # Django usa para decidir INSERT vs UPDATE en `save()`, así que sigue siendo correcta
+        # incluso si algún caller construye la instancia con un `pk` ya asignado a mano antes
+        # del primer guardado (`self.pk is None` daría falso negativo justo ahí).
+        #
+        # NO se resuelve con `CheckConstraint` (reventaría las filas legacy en la base) ni
+        # con `blank=False` (rompe el admin y esas mismas filas legacy en cualquier
+        # `full_clean()`): tiene que ser una regla que sepa distinguir alta de edición, y ese
+        # conocimiento vive acá, no en el esquema.
+        if self._state.adding and not self.method:
+            raise ValidationError({
+                'method': (
+                    'Debe declararse el método de pago (efectivo o transferencia) al '
+                    'registrar un cobro nuevo. El valor vacío es válido solo en las filas '
+                    'registradas antes de P3.2 y no puede usarse para una fila nueva.'
+                ),
+            })
 
 
 class ChargeLineItem(TimestampedModel):

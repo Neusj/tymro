@@ -59,6 +59,11 @@ export default function AssignPlanPage() {
   // default para gym_admin. Para superadmin la unica vía posible es "free".
   const [paymentMethod, setPaymentMethod] = useState(isSuperadmin ? 'free' : 'manual')
   const [amount, setAmount] = useState('')
+  // Instrumento del cobro manual (P3.2): efectivo o transferencia. Default "cash" porque es
+  // el caso mas comun en la recepcion de un gimnasio, asi que el campo nunca viaja vacio aun
+  // si el admin no lo toca. El backend lo exige SIEMPRE que method sea "manual" (400 si
+  // falta) y lo rechaza si method es "free" (una beca total no tiene instrumento de cobro).
+  const [manualMethod, setManualMethod] = useState('cash')
   const [reference, setReference] = useState('')
   // Conceptos adicionales (#12): solo tienen sentido en la vía manual — el backend rechaza
   // (400) `line_items` junto a un pago free, la misma incoherencia que `amount`/`reference`.
@@ -192,7 +197,15 @@ export default function AssignPlanPage() {
         payload.payment = { method: 'free' }
       } else {
         payload.discount_percentage = discount
-        payload.payment = { method: 'manual', amount: String(amount).trim(), reference: reference.trim() }
+        payload.payment = {
+          method: 'manual',
+          amount: String(amount).trim(),
+          // Nombre `manual_method`, no `method`: dentro de este mismo objeto `method` ya
+          // significa la via de venta ("manual"), y el backend distingue los dos por el
+          // nombre de la clave, no por la posicion.
+          manual_method: manualMethod,
+          reference: reference.trim(),
+        }
         if (validLineItems.length > 0) {
           payload.payment.line_items = validLineItems
         }
@@ -339,6 +352,18 @@ export default function AssignPlanPage() {
                   className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
                 />
               </label>
+              <label className="space-y-1 text-sm">
+                <span>Método de pago</span>
+                <select
+                  disabled={working}
+                  value={manualMethod}
+                  onChange={(event) => setManualMethod(event.target.value)}
+                  className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
+                >
+                  <option value="cash">Efectivo</option>
+                  <option value="transfer">Transferencia</option>
+                </select>
+              </label>
               <label className="space-y-1 text-sm md:col-span-2">
                 <span>Referencia (opcional)</span>
                 <input
@@ -346,7 +371,7 @@ export default function AssignPlanPage() {
                   disabled={working}
                   value={reference}
                   onChange={(event) => setReference(event.target.value)}
-                  placeholder="Nº de transferencia, efectivo caja 2..."
+                  placeholder="Nº de transferencia, folio o nota..."
                   className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
                 />
               </label>

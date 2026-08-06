@@ -3955,6 +3955,12 @@ class MembershipPlanViewSet(ModelViewSet):
                     record_manual_payment(
                         student_plan=assigned,
                         amount=payment['amount'],
+                        # `payment['manual_method']`, NUNCA `payment['method']`: ESE ya se
+                        # comparó dos líneas arriba y significa la vía de venta
+                        # (`free`/`manual`), no el instrumento del cobro. El serializer
+                        # (P3.2) ya garantizó que `manual_method` viene presente cuando
+                        # `method == 'manual'`.
+                        method=payment['manual_method'],
                         reference=payment.get('reference', ''),
                         # NUNCA del payload: el actor y su organización, y nada más (mismo
                         # criterio que `ManualPaymentCreateView`).
@@ -4201,6 +4207,7 @@ class ManualPaymentCreateView(APIView):
             payment = record_manual_payment(
                 student_plan=membership,
                 amount=validated['amount'],
+                method=validated['method'],
                 reference=validated['reference'],
                 # NUNCA del payload: el actor y su organización, y nada más.
                 recorded_by=user,
