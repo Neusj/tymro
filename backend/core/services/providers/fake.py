@@ -18,6 +18,7 @@ from .base import (BackUrls, CheckoutItem, CheckoutSession, OAuthTokens,
 
 _CACHE_KEY = 'fake_payment_provider:payments'
 _PREFS_CACHE_KEY = 'fake_payment_provider:preferences'
+_REVOKES_CACHE_KEY = 'fake_payment_provider:revokes'
 
 
 class FakePaymentProvider(PaymentProvider):
@@ -31,6 +32,14 @@ class FakePaymentProvider(PaymentProvider):
     def created_preferences(self):
         # En cache: la instancia se descarta por llamada, así el test lee tras el checkout.
         return cache.get(_PREFS_CACHE_KEY) or []
+
+    @property
+    def revoked_calls(self):
+        # Mismo motivo que `created_preferences`: `disconnect_account` construye su propio
+        # provider con get_payment_provider() y lo tira, así que registrar en `self` sería
+        # invisible para el test. Lista de dicts {access_token, provider_user_id} en el
+        # orden en que se llamó a `revoke`.
+        return cache.get(_REVOKES_CACHE_KEY) or []
 
     # --- helpers de test ---
     def queue_payment(self, *, external_reference, status, amount,
@@ -56,6 +65,19 @@ class FakePaymentProvider(PaymentProvider):
         return OAuthTokens(access_token='fake-access-2', refresh_token='fake-refresh-2',
                            expires_in=15552000, provider_user_id='fake-collector',
                            public_key='fake-pk', scope='read write offline_access')
+
+    def revoke(self, *, access_token, provider_user_id):
+        # Registra la llamada (no simula fallos): los tests que necesitan un error
+        # monkeypatchean este método. El valor del `access_token` recibido se guarda a
+        # propósito: es la única forma de probar CON CUÁL token se revocó, que después del
+        # fix del orden ya no sale de la fila (para entonces está vacía) sino del snapshot
+        # en memoria que tomó `disconnect_account`, y que puede ser un token REFRESCADO si
+        # el guardado estaba vencido. Para probar el ORDEN —vaciado local antes de la
+        # revocación— no sirve este registro: hay que leer la fila desde la BD dentro de un
+        # `revoke` monkeypatcheado.
+        calls = self.revoked_calls
+        calls.append({'access_token': access_token, 'provider_user_id': provider_user_id})
+        cache.set(_REVOKES_CACHE_KEY, calls, timeout=None)
 
     def create_checkout(self, *, access_token, external_reference, items, payer_email,
                         back_urls, notification_url, expires_at):

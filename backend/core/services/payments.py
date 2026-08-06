@@ -1,6 +1,7 @@
 """Orquestación de dominio de pagos. No sabe de HTTP ni de MercadoPago:
 delega en get_payment_provider(). Aísla la lógica de negocio de las views.
 """
+import logging
 from datetime import timedelta
 from decimal import Decimal
 from urllib.parse import urlsplit, urlunsplit
@@ -12,8 +13,10 @@ from django.utils import timezone
 
 from core.models import PaymentAccount, PaymentTransaction, Plan
 from .providers import PaymentProviderError, get_payment_provider
-from .providers.base import BackUrls, CheckoutItem, PaymentStatus
+from .providers.base import BackUrls, CheckoutItem, PaymentStatus, RevocationUnverified
 from .public_urls import organization_public_base_url
+
+logger = logging.getLogger(__name__)
 
 STATE_SALT = 'payments-oauth'
 STATE_MAX_AGE = 600          # 10 minutos
@@ -150,21 +153,183 @@ def connect_callback(*, code, state) -> PaymentAccount:
     return account
 
 
+def _revocation_access_token(provider, *, access_token, refresh_token, token_expires_at):
+    """Token con el que INTENTAR la revocación, resuelto SOLO EN MEMORIA.
+
+    Recibe el snapshot que ``disconnect_account`` leyó de la fila ANTES de vaciarla, no la
+    fila: para cuando esto corre, la fila ya está desconectada y con los tokens en NULL, y
+    así tiene que quedar.
+
+    Por qué no se reusa ``get_valid_access_token(account=account)``, que hace justo este
+    cálculo: porque ESCRIBE en la fila (guarda los tokens nuevos y pone `status=CONNECTED`).
+    Llamarla DESPUÉS del vaciado RESUCITARÍA la cuenta a `connected` con tokens frescos —el
+    gimnasio quedaría reconectado por el acto de desconectarse—, y llamarla ANTES
+    reintroduciría exactamente la llamada de red previa al vaciado que el orden nuevo
+    elimina. Así que se duplica el criterio de expiración (el mismo `REFRESH_MARGIN`) a
+    cambio de que el resultado sea EFÍMERO: vive en esta variable y muere con el request.
+
+    Por qué refrescar y no mandar el `access_token` crudo: los access_token de MP duran
+    hasta 180 días y solo se renuevan cuando alguien cobra, así que un gimnasio que conectó
+    y nunca vendió tiene en la fila un token VENCIDO. Revocar con él da 401 → revocación no
+    confirmada → autorización viva en MP. El `refresh_token` es lo único que puede producir
+    una credencial usable en ese escenario.
+
+    Si el refresh falla se devuelve igual el `access_token` crudo: puede seguir vivo (el
+    fallo pudo ser un 5xx o un timeout), y un intento con un token quizás bueno es mejor
+    que no intentar. Si tampoco hay, devuelve None y el caller no llama a la red.
+    """
+    expiring = (token_expires_at is None
+                or token_expires_at <= timezone.now() + REFRESH_MARGIN)
+    if expiring and refresh_token:
+        try:
+            tokens = provider.refresh_tokens(refresh_token=refresh_token)
+        except Exception:
+            # Sin log del detalle acá: si después la revocación tampoco confirma, el caller
+            # ya emite el warning con los identificadores de la fila. Duplicarlo sería ruido.
+            pass
+        else:
+            # NUNCA se guarda en la fila. Ver el docstring: ese guardado es exactamente lo
+            # que convertiría una desconexión en una reconexión.
+            return tokens.access_token
+    return access_token
+
+
 def disconnect_account(account) -> PaymentAccount:
-    """Desconecta la cuenta: la marca ``disconnected`` y borra los tokens OAuth cifrados.
+    """Desconecta la cuenta: borra los tokens locales y DESPUÉS revoca en el proveedor.
+
+    INVARIANTE, y es el punto de toda la función: al volver de acá la fila SIEMPRE queda
+    ``disconnected`` con ``access_token``/``refresh_token``/``token_expires_at`` en NULL,
+    pase lo que pase con la red — incluso si el worker MUERE durante la revocación.
+
+    Orden exacto, y el orden importa:
+
+    1. Copia a variables LOCALES lo que hace falta para revocar (tokens, expiración,
+       ``provider_user_id``, nombre del proveedor) ANTES de mutar nada.
+    2. VACÍA LA FILA YA: `disconnected` + los tres campos de token a NULL, y `save`. Esto
+       no depende de la red, no está dentro de ningún try, y no puede quedar a medias.
+    3. RECIÉN AHÍ intenta ``provider.revoke(...)``, BEST-EFFORT, con las variables locales.
+       Cualquier fallo se loguea como warning y la función SIGUE. Sin tokens (cuenta ya
+       desconectada) ni siquiera se toca la red: no hay nada que revocar.
+
+    POR QUÉ ESTE ORDEN Y NO EL INVERSO (que fue la primera versión de P3.3): revocar primero
+    parece razonable —"después del vaciado no habría con qué autenticar"— pero ese argumento
+    es FALSO: el token ya está en una variable local, la fila no hace falta. Y el orden
+    inverso tiene una falla real: `_TIMEOUT` de `requests` son 15 s que aplican POR SEPARADO
+    a connect y a read (~30 s en el peor caso), mientras gunicorn corre con workers sync y
+    `--timeout` 30 s (ver `entrypoint.sh`). Si el proveedor acepta la conexión y no responde,
+    el arbiter mata al worker con una SEÑAL, no con una excepción: el `except Exception` de
+    abajo NO la cubre y el vaciado local NUNCA corre. Resultado: la fila queda `connected`
+    con el token guardado y el panel diciendo "Conectada", cuando encima la request pudo
+    llegar al proveedor y matar el token allá. El peor de los dos mundos. Con este orden esa
+    ventana no existe: lo único que se pierde si el worker muere es el intento de revocación,
+    que ya era best-effort.
+
+    Hasta P3.3 solo existía el vaciado local, así que el token real seguía vivo del lado de
+    MercadoPago hasta caducar (hasta 180 días) bajo nuestro ``app_id``, aunque el gimnasio
+    viera "desconectado". Ahora se intenta matarlo de verdad; los límites de ese intento
+    están documentados en ``MercadoPagoProvider.revoke``.
+
     NO borra la fila: se conserva el histórico y la reconexión posterior vía el
     ``update_or_create`` de ``connect_callback`` vuelve a rellenar los tokens.
     El scoping por organización es responsabilidad de la view que obtiene ``account``."""
+    # 1. SNAPSHOT antes de tocar nada. `provider` también: `account.provider` se lee ahora
+    # por simetría y para que el bloque de revocación no dependa de la instancia mutada.
+    access_token = account.access_token
+    refresh_token = account.refresh_token
+    token_expires_at = account.token_expires_at
+    provider_user_id = account.provider_user_id
+    provider_name = account.provider
+
+    # 2. VACIADO LOCAL INCONDICIONAL. Fuera de cualquier try y antes de cualquier I/O de red:
+    # es lo único que el producto puede garantizar, así que no puede depender de nadie.
     account.status = PaymentAccount.STATUS_DISCONNECTED
     account.access_token = None
     account.refresh_token = None
     account.token_expires_at = None
     account.save(update_fields=['status', 'access_token', 'refresh_token',
                                 'token_expires_at', 'updated_at'])
+
+    # 3. Revocación BEST-EFFORT, ya con la fila limpia.
+    if not access_token and not refresh_token:
+        # Cuenta ya desconectada (o fila sin tokens): no hay nada que revocar y la llamada
+        # solo produciría un 401 esperable, que además ahora se reporta como no-confirmado.
+        return account
+    if not provider_user_id:
+        # Sin `provider_user_id` NO se puede revocar, y callar sería peor que no intentarlo:
+        # la URL de revocación lo interpola (`/users/{user_id}/applications/{app_id}`), así
+        # que vacío produce `/users//applications/...` → 404 → y la regla "404 = ya estaba
+        # revocado" de `MercadoPagoProvider.revoke` lo contaría como ÉXITO. O sea: un no-op
+        # silencioso que deja el token vivo mientras el log dice que todo salió bien.
+        # `provider_user_id` puede quedar vacío legítimamente: `exchange_code` lo llena con
+        # `str(data.get('user_id', ''))`, así que una respuesta de MP sin `user_id` deja la
+        # cuenta conectada y sin ancla para revocar. Se loguea y se sale: el vaciado ya pasó.
+        logger.warning(
+            'Cuenta de pago sin provider_user_id: no se puede revocar el token en el '
+            'proveedor, solo se borra localmente (account=%s organization=%s branch=%s '
+            'provider=%s)',
+            account.pk, account.organization_id, account.branch_id, account.provider)
+        return account
+    try:
+        # El proveedor que EMITIÓ este token, no el default global — mismo criterio que
+        # `get_valid_access_token`: si `settings.PAYMENTS_PROVIDER` cambió después de la
+        # conexión, revocar contra el proveedor nuevo apuntaría a otra app (o reventaría),
+        # y el token viejo quedaría vivo justo en el caso en que más importa.
+        provider = get_payment_provider(provider_name)
+        revocation_token = _revocation_access_token(
+            provider, access_token=access_token, refresh_token=refresh_token,
+            token_expires_at=token_expires_at)
+        if revocation_token:
+            provider.revoke(access_token=revocation_token,
+                            provider_user_id=provider_user_id)
+        else:
+            # SIN `else` esto era un no-op SILENCIOSO, justo la clase de agujero que este
+            # camino existe para cerrar: se llega acá con `access_token` vacío pero
+            # `refresh_token` presente (pasa la guarda de más arriba) y el refresh falla, así
+            # que no queda ningún token con el que autenticar el DELETE. La desconexión local
+            # ya está hecha y es correcta, pero la autorización puede seguir viva del lado del
+            # proveedor y nadie se enteraría. Se loguea con los mismos identificadores que los
+            # otros dos caminos de skip para que la reconciliación manual sea posible.
+            logger.warning(
+                'No quedó ningún token con el que revocar al desconectar cuenta de pago: la '
+                'autorización puede seguir viva del lado del proveedor; reconciliar a mano en '
+                'el panel de MercadoPago (account=%s organization=%s branch=%s provider=%s)',
+                account.pk, account.organization_id, account.branch_id, account.provider)
+    except RevocationUnverified as exc:
+        # ANTES del `except Exception`, o el genérico se lo come (es subclase de
+        # PaymentProviderError). Es un caso DISTINTO de "falló": el proveedor contestó, pero
+        # no pudimos autenticar, así que NO sabemos si la autorización murió. Como la fila ya
+        # está vacía, no queda ningún token con el que reintentar: la única salida es que un
+        # humano entre al panel de MercadoPago del gimnasio y quite la app a mano. Por eso el
+        # mensaje lo dice explícitamente, con qué fila mirar.
+        logger.warning(
+            'Revocación en el proveedor NO CONFIRMADA al desconectar cuenta de pago: la '
+            'autorización puede seguir viva del lado del proveedor; reconciliar a mano en '
+            'el panel de MercadoPago (account=%s organization=%s branch=%s provider=%s): %s',
+            account.pk, account.organization_id, account.branch_id, account.provider, exc)
+    except Exception as exc:      # amplio A PROPÓSITO — ver abajo
+        # `except Exception` A PROPÓSITO, y no solo `PaymentProviderError`: un bug del
+        # proveedor (TypeError, un mock mal armado, un error inesperado de la librería HTTP)
+        # no puede convertir una desconexión en un 500 para el gimnasio. Con el orden nuevo
+        # el vaciado local YA ocurrió antes de este try, así que ninguna excepción de acá
+        # puede dejar la fila a medias; este catch solo protege la respuesta del endpoint.
+        #
+        # Nunca se loguea el token (es un secreto en reposo cifrado): solo identificadores
+        # de la fila, que es lo que hace falta para reconciliar a mano en MP si importa.
+        logger.warning(
+            'Revocación en el proveedor falló al desconectar cuenta de pago '
+            '(account=%s organization=%s branch=%s provider=%s): %s',
+            account.pk, account.organization_id, account.branch_id, account.provider, exc)
     return account
 
 
 def get_valid_access_token(*, account) -> str:
+    """Access token usable de ``account``, refrescándolo si está por vencer.
+
+    OJO, ESCRIBE EN LA FILA: al refrescar guarda los tokens nuevos y pone
+    ``status=CONNECTED`` (y al fallar, ``DISCONNECTED``). Por eso ``disconnect_account``
+    NO la usa —resucitaría la cuenta que acaba de vaciar— y resuelve su token en memoria
+    con ``_revocation_access_token``. Cualquier caller nuevo tiene que asumir la escritura.
+    """
     expiring = (account.token_expires_at is None
                 or account.token_expires_at <= timezone.now() + REFRESH_MARGIN)
     if not expiring:

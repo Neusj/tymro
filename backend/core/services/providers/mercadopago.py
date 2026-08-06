@@ -17,7 +17,8 @@ from urllib.parse import urlencode
 import requests
 
 from .base import (BackUrls, CheckoutItem, CheckoutSession, OAuthTokens, PaymentProvider,
-                   PaymentProviderError, PaymentStatus, ProviderPayment)
+                   PaymentProviderError, PaymentStatus, ProviderPayment,
+                   RevocationUnverified)
 
 _TIMEOUT = 15
 
@@ -40,6 +41,9 @@ class MercadoPagoProvider(PaymentProvider):
     TOKEN_URL = 'https://api.mercadopago.com/oauth/token'
     PREFERENCE_URL = 'https://api.mercadopago.com/checkout/preferences'
     PAYMENT_URL = 'https://api.mercadopago.com/v1/payments/{id}'
+    # Revocación de la autorización vendedor↔app. OJO: host de Mercado LIBRE, no de
+    # MercadoPago — no es un error de tipeo, ver el bloque de `revoke()`.
+    REVOKE_URL = 'https://api.mercadolibre.com/users/{user_id}/applications/{app_id}'
 
     def __init__(self, *, client_id, client_secret, webhook_secret):
         self.client_id = client_id
@@ -93,6 +97,66 @@ class MercadoPagoProvider(PaymentProvider):
             'grant_type': 'refresh_token',
             'refresh_token': refresh_token,
         })
+
+    # --- Revocación de la autorización (P3.3) ---
+    #
+    # QUÉ DICE LA DOC, verificado: MercadoPago describe la SEMÁNTICA que necesitamos —"al
+    # revocar una autorización entre el vendedor y la aplicación se eliminan todos los
+    # tokens y permisos temporales asociados"— pero NO publica ningún endpoint de
+    # revocación llamable por el integrador: de OAuth solo documenta `POST /oauth/token`
+    # (crear y refrescar). Sin revocación, el token del gimnasio sigue VIVO en MP hasta que
+    # caduca solo (hasta 180 días) aunque el gimnasio ya se haya "desconectado".
+    #
+    # El único endpoint programático documentado vive en el host de Mercado LIBRE, que
+    # comparte con MercadoPago el sistema de identidad y de aplicaciones (el `client_id` de
+    # MP es el `app_id` de ML, y el `user_id` del vendedor es el mismo en ambos):
+    #
+    #     DELETE https://api.mercadolibre.com/users/{user_id}/applications/{app_id}
+    #     Authorization: Bearer {access_token DEL VENDEDOR}
+    #     → {"user_id": "...", "app_id": "...", "msg": "Autorización eliminada"}
+    #
+    # Invalida el `access_token` Y el `refresh_token` de una sola vez.
+    #
+    # Por eso esto es explícitamente BEST-EFFORT: lo documenta ML, no MP para el flujo
+    # OAuth de split payments, así que puede cambiar o dejar de responder sin aviso. Se usa
+    # porque es lo único real que existe, pero NUNCA debe bloquear ni romper la desconexión
+    # local (ver `disconnect_account` en services/payments.py, que atrapa todo y sigue).
+    #
+    # ALTERNATIVA DESCARTADA: inventar un `api.mercadopago.com/oauth/revoke`. No existe:
+    # daría 404 en todas las cuentas y —peor— con el criterio de "404 = ya revocado" de
+    # abajo convertiría la revocación en un no-op silencioso que parece funcionar.
+    def revoke(self, *, access_token, provider_user_id):
+        url = self.REVOKE_URL.format(user_id=provider_user_id, app_id=self.client_id)
+        try:
+            resp = requests.delete(url, timeout=_TIMEOUT,
+                                   headers={'Authorization': f'Bearer {access_token}',
+                                            'Accept': 'application/json'})
+        except requests.RequestException as exc:
+            raise PaymentProviderError(f'MP revoke falló: {exc}') from exc
+        # 404 es ÉXITO: MP/ML dice que esa autorización ya no existe (el gimnasio la quitó
+        # desde su panel, o una desconexión anterior ya la eliminó). Es EVIDENCIA sobre el
+        # estado de la autorización, que es justo lo que queremos garantizar.
+        if resp.status_code == 404:
+            return None
+        # 401 NO es éxito, aunque lo parezca. Solo prueba "no pude autenticar con ESTE
+        # token", que es también lo que responde un token simplemente CADUCADO: los
+        # access_token de MP viven hasta 180 días y solo se refrescan cuando alguien cobra,
+        # así que un gimnasio que conectó y nunca vendió llega acá con el token vencido y
+        # la autorización PERFECTAMENTE VIVA. Contarlo como éxito dejaba la autorización en
+        # pie bajo nuestro `app_id` —con su refresh_token capaz de emitir tokens nuevos—
+        # con un log limpio diciendo que todo salió bien: el residuo exacto que esta
+        # revocación existe para eliminar. Se levanta una excepción DISTINGUIBLE para que
+        # el caller la loguee como "no confirmada" (hay que reconciliar a mano) y no como
+        # "falló" ni como "listo". El body NO se incluye: puede traer eco del token.
+        if resp.status_code == 401:
+            raise RevocationUnverified(
+                'MP revoke no confirmado (401): no se pudo autenticar, la autorización '
+                'puede seguir viva del lado del proveedor')
+        if resp.status_code >= 400:
+            # `resp.text` es seguro de incluir: es la respuesta de MP, no un secreto
+            # nuestro. El `access_token` NO se incluye jamás — va solo en el header.
+            raise PaymentProviderError(f'MP revoke error {resp.status_code}: {resp.text}')
+        return None
 
     # --- Cobro (Task 9) ---
     def create_checkout(self, *, access_token, external_reference, items, payer_email,

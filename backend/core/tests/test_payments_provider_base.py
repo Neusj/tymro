@@ -38,3 +38,31 @@ def test_fake_exchange_and_checkout_and_fetch():
     assert payment.status == PaymentStatus.APPROVED
     assert payment.external_reference == 'ext-1'
     assert payment.amount == Decimal('10000')
+
+
+def test_fake_revoke_is_visible_from_another_instance():
+    # `revoke` se registra en el cache, no en `self`, porque el código de producción
+    # (`disconnect_account`) construye su propio provider con get_payment_provider() y lo
+    # descarta: si el registro viviera en la instancia, ningún test podría verlo.
+    FakePaymentProvider().revoke(access_token='AT', provider_user_id='SELLER-1')
+
+    assert FakePaymentProvider().revoked_calls == [
+        {'access_token': 'AT', 'provider_user_id': 'SELLER-1'}]
+
+
+def test_revocation_not_supported_is_a_provider_error():
+    # Subclase a propósito: un caller que ya atrapa PaymentProviderError sigue cubierto.
+    from core.services.providers.base import PaymentProviderError, RevocationNotSupported
+    assert issubclass(RevocationNotSupported, PaymentProviderError)
+
+
+def test_revocation_unverified_is_a_distinguishable_provider_error():
+    # Mismo criterio: subclase para que el caller genérico siga cubierto, pero clase PROPIA
+    # para que `disconnect_account` pueda loguear "no confirmada" (hay que reconciliar a
+    # mano en el panel de MP) en vez de "falló" — y, sobre todo, para que deje de contarse
+    # como éxito, que es lo que hacía el 401 antes de este fix.
+    from core.services.providers.base import (PaymentProviderError, RevocationNotSupported,
+                                              RevocationUnverified)
+    assert issubclass(RevocationUnverified, PaymentProviderError)
+    assert not issubclass(RevocationUnverified, RevocationNotSupported)
+    assert not issubclass(RevocationNotSupported, RevocationUnverified)

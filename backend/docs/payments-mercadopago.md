@@ -64,6 +64,7 @@ subdominio para resolver.
 | `POST` | `/api/payments/connect/` | `gym_admin` / `superadmin` (de la org del usuario) | Genera la `authorization_url` de MP para iniciar el OAuth. |
 | `GET` | `/api/payments/oauth/callback/` | `AllowAny` (apex) | Recibe `code`+`state` de MP, valida el `state`, intercambia el código y guarda/actualiza el `PaymentAccount` de la org. Redirige al frontend a `/ajustes/pagos?connected=1|0`. |
 | `GET` | `/api/payments/account/` | `gym_admin` / `superadmin` | Estado de la conexión de pagos de la org (`connected`/`disconnected`, `is_sandbox`, `token_expires_at`, etc.). |
+| `POST` | `/api/payments/disconnect/` | `gym_admin` / `superadmin` (de la org del usuario) | Desconecta la cuenta: marca `disconnected` y vacía los tokens guardados **primero** (garantizado, sin depender de la red) y **después** intenta revocar el token en el proveedor (best-effort). Body opcional `{"branch_id": <id>}` (sin él, la cuenta principal). Ver **sección 9**. |
 | `POST` | `/api/payments/checkout/` | Alumno (`student`) | Crea una `PaymentTransaction` y una preference de Checkout Pro. Body: **exactamente uno** de `{"plan_id": <id>}` o `{"target_student_plan_id": <id>}`. Responde `{transaction_id, redirect_url}`. |
 | `GET` | `/api/payments/transactions/<uuid>/status/` | Dueño de la transacción (mismo `user` + `organization`) | Estado informativo (`status`, `status_detail`, `amount`, `currency`) para el polling del frontend tras volver del `back_url`. |
 | `POST` | `/api/payments/webhook/?tx=<uuid>` | `AllowAny` (apex, firma obligatoria) | Recibe la notificación de MP, verifica firma, y dispara la activación/renovación idempotente. |
@@ -167,6 +168,11 @@ puntos que dependen de la doc de MP en el momento de operar (puede cambiar sin a
   obligatorio en el flujo de autorización (Chile / `auth.mercadopago.cl`).
 - [ ] **Endpoint de creación de test users** (`/users/test_user` u otro vigente) y el
   **catálogo actual de tarjetas de prueba** / nombres mágicos de titular.
+- [ ] **Revocación (sección 9):** confirmar en sandbox, con un vendedor de prueba, que
+  `DELETE api.mercadolibre.com/users/{user_id}/applications/{app_id}` responde 200 con el
+  token emitido por **nuestra app de MP** y que después ese `access_token`/`refresh_token`
+  quedan efectivamente inválidos (un `POST /oauth/token` de refresh debe fallar). Es el
+  único punto del código que depende de un endpoint que MP no documenta para este flujo.
 
 ## 8. Fuera de alcance (explícitamente, no implementado)
 
@@ -181,3 +187,99 @@ puntos que dependen de la doc de MP en el momento de operar (puede cambiar sin a
 - **Refunds, contracargos, cancelaciones desde la UI, suscripciones/auto-renovación,
   cola tipo Celery:** ninguno de estos está implementado; el procesamiento del webhook es
   síncrono dentro del request.
+
+## 9. Desconexión de una cuenta y revocación del token
+
+`POST /api/payments/disconnect/` → `payments.disconnect_account()`
+(`backend/core/services/payments.py`). Hace **dos cosas, en este orden**:
+
+1. **Limpieza local (garantizada, y va PRIMERO).** Se copia a variables locales lo necesario
+   para revocar (tokens, expiración, `provider_user_id`, proveedor) y acto seguido se
+   escribe la fila: `status = disconnected` y `access_token`, `refresh_token`,
+   `token_expires_at` a `NULL`. **La fila se conserva** (histórico + reconexión por el
+   `update_or_create` del callback OAuth). Esto ocurre **siempre**: no está dentro de ningún
+   `try` y no toca la red.
+
+   **INVARIANTE:** al volver de `disconnect_account` la fila está `disconnected` con los
+   tres campos de token en `NULL`, pase lo que pase con la red — incluso si el worker muere
+   durante la revocación.
+
+2. **Revocación en el proveedor (best-effort), ya con la fila vacía.** Con el token del
+   snapshot en memoria:
+
+   ```
+   DELETE https://api.mercadolibre.com/users/{user_id}/applications/{app_id}
+   Authorization: Bearer {access_token del vendedor}
+   ```
+
+   donde `user_id` es `PaymentAccount.provider_user_id` (el id del vendedor en MP) y
+   `app_id` es `MP_CLIENT_ID`. Invalida el `access_token` **y** el `refresh_token`.
+   - **Con qué token se revoca:** si el `token_expires_at` del snapshot está vencido o por
+     vencer (mismo `REFRESH_MARGIN` que `get_valid_access_token`) y hay `refresh_token`, se
+     hace **primero** un `refresh_tokens` y se revoca con el access_token **nuevo**. Los
+     access_token de MP duran hasta 180 días y solo se renuevan al cobrar, así que un
+     gimnasio que conectó y **nunca vendió** llega con el token de la fila vencido y la
+     revocación daría `401`. Ese token refrescado **vive solo en memoria: NO se guarda en la
+     fila.** Por eso **no** se reusa `get_valid_access_token` —esa función escribe y pone
+     `status=CONNECTED`, o sea que resucitaría la cuenta que se acaba de desconectar—; el
+     criterio de expiración está duplicado a propósito en `_revocation_access_token`.
+     Si el refresh falla se intenta igual con el access_token crudo.
+   - **`404` cuenta como "ya revocado"**: es evidencia de que esa autorización ya no existe
+     (la quitaron desde el panel de MP, o una desconexión anterior la eliminó).
+   - **`401` NO es éxito.** Levanta `RevocationUnverified` y se loguea como **revocación NO
+     CONFIRMADA**, con la instrucción de reconciliar a mano en el panel de MercadoPago. Un
+     `401` solo prueba "no pude autenticar", que es también lo que responde un token
+     simplemente caducado mientras la autorización sigue **viva** bajo nuestro `app_id` con
+     su `refresh_token` — justo el residuo que esta revocación existe para eliminar. Y como
+     la limpieza local ya borró los tokens, esa fue la última chance automática.
+     *(Antes de este fix el `401` se contaba como éxito y no se logueaba nada.)*
+   - Si el snapshot **no tiene** tokens (cuenta ya desconectada) no se hace ninguna llamada
+     de red: no hay nada que revocar.
+   - **Cualquier fallo se loguea como `warning` y se ignora** (`logger` de
+     `core.services.payments`, con `account`/`organization`/`branch`/`provider` — **nunca**
+     el token). Hay **dos warnings distintos**: "Revocación en el proveedor **falló**"
+     (no anduvo) y "Revocación en el proveedor **NO CONFIRMADA**" (no sabemos si anduvo).
+     Se atrapa `Exception` a propósito, no solo `PaymentProviderError`: un bug en esa
+     llamada no puede convertir una desconexión en un 500 para el gimnasio.
+
+**Por qué la limpieza local va primero** (el orden original de P3.3 era el inverso): el
+argumento para revocar antes —"después del vaciado no habría con qué autenticar"— es
+**falso**, porque el token ya está en una variable local. Y el orden inverso tenía una falla
+real: el `_TIMEOUT` de `requests` son 15 s que aplican **por separado** a connect y a read
+(~30 s en el peor caso), mientras gunicorn corre con workers **sync** y `--timeout` 30 s
+(ver `entrypoint.sh`). Si el proveedor acepta la conexión y no responde, el arbiter mata al
+worker con una **señal**, no con una excepción: el `except Exception` no la cubre y el
+vaciado local **nunca corría**. La fila quedaba `connected` con el token guardado y el panel
+diciendo "Conectada", cuando además la request pudo llegar a ML y matar el token allá — el
+peor de los dos mundos. Con el orden actual lo único que se pierde si el worker muere es el
+intento de revocación, que ya era best-effort.
+
+**Lo que el producto garantiza es el punto 1**, no el 2. La razón: **MercadoPago no publica
+un endpoint de revocación** para el flujo OAuth de *split payments* — su doc de "Gestión de
+Access Token" solo documenta `POST /oauth/token` (crear y refrescar), aunque sí describe la
+semántica ("al revocar la autorización entre el vendedor y la aplicación se eliminan todos
+los tokens y permisos temporales asociados"). El endpoint que usamos está documentado por
+**Mercado Libre**, que comparte con MP el sistema de identidad y de aplicaciones (el
+`client_id` de MP es el `app_id` de ML; el `user_id` del vendedor es el mismo en ambos). Es
+lo único real que existe, pero **puede cambiar o dejar de responder sin aviso**: tratarlo
+como *best-effort* y no asumir que el token remoto murió.
+
+**Sin el punto 2** (comportamiento anterior a P3.3) el token del gimnasio seguía **vivo del
+lado de MercadoPago hasta caducar solo —hasta 180 días— bajo el `app_id` de TYMRO**, aunque
+el gimnasio viera "desconectado" en la app. Hoy se intenta matarlo de verdad; si el intento
+falla o no se confirma, queda el `warning` en el log con el `account` afectado para
+reconciliar a mano desde el panel de MP.
+
+Detalle de implementación: la revocación se pide al proveedor **que emitió el token**
+(`get_payment_provider(account.provider)`), no al `PAYMENTS_PROVIDER` global — mismo criterio
+que `get_valid_access_token`. La interfaz es `PaymentProvider.revoke(access_token=,
+provider_user_id=)` y su contrato vive en el docstring de `PaymentProvider.revoke`
+(`services/providers/base.py`). Devolver `None` significa **hay evidencia** de que la
+autorización ya no existe; las excepciones, todas subclases de `PaymentProviderError` para
+que un caller que ya lo atrapa siga cubierto, son:
+
+| Excepción | Significa | Cómo lo loguea `disconnect_account` |
+|---|---|---|
+| `RevocationUnverified` | no se pudo autenticar (401): resultado **desconocido** | "NO CONFIRMADA" + reconciliar a mano |
+| `RevocationNotSupported` | el proveedor **no tiene** API de revocación | "falló" (limitación estructural) |
+| `PaymentProviderError` | fallo de red o error de la API (5xx, etc.) | "falló" |
