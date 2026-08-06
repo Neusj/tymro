@@ -6,12 +6,16 @@ export default function StatCard({ title, value, accent = 'orange', hint, to }) 
     red: 'from-brand-red/25',
     blue: 'from-brand-blue/25',
     success: 'from-success/25',
+    // Neutro a propósito: para valores que no son ni un logro (success) ni un problema
+    // (red) — ej. reportería, subtotal "sin método registrado" (P3.4).
+    muted: 'from-brand-dim/20',
   }
   const barClasses = {
     orange: 'bg-brand-orange',
     red: 'bg-brand-red',
     blue: 'bg-brand-blue',
     success: 'bg-success',
+    muted: 'bg-brand-dim',
   }
 
   const className = `card-surface group relative block overflow-hidden p-4 transition duration-300 hover:-translate-y-0.5 hover:shadow-float ${

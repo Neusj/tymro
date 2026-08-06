@@ -1708,6 +1708,33 @@ class PaymentTransaction(TimestampedModel):
     payment_account = models.ForeignKey(PaymentAccount, on_delete=models.SET_NULL, null=True,
                                         blank=True, related_name='transactions')
     processed_at = models.DateTimeField(null=True, blank=True)
+    # --- Plata COBRADA y plata DEVUELTA (P3.4) ---------------------------------------
+    # Estos tres campos existen para que la reportería de ingresos no tenga que deducir
+    # dinero desde `status`, que es un valor PISABLE: cuando MercadoPago avisa de un
+    # reembolso o un contracargo, `status` pasa a `refunded` y el hecho de que ese cobro
+    # ENTRÓ desaparece de la fila. Un reporte que sumara `status='approved'` empezaría a
+    # mentir HACIA ATRÁS con cada devolución (el ingreso de julio cambiaría en agosto).
+    #
+    # `collected_at` = instante en que el proveedor confirmó el COBRO. Se estampa UNA sola
+    # vez y NUNCA se limpia, tampoco al devolver: es un hecho histórico, no un estado.
+    # NO es `processed_at` y la diferencia importa: `processed_at` significa "además se
+    # activó la membresía", y hay un camino real donde el cobro entra y la activación no
+    # ocurre (el `plan_org_mismatch` de `apply_provider_payment`, que deja la fila COBRADA y
+    # sin `processed_at` a propósito). La plata igual entró a la cuenta del gimnasio, así que
+    # el ingreso bruto se cuenta por `collected_at`: un reporte no puede depender de que la
+    # activación del plan haya salido bien.
+    collected_at = models.DateTimeField(null=True, blank=True)
+    # Instante en que se REGISTRÓ la devolución (reembolso o contracargo). Hasta P3.4 esa
+    # notificación del proveedor era un no-op absoluto —la guarda de idempotencia por
+    # `processed_at` cortaba antes de mirar el estado— y la devolución no quedaba en ninguna
+    # parte: el plan seguía activo y el ingreso seguía contando entero.
+    refunded_at = models.DateTimeField(null=True, blank=True)
+    # Monto devuelto. Hoy solo puede haber devoluciones TOTALES y vale `amount`: la
+    # abstracción de proveedor colapsa `refunded` y `charged_back` en un único
+    # `PaymentStatus.REFUNDED` y `ProviderPayment.amount` trae el monto ORIGINAL del pago,
+    # no lo reembolsado. Es un campo propio y no una property justamente para que el día que
+    # el proveedor exponga el parcial se guarde acá sin migrar nada más.
+    refunded_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     metadata = models.JSONField(default=dict, blank=True)
     raw_provider_payload = models.JSONField(null=True, blank=True)
 
@@ -1723,6 +1750,12 @@ class PaymentTransaction(TimestampedModel):
         indexes = [
             models.Index(fields=['organization', 'status']),
             models.Index(fields=['user', 'status']),
+            # Reportería de ingresos (P3.4). Los dos ejes del reporte son distintos y no se
+            # pueden servir con un índice: el bruto se saca por (organización, fecha de
+            # COBRO) y las devoluciones por (organización, fecha de DEVOLUCIÓN). Sin estos
+            # índices cada reporte recorre la tabla de pagos de TODOS los tenants.
+            models.Index(fields=['organization', 'collected_at']),
+            models.Index(fields=['organization', 'refunded_at']),
         ]
 
     def __str__(self):
@@ -1741,5 +1774,77 @@ class WebhookEvent(TimestampedModel):
 
     class Meta:
         ordering = ['-created_at']
+
+
+class ClassOccupancySnapshot(TimestampedModel):
+    """Rastro de una clase VACÍA que la poda de la ventana rodante borró (P3.4).
+
+    POR QUÉ EXISTE: `rolling_window._prune_past_empty_classes` borra las clases pasadas que
+    nadie usó —sin inscripciones, sin asistencias, sin consumos, sin pago a profesor—. Ese
+    borrado es correcto para el calendario y DESTRUYE justo el dato más valioso del reporte
+    de ocupación: qué horarios/disciplinas el gimnasio ofreció y nadie tomó. Sin este rastro
+    el reporte de ocupación mide sobre las clases sobrevivientes y da un porcentaje
+    OPTIMISTA: cuanto más tiempo pasa, más clases vacías desaparecen y mejor se ve la
+    ocupación histórica. Con el rastro, una clase podada sigue contando como oferta con 0
+    inscritos.
+
+    ES UN SNAPSHOT, NO UNA VISTA. Los nombres de sede/disciplina/profesor se copian como
+    texto además de la FK: la fila tiene que sobrevivir al borrado de la clase (que ya
+    ocurrió cuando esto se lee) y también al de la sede o la disciplina. Las FK quedan
+    `SET_NULL` para poder agrupar por id mientras el objeto exista, y el texto es el que se
+    muestra cuando ya no existe. NO se agrega FK a `GymClass`: la clase se borra en la misma
+    transacción, una FK sería NULL siempre.
+
+    `enrolled_count` se guarda explícitamente aunque hoy sea SIEMPRE 0 (la poda exige
+    `enrollments__isnull=True`, es el único caso que llega acá). Guardarlo evita que el
+    reporte tenga que asumir el 0 desde el nombre de la tabla: si mañana entra otra fuente
+    de rastro —una clase cancelada, un archivado manual—, el reporte suma este campo y no
+    hay que revisar quién lo escribió.
+    """
+    SOURCE_PRUNE = 'prune'
+    SOURCE_CHOICES = ((SOURCE_PRUNE, 'Poda de ventana rodante'),)
+
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE,
+                                     related_name='class_occupancy_snapshots')
+    # El id de la `GymClass` que se borró. Entero pelado y no FK (la fila ya no existe), y
+    # con unicidad por organización para que la poda pueda re-intentar sin duplicar oferta:
+    # `_prune_past_empty_classes` atrapa la excepción por clase y el job vuelve a correr
+    # todos los días, así que un rastro escrito dos veces inflaría el denominador.
+    source_class_id = models.BigIntegerField()
+    source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default=SOURCE_PRUNE)
+
+    branch = models.ForeignKey(Branch, on_delete=models.SET_NULL, null=True, blank=True,
+                               related_name='class_occupancy_snapshots')
+    branch_name = models.CharField(max_length=150, blank=True, default='')
+    discipline = models.ForeignKey(Discipline, on_delete=models.SET_NULL, null=True, blank=True,
+                                   related_name='class_occupancy_snapshots')
+    discipline_name = models.CharField(max_length=150, blank=True, default='')
+    teacher = models.ForeignKey('accounts.CustomUser', on_delete=models.SET_NULL, null=True,
+                                blank=True, related_name='class_occupancy_snapshots')
+    teacher_name = models.CharField(max_length=200, blank=True, default='')
+    class_name = models.CharField(max_length=150, blank=True, default='')
+
+    start_datetime = models.DateTimeField()
+    end_datetime = models.DateTimeField()
+    capacity = models.PositiveIntegerField(default=0)
+    enrolled_count = models.PositiveIntegerField(default=0)
+    pruned_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ['-start_datetime', '-id']
+        constraints = [
+            # `fields=[...]` y no `F(...)`: la trampa de DRF documentada en
+            # `GymClass.Meta.constraints` solo muerde a los modelos expuestos por un
+            # `ModelSerializer`, y este no lo está ni debe estarlo (el reporte arma dicts).
+            models.UniqueConstraint(fields=['organization', 'source_class_id'],
+                                    name='uniq_occupancy_snapshot_per_class'),
+        ]
+        indexes = [
+            # El reporte de ocupación filtra por (organización, rango de fechas de la clase).
+            models.Index(fields=['organization', 'start_datetime']),
+        ]
+
+    def __str__(self):
+        return f'{self.class_name} · {self.start_datetime:%Y-%m-%d %H:%M} · 0/{self.capacity}'
 
 

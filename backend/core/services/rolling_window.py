@@ -79,6 +79,7 @@ from django.utils import timezone
 from ..models import ClassTemplate, GymClass, Organization
 from .class_status import sync_class_statuses
 from .recurrence import _delete_class_refunding_consumption, generate_instances_for_template_range
+from .reports_occupancy import record_occupancy_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -291,7 +292,21 @@ def _prune_past_empty_classes(org, now, summary):
                 if not _prune_candidates(org, now).filter(pk=class_id).exists():
                     continue
 
-                # TODO P3-reportería: acá nace el rastro liviano de ocupación (fecha/disciplina/profe/horario/cupo/inscritos=0) antes de podar — NO implementar, solo marcar el lugar.
+                # RASTRO DE OCUPACIÓN (P3.4) — antes del borrado y DENTRO de la misma
+                # transacción. Los dos tienen que ser un solo hecho: si el `DELETE` falla, el
+                # rastro no puede quedar, porque el reporte contaría como oferta una clase que
+                # sigue viva y la sumaría DOS veces (la fila viva más su snapshot).
+                #
+                # Por qué el rastro vive acá y NO en `_delete_class_refunding_consumption` (el
+                # borrado genérico de clases, que también usan el borrado a mano y el de
+                # series): esta es la única vía por la que se destruye oferta SIN que ninguna
+                # persona lo haya decidido. Es un borrado automático y masivo de clases que
+                # nadie tomó —o sea, justo el dato que el reporte de ocupación necesita para no
+                # mentir—, y ocurre en un cron desatendido. Cuando un humano borra una clase
+                # está tomando una decisión sobre su propio calendario y sabe lo que se lleva;
+                # acá no hay nadie mirando. Poner el rastro en el borrado genérico además
+                # duplicaría filas de oferta con cada borrado deliberado.
+                record_occupancy_snapshot(locked)
                 _delete_class_refunding_consumption(locked)
             summary['pruned_count'] += 1
         except Exception as exc:  # noqa: BLE001

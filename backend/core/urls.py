@@ -12,6 +12,11 @@ from .views_payments import (
     PaymentTransactionStatusView,
     PaymentWebhookView,
 )
+from .views_reports import (
+    ManualPaymentsReportView,
+    OccupancyReportView,
+    RevenueReportView,
+)
 from .views import (
     AdvanceClassWindowsView,
     BranchViewSet,
@@ -109,5 +114,14 @@ urlpatterns = [
     # `class-templates/<pk>/` o de `classes/` mentiría sobre su alcance. Solo POST: no es una
     # lectura, mueve saldo y borra filas.
     path('advance-class-windows/', AdvanceClassWindowsView.as_view(), name='advance-class-windows'),
+    # Reportería (P3.4). Namespace propio `reports/` y rutas PLANAS, no acciones del router:
+    # un reporte no es un recurso REST (no se crea, no se borra, no tiene detalle) sino una
+    # LECTURA AGREGADA de varias tablas a la vez. Colgarlo de `payments/` o de `classes/`
+    # mentiría sobre su alcance, y `payments/` además es la plomería del proveedor.
+    # Solo GET. El export usa el MISMO endpoint con `?export=csv|xlsx`.
+    path('reports/revenue/', RevenueReportView.as_view(), name='reports-revenue'),
+    path('reports/manual-payments/', ManualPaymentsReportView.as_view(),
+         name='reports-manual-payments'),
+    path('reports/occupancy/', OccupancyReportView.as_view(), name='reports-occupancy'),
     path('', include(router.urls)),
 ]

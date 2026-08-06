@@ -6,6 +6,7 @@ from datetime import datetime
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.db.utils import IntegrityError
 from django.shortcuts import get_object_or_404, redirect
 from rest_framework import serializers, status
 from rest_framework.exceptions import PermissionDenied, ValidationError as DRFValidationError
@@ -273,8 +274,16 @@ class PaymentWebhookView(APIView):
             try:
                 payments.process_payment_notification(
                     tx_id=tx_id, provider_payment_id=env.provider_payment_id)
-            except (payments.PaymentIntegrityError, ValueError, ValidationError):
+            except (payments.PaymentIntegrityError, ValueError, ValidationError,
+                    IntegrityError):
                 # No re-encolar: es una inconsistencia (incl. tx malformado), no un fallo transitorio.
+                #
+                # `IntegrityError` entra en la lista desde P3.4: el camino nuevo de devolución
+                # también escribe `provider_payment_id`, así que un aviso re-apuntado a otra
+                # transacción puede chocar contra `uniq_provider_payment` (provider,
+                # provider_payment_id). El `atomic` de `apply_provider_payment` ya revirtió —la
+                # fila no queda a medias—, pero sin atajarlo acá el webhook devolvía 500 y MP
+                # reintentaba en bucle un aviso que nunca va a poder aplicarse.
                 return Response(status=status.HTTP_200_OK)
         return Response(status=status.HTTP_200_OK)
 

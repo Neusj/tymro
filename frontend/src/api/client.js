@@ -750,4 +750,63 @@ export const paymentsApi = {
   },
 }
 
+// Reportería P3.4 (gym_admin): tres reportes de solo lectura, mismo contrato de query
+// params en los tres (date_from, date_to, branch_id, granularity, + un filtro propio de
+// cada uno: method en revenue/manual-payments, discipline_id en occupancy). `export`
+// pide el MISMO endpoint pero con el archivo (csv/xlsx) en vez de JSON — no es una ruta
+// separada como `/teacher-payments/summary/export/`, así que exportRevenue/... reusan la
+// misma URL que revenue/manualPayments/occupancy, solo cambiando `export` y `responseType`.
+export const reportsApi = {
+  revenue: async (params = {}) => {
+    const { data } = await api.get('/reports/revenue/', { params })
+    return data
+  },
+  manualPayments: async (params = {}) => {
+    const { data } = await api.get('/reports/manual-payments/', { params })
+    return data
+  },
+  occupancy: async (params = {}) => {
+    const { data } = await api.get('/reports/occupancy/', { params })
+    return data
+  },
+  exportRevenue: async (params = {}, format = 'csv') => {
+    const response = await api.get('/reports/revenue/', {
+      params: { ...params, export: format },
+      responseType: 'blob',
+    })
+    return response
+  },
+  exportManualPayments: async (params = {}, format = 'csv') => {
+    const response = await api.get('/reports/manual-payments/', {
+      params: { ...params, export: format },
+      responseType: 'blob',
+    })
+    return response
+  },
+  exportOccupancy: async (params = {}, format = 'csv') => {
+    const response = await api.get('/reports/occupancy/', {
+      params: { ...params, export: format },
+      responseType: 'blob',
+    })
+    return response
+  },
+}
+
+// Dispara la descarga de un blob de respuesta (export CSV/XLSX de reportería). Mismo
+// patrón que ya usan TeacherPaymentsOverviewPage.handleExport y GymAdminImportPage.
+// downloadTemplate (Blob → object URL → <a download> → click → revoke); centralizado
+// acá para que las 3 páginas nuevas de reportería no lo copien una tercera, cuarta y
+// quinta vez.
+export const downloadReportFile = (response, filename) => {
+  const blob = new Blob([response.data], { type: response.headers?.['content-type'] })
+  const url = window.URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  window.URL.revokeObjectURL(url)
+}
+
 export default api

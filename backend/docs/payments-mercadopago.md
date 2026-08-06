@@ -100,6 +100,19 @@ transacción (`?tx=`), nunca por el host.
 6. Idempotencia: `PaymentTransaction.processed_at` es el guard de "ya activado, no
    repetir"; además hay un `UniqueConstraint(provider, provider_payment_id)` a nivel DB
    y `select_for_update()` para serializar webhooks concurrentes del mismo pago.
+   **Excepción, desde P3.4:** ese guard ya no descarta TODO aviso posterior. Un
+   `refunded`/`charged_back` sigue entrando y se registra en la fila (`refunded_at`,
+   `refunded_amount`, y `status` pasa a `refunded`), con los mismos chequeos de integridad
+   que el cobro (collector y `external_reference`) y con su propia idempotencia por
+   `refunded_at`. Antes era un no-op absoluto: el gimnasio devolvía la plata y la fila
+   seguía diciendo `approved`, así que cualquier reporte de ingresos la contaba entera.
+   La **membresía activada NO se desactiva** (decisión de producto pendiente, ver el TODO
+   en `payments._stamp_refund`); lo que queda cerrado es que la plata devuelta existe en la
+   base y la reportería la resta.
+7. **El dinero cobrado tiene su propio marcador: `collected_at`.** Se estampa cuando el
+   proveedor confirma el cobro y no se limpia nunca. No es `processed_at` (que además
+   exige que la activación de la membresía haya funcionado) ni `status` (que la devolución
+   pisa). Es la columna por la que la reportería suma el ingreso bruto.
 7. **Fuera de alcance del piloto:** un mismo checkout cubre **un solo propósito** — o
    bien un `plan_id` (alta/renovación de plan), o bien un `target_student_plan_id`
    (matrícula pendiente sobre un `StudentPlan` ya existente). Cobrar plan + matrícula en
@@ -184,9 +197,27 @@ puntos que dependen de la doc de MP en el momento de operar (puede cambiar sin a
 - **Otros proveedores de pago:** la abstracción `PaymentProvider` está pensada para
   soportarlos, pero solo existe la implementación de MercadoPago (más `fake.py` para
   tests).
-- **Refunds, contracargos, cancelaciones desde la UI, suscripciones/auto-renovación,
-  cola tipo Celery:** ninguno de estos está implementado; el procesamiento del webhook es
-  síncrono dentro del request.
+- **Refunds y contracargos:** se **REGISTRAN** desde P3.4 (`refunded_at`/`refunded_amount`
+  sobre la `PaymentTransaction`, ver punto 6 de la sección 4) para que la reportería reste
+  la plata devuelta. Lo que sigue fuera de alcance es la **reversión del efecto**: la
+  membresía activada por ese cobro no se desactiva, y no hay forma de originar una
+  devolución desde nuestra UI (solo se recibe el aviso de MP). Tampoco se distinguen
+  devoluciones **parciales**: la abstracción de proveedor colapsa `refunded` y
+  `charged_back` en un solo estado y MP informa el monto original, así que se registra
+  siempre el total.
+- **Una devolución avisada y perdida no tiene backstop.** `reconcile_payments` solo levanta
+  transacciones en `pending`/`in_process` **sin** `processed_at`, y una devolución llega
+  siempre sobre una fila ya cobrada y procesada, así que queda fuera de ese filtro. Si MP
+  reintenta el webhook (lo hace) el registro entra; si se pierde definitivamente, el ingreso
+  queda inflado y hay que corregirlo a mano. Ensanchar el reconcile para re-consultar cobros
+  recientes es la solución, y no está hecha: implicaría pollear todo lo aprobado del período.
+- **Devoluciones con la cuenta ya desconectada:** el aviso se pierde.
+  `process_payment_notification` aborta limpio cuando la `PaymentAccount` del cobro no está
+  `connected` (sin token no se puede consultar el estado canónico a MP), así que un
+  reembolso avisado DESPUÉS de que el gimnasio desconectó su cuenta no se registra y el
+  ingreso queda inflado. Es la misma limitación que ya tenía la activación.
+- **Cancelaciones desde la UI, suscripciones/auto-renovación, cola tipo Celery:** ninguno
+  de estos está implementado; el procesamiento del webhook es síncrono dentro del request.
 
 ## 9. Desconexión de una cuenta y revocación del token
 

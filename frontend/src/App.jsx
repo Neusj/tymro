@@ -23,6 +23,9 @@ import GymAdminUsersPage from './pages/GymAdminUsersPage'
 import GymAdminPlanMembershipsPage from './pages/GymAdminPlanMembershipsPage'
 import GymAdminPaymentsSettingsPage from './pages/GymAdminPaymentsSettingsPage'
 import GymAdminPaymentsTransactionsPage from './pages/GymAdminPaymentsTransactionsPage'
+import GymAdminRevenueReportPage from './pages/GymAdminRevenueReportPage'
+import GymAdminManualPaymentsReportPage from './pages/GymAdminManualPaymentsReportPage'
+import GymAdminOccupancyReportPage from './pages/GymAdminOccupancyReportPage'
 import StudentBuyPlanPage from './pages/StudentBuyPlanPage'
 import PaymentResultPage from './pages/PaymentResultPage'
 import LoginPage from './pages/LoginPage'
@@ -314,6 +317,40 @@ export default function App() {
           <ProtectedRoute allowedRoles={['gym_admin']}>
             <ShellRoute>
               <GymAdminPaymentsTransactionsPage />
+            </ShellRoute>
+          </ProtectedRoute>
+        }
+      />
+      {/* Reportería P3.4: SOLO gym_admin (manager/monitor/teacher/student/superadmin no
+          entran; el backend responde 403 a los demás roles, pero el front tampoco debe
+          ofrecerles la puerta — por eso allowedRoles no incluye 'manager' ni 'monitor'
+          como sí hacen la mayoría de las rutas /gym-admin/* de arriba). */}
+      <Route
+        path="/gym-admin/reports/revenue"
+        element={
+          <ProtectedRoute allowedRoles={['gym_admin']}>
+            <ShellRoute>
+              <GymAdminRevenueReportPage />
+            </ShellRoute>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/gym-admin/reports/manual-payments"
+        element={
+          <ProtectedRoute allowedRoles={['gym_admin']}>
+            <ShellRoute>
+              <GymAdminManualPaymentsReportPage />
+            </ShellRoute>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/gym-admin/reports/occupancy"
+        element={
+          <ProtectedRoute allowedRoles={['gym_admin']}>
+            <ShellRoute>
+              <GymAdminOccupancyReportPage />
             </ShellRoute>
           </ProtectedRoute>
         }

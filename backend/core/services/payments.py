@@ -473,6 +473,59 @@ def create_checkout(*, organization, user, plan=None, target_student_plan=None):
     return tx, session.redirect_url
 
 
+def _assert_payment_belongs_to_transaction(tx, payment):
+    """Chequeos de integridad del pago contra la fila. Levanta ``PaymentIntegrityError``.
+
+    Extraído de ``apply_provider_payment`` porque ahora hay DOS caminos que escriben la fila
+    —aplicar el cobro y registrar la devolución— y los dos tienen que exigir lo mismo. Si el
+    camino de devolución no validara el collector, cualquier pago de otro vendedor cuyo id
+    llegue por el webhook podría marcar como devuelta una venta ajena.
+    """
+    # La cuenta que emitió ESTE cobro (ver `_account_for_transaction`): con varias
+    # cuentas por organización —principal + sedes— un `.first()` por (organización,
+    # proveedor) elige una al azar y la validación de collector deja de significar nada.
+    account = _account_for_transaction(tx)
+    if (not payment.collector_id or not account or not account.provider_user_id
+            or str(payment.collector_id) != str(account.provider_user_id)):
+        raise PaymentIntegrityError('collector_id no coincide con la cuenta del gym.')
+    if payment.external_reference and str(payment.external_reference) != str(tx.id):
+        raise PaymentIntegrityError('external_reference no coincide.')
+
+
+def _stamp_refund(tx, payment):
+    """Escribe la DEVOLUCIÓN en la fila (no guarda: el caller hace el `save`).
+
+    Un solo lugar para los dos caminos que pueden recibirla: la devolución de un cobro ya
+    aplicado (el caso normal) y la de uno que nunca se llegó a aplicar.
+
+    El monto es `tx.amount` —lo que ESPERÁBAMOS cobrar y ya validamos contra el proveedor
+    cuando el pago se aprobó— y no `payment.amount`: para un pago devuelto el proveedor
+    informa el monto ORIGINAL de la transacción, no lo reembolsado, así que tomarlo de ahí
+    no agregaría información y sí abriría la puerta a que un payload raro cambie el monto de
+    una venta vieja. Por la misma razón acá NO se re-valida el monto: no hay nada que
+    comparar, y abortar la devolución por un monto que el proveedor no promete informar
+    dejaría el ingreso inflado, que es el estado que este código existe para arreglar.
+
+    Se registra aunque `collected_at` sea NULL (devolución de algo que nunca contamos como
+    cobrado): el hecho es el hecho. Es el REPORTE el que decide no restar lo que nunca sumó
+    —ver `services/reports_revenue.py`—, y esa decisión vive allá para que la fila no tenga
+    que mentir para que el neto cuadre.
+    """
+    tx.provider_payment_id = payment.provider_payment_id or tx.provider_payment_id
+    # `refunded` cubre también el CONTRACARGO: `MercadoPagoProvider` mapea `refunded` y
+    # `charged_back` al mismo `PaymentStatus.REFUNDED`. La distinción sobrevive en
+    # `status_detail` y en `raw_provider_payload`, que se guardan enteros.
+    tx.status = payment.status.value
+    tx.status_detail = payment.status_detail
+    tx.raw_provider_payload = payment.raw
+    tx.refunded_at = timezone.now()
+    tx.refunded_amount = tx.amount
+    # TODO P3.4: la membresía activada por este cobro NO se desactiva. Es una decisión de
+    # producto (un alumno que ya consumió clases con un plan que después se devolvió) y
+    # excede el alcance de registrar el dinero. Lo que sí queda cerrado es que la plata
+    # devuelta se resta del ingreso: antes de esto la devolución no existía en la base.
+
+
 def apply_provider_payment(*, tx, payment):
     """Núcleo idempotente. Debe llamarse por webhook y por reconcile."""
     # El mismatch de organización NO puede escapar del atomic: haría rollback del `tx.save()`
@@ -485,26 +538,70 @@ def apply_provider_payment(*, tx, payment):
     with db_transaction.atomic():
         tx = PaymentTransaction.objects.select_for_update().get(pk=tx.pk)
         if tx.processed_at is not None:
-            return tx   # ya activado: no-op
+            # YA ACTIVADO. Hasta P3.4 esto era un no-op ABSOLUTO, y ahí estaba el agujero:
+            # un `refunded`/`charged_back` que llegara después de la activación se descartaba
+            # entero, así que el gimnasio devolvía la plata y el ingreso seguía contándola.
+            # Ahora un único aviso posterior sigue teniendo efecto —la DEVOLUCIÓN— y todo lo
+            # demás (el reintento del mismo cobro aprobado, que es el caso masivo del
+            # webhook de MP) sale por el mismo return de antes, sin tocar la fila.
+            if payment.status != PaymentStatus.REFUNDED:
+                return tx
+            _assert_payment_belongs_to_transaction(tx, payment)
+            # ATADURA DURA, y solo en ESTE camino. `_assert_payment_belongs_to_transaction`
+            # compara el `external_reference` únicamente SI viene (`if
+            # payment.external_reference and ...`), porque un pago cobrado por la misma cuenta
+            # de MercadoPago FUERA de nuestro checkout —QR en recepción, link del panel, Point—
+            # llega sin él. Esa laxitud es vieja y en el camino de activación no se toca: es la
+            # que permite que un cobro legítimo active el plan.
+            #
+            # Acá NO alcanza, y la diferencia es que este camino MUTA una fila de dinero YA
+            # LIQUIDADA. El `?tx=` del webhook queda fuera del manifest del HMAC de MP
+            # (`id;request-id;ts`, ver `MercadoPagoProvider.verify_webhook`), así que una
+            # notificación con firma válida se puede RE-APUNTAR a otra transacción. Si el pago
+            # referido no trae `external_reference`, lo único que quedaba en pie era el
+            # collector — y `PaymentAccount` no tiene unicidad global de `provider_user_id`
+            # (solo por organización y por sede), así que dos gimnasios del SaaS que conecten
+            # el MISMO vendedor de MP (franquicia, dueño con dos locales) comparten collector y
+            # lo pasan igual. Resultado posible: una venta ajena marcada `refunded` y el
+            # reporte restando plata que nadie devolvió.
+            #
+            # Exigirlo no puede romper nada real: toda `tx` nace en `create_checkout`, que
+            # manda `external_reference=str(tx.id)` a la preference, así que el pago de una
+            # venta NUESTRA siempre lo trae. Un aviso de devolución sin él no es de esta venta.
+            if str(payment.external_reference or '') != str(tx.id):
+                raise PaymentIntegrityError(
+                    'external_reference ausente o distinto: no se registra la devolución.')
+            if tx.refunded_at is not None:
+                return tx   # devolución ya registrada: idempotente, igual que el cobro
+            _stamp_refund(tx, payment)
+            tx.save()
+            return tx
 
-        # La cuenta que emitió ESTE cobro (ver `_account_for_transaction`): con varias
-        # cuentas por organización —principal + sedes— un `.first()` por (organización,
-        # proveedor) elige una al azar y la validación de collector deja de significar nada.
-        account = _account_for_transaction(tx)
-        if (not payment.collector_id or not account or not account.provider_user_id
-                or str(payment.collector_id) != str(account.provider_user_id)):
-            raise PaymentIntegrityError('collector_id no coincide con la cuenta del gym.')
-        if payment.external_reference and str(payment.external_reference) != str(tx.id):
-            raise PaymentIntegrityError('external_reference no coincide.')
+        _assert_payment_belongs_to_transaction(tx, payment)
 
         tx.provider_payment_id = payment.provider_payment_id
         tx.status = payment.status.value
         tx.status_detail = payment.status_detail
         tx.raw_provider_payload = payment.raw
 
+        if payment.status == PaymentStatus.REFUNDED:
+            # Devolución de un cobro que NUNCA se aplicó: o la notificación de aprobación
+            # nunca llegó, o llegó y la activación abortó (`plan_org_mismatch`). Se registra
+            # igual —el aviso es un hecho— y `_stamp_refund` sobreescribe los tres campos de
+            # estado que se acaban de asignar arriba con los mismos valores.
+            _stamp_refund(tx, payment)
+
         if payment.status == PaymentStatus.APPROVED:
             if payment.amount != tx.amount:
                 raise PaymentIntegrityError(f'monto {payment.amount} != esperado {tx.amount}')
+            # LA PLATA ENTRÓ. Se estampa ACÁ —después de validar el monto y ANTES de intentar
+            # activar la membresía— porque el ingreso bruto del reporte se cuenta por este
+            # campo: si dependiera de que la activación funcione, el `plan_org_mismatch` de
+            # más abajo (que deja la fila cobrada y sin `processed_at` a propósito) escondería
+            # del reporte una venta que el gimnasio efectivamente cobró.
+            # `or timezone.now()` en vez de asignación directa: `collected_at` es histórico y
+            # se escribe UNA vez; un reintento del webhook no puede moverlo de período.
+            tx.collected_at = tx.collected_at or timezone.now()
             from .plans import PlanOrganizationMismatch, activate_student_plan
             if tx.plan_id:
                 try:

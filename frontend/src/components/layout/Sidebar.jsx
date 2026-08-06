@@ -92,6 +92,15 @@ function PaymentsIcon() {
   )
 }
 
+function ReportsIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5">
+      <path d="M3 3v18h18" />
+      <path d="M7 15l4-5 3 3 5-7" />
+    </svg>
+  )
+}
+
 function QrIcon() {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5">
@@ -162,6 +171,18 @@ const navByRole = {
       children: [
         { to: '/gym-admin/teacher-payments', label: 'Resumen pagos' },
         { to: '/gym-admin/teacher-payments/rules', label: 'Reglas de pago' },
+      ],
+    },
+    {
+      // P3.4: reportería, SOLO gym_admin (manager/monitor reutilizan /gym-admin/* para
+      // todo lo demás, pero NO para esto — el backend responde 403 a ambos roles).
+      type: 'group',
+      label: 'Reportes',
+      icon: <ReportsIcon />,
+      children: [
+        { to: '/gym-admin/reports/revenue', label: 'Ingresos' },
+        { to: '/gym-admin/reports/manual-payments', label: 'Pagos manuales' },
+        { to: '/gym-admin/reports/occupancy', label: 'Ocupación' },
       ],
     },
     {

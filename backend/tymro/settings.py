@@ -280,6 +280,11 @@ REST_FRAMEWORK = {
         # rodante SÍNCRONO dentro del request -> freno de martilleo, no cupo de negocio. Con
         # LocMemCache el conteo es por worker (~×3 en prod): freno, no garantía.
         'advance_class_windows': os.getenv('THROTTLE_ADVANCE_CLASS_WINDOWS', '6/hour'),
+        # Reportería (P3.4): lectura agregada sobre varias tablas, síncrona, con rango de hasta
+        # 731 días. Freno de martilleo, no cupo de negocio -> holgado para el uso real (abrir
+        # las tres pantallas, cambiar filtros, exportar) y acotado contra el bucle. Mismo
+        # descuento que el resto: con LocMemCache cuenta por worker.
+        'reports': os.getenv('THROTTLE_REPORTS', '120/hour'),
     },
 }
 
