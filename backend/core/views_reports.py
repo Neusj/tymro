@@ -17,14 +17,26 @@ reporte de retención: se resuelve con `_scoped_id`, igual que `discipline_id` e
 TODA la plata sale de NUESTRA base. Ningún reporte consulta al proveedor de pago en vivo: lo
 que el reporte suma es lo que el webhook escribió (ver `services/payments.py`).
 
-Los cinco: ingresos y pagos manuales (plata), ocupación (oferta de clases), y retención +
-conversión de prueba (P3.4 · parte 2), los dos reportes de PERSONAS: cuántas membresías se
-renuevan y cuántos prospectos que probaron una clase terminan comprando. Comparten la misma
-plomería (`_ReportView`, `ReportScope`, export CSV/XLSX) pero cada uno arma su propia consulta
-en su `services/reports_*.py`.
+Los cinco: ingresos (plata), ocupación (oferta de clases), y retención + conversión de prueba
+(P3.4 · parte 2), los dos reportes de PERSONAS: cuántas membresías se renuevan y cuántos
+prospectos que probaron una clase terminan comprando. Comparten la misma plomería
+(`_ReportView`, `ReportScope`, export CSV/XLSX) pero cada uno arma su propia consulta en su
+`services/reports_*.py`.
+
+El de ingresos tiene además DOS CAPAS MÁS, que son el mismo reporte con más zoom: el listado de
+los cobros de un método (`RevenuePaymentsReportView`) y el detalle de un pago
+(`RevenuePaymentDetailView`). La segunda no es un `_ReportView` —un detalle no tiene período ni
+export— pero lleva EXACTAMENTE el mismo permiso y el mismo throttle: el drill-down no abre
+ninguna puerta que la capa 1 no tuviera ya abierta.
+
+(Hubo un sexto endpoint, `GET /api/reports/manual-payments/`, borrado al construir el
+drill-down: era un listado de cobros de recepción y quedó absorbido por la capa 2, que hace lo
+mismo filtrando por `method=cash|transfer|unknown` y hereda sus columnas de export. Se borró la
+LECTURA: el `POST /api/manual-payments/` que registra el cobro sigue intacto.)
 """
 from datetime import date, datetime
 
+from django.http import Http404
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import serializers
@@ -36,13 +48,16 @@ from rest_framework.views import APIView
 from .models import Branch, Discipline, Plan
 from .permissions import ReportPermission
 from .services import reports_base
-from .services.reports_base import (MANUAL_METHODS, MAX_PERIOD_DAYS, REVENUE_METHODS,
-                                    ReportScope, export_response)
-from .services.reports_manual import (build_manual_payments_report,
-                                      manual_payments_export_spec)
+from .services.reports_base import (MAX_PERIOD_DAYS, REVENUE_METHODS, ReportScope,
+                                    export_response)
 from .services.reports_occupancy import build_occupancy_report, occupancy_export_spec
 from .services.reports_retention import build_retention_report, retention_export_spec
 from .services.reports_revenue import build_revenue_report, revenue_export_spec
+from .services.reports_revenue_detail import (KIND_MERCADOPAGO, PAYMENT_KINDS,
+                                              build_payment_detail,
+                                              build_revenue_payments_report,
+                                              parse_transaction_id,
+                                              revenue_payments_export_spec)
 from .services.reports_trial import (build_trial_conversion_report,
                                      trial_conversion_export_spec)
 
@@ -54,10 +69,10 @@ _id_field = serializers.IntegerField(min_value=1, max_value=2 ** 63 - 1)
 #: Fecha más antigua que un reporte acepta. Ver el porqué en `_report_scope`.
 MIN_REPORT_DATE = date(2000, 1, 1)
 
-# Los medios de cobro (`REVENUE_METHODS`, `MANUAL_METHODS`, etiquetas) viven en
-# `services/reports_base.py` y se importan de ahí: son la MISMA lista que usa el cálculo. Con
-# una copia local, agregar un medio en un lado y no en el otro dejaría el filtro aceptando un
-# valor que el reporte ignora en silencio (o rechazando uno que sí sabe calcular).
+# Los medios de cobro (`REVENUE_METHODS`, etiquetas) viven en `services/reports_base.py` y se
+# importan de ahí: son la MISMA lista que usa el cálculo. Con una copia local, agregar un medio
+# en un lado y no en el otro dejaría el filtro aceptando un valor que el reporte ignora en
+# silencio (o rechazando uno que sí sabe calcular).
 
 
 def _parse_date(value, field):
@@ -139,12 +154,29 @@ def _report_scope(request):
 
 
 def _method_param(request, allowed):
+    """Medio de cobro pedido, o `None` si no vino (= consolidado de todos los medios)."""
     method = request.query_params.get('method')
     if method is None or method == '':
         return None
     if method not in allowed:
         raise DRFValidationError(
             {'method': f'Método inválido. Opciones: {", ".join(allowed)}.'})
+    return method
+
+
+def _required_method_param(request, allowed):
+    """Igual, pero el medio es OBLIGATORIO.
+
+    En el reporte de ingresos la ausencia de `method` significa "todos los medios", que es una
+    respuesta legítima. En el drill-down no: ese listado existe para explicar UNA fila de
+    `by_method`, y "todos" no es una fila. Caer al consolidado devolvería 200 con una mezcla de
+    cobros de MercadoPago y de recepción bajo un encabezado que dice el nombre de un solo medio
+    —y con columnas de export que dependen justamente de cuál es—.
+    """
+    method = _method_param(request, allowed)
+    if method is None:
+        raise DRFValidationError(
+            {'method': f'Parámetro obligatorio. Opciones: {", ".join(allowed)}.'})
     return method
 
 
@@ -222,22 +254,78 @@ class RevenueReportView(_ReportView):
         return revenue_export_spec(data)
 
 
-class ManualPaymentsReportView(_ReportView):
-    """`GET /api/reports/manual-payments/` — cobros en efectivo y por transferencia.
+class RevenuePaymentsReportView(_ReportView):
+    """`GET /api/reports/revenue/payments/?method=…` — CAPA 2: los cobros de un medio.
 
-    Primera lectura que existe de `ManualPayment`: hasta P3.4 el modelo era solo-POST, o sea
-    el gimnasio registraba cobros en recepción y no tenía dónde verlos. Publica quién los
-    registró y cuándo, que es el punto de control interno del reporte.
+    Es el listado que se abre al clickear una fila de `by_method` en el reporte de ingresos, y
+    su contrato con esa pantalla es que los `totals` sean EXACTAMENTE los de la fila clickeada.
+    Eso no se logra repitiendo el cálculo con cuidado sino no repitiéndolo: los dos querysets y
+    los cinco totales salen de `reports_revenue.method_querysets`/`method_totals`, las mismas
+    funciones que arman la capa 1.
+
+    Hereda todo lo demás de `_ReportView` sin agregar nada: mismo `ReportPermission` (solo
+    `gym_admin`), mismo `_report_scope` (organización del actor, sede ajena 404) y el mismo
+    `?export=csv|xlsx`. `method` es el único parámetro propio, y es obligatorio.
+
+    Publica DOS listas —`rows` (cobros del período) y `refund_rows` (devoluciones del período)—
+    porque la capa 1 es base caja. Ver el encabezado de `services/reports_revenue_detail.py`.
     """
-    export_filename = 'pagos_manuales'
-    export_sheet_title = 'Pagos manuales'
+    export_filename = 'cobros'
+    export_sheet_title = 'Cobros'
 
     def build(self, request, scope):
-        return build_manual_payments_report(
-            scope, method=_method_param(request, MANUAL_METHODS))
+        return build_revenue_payments_report(
+            scope, _required_method_param(request, REVENUE_METHODS))
 
     def export_spec(self, data):
-        return manual_payments_export_spec(data)
+        return revenue_payments_export_spec(data)
+
+
+class RevenuePaymentDetailView(APIView):
+    """`GET /api/reports/revenue/payments/<kind>/<id>/` — CAPA 3: la ficha de UN pago.
+
+    NO es un `_ReportView` y no debería serlo: un detalle no tiene período, ni granularidad, ni
+    sucursal, ni export. Heredar esa plomería obligaría a inventarle un rango a una fila que ya
+    tiene fecha propia. Lo que SÍ comparte, literalmente la misma clase, es el PERMISO: el
+    drill-down no puede ser una puerta lateral más laxa que la pantalla desde la que se llega.
+
+    El THROTTLE, en cambio, tiene scope propio (`reports_detail`) y más holgado. No es una
+    laxitud: el patrón de uso es el opuesto al de un reporte. Auditar un mes de caja es abrir un
+    pago, volver y abrir el siguiente —decenas de requests seguidas—, y con el scope compartido
+    eso se comía el cupo de los cinco reportes y sus exports, con el 429 cayendo en la mitad de
+    una revisión contable. Además es la request más barata de la reportería: un
+    `get_object_or_404` por PK, sin agregación y sin recorrer nada. Ver el comentario en
+    `settings.py`. El gate de rol NO cambia — cupo no es autorización.
+
+    LOS DOS TIPOS TIENEN PK DE TIPO DISTINTO y el id se parsea según `kind` ANTES de tocar la
+    base (`uuid.UUID` para la transacción, `_id_field` para el cobro manual). No es cosmético:
+    los dos lookups devuelven **500** con un id malformado —el de `ManualPayment` solo en
+    PostgreSQL, que es donde corre producción y la suite—. Malformado da 400 y ajeno da 404,
+    igual que `_scoped_id`: un 403 confirmaría "existe, pero no es tuyo" sobre ids adivinables.
+
+    El `kind` desconocido da 404 y no 400: es un segmento de RUTA, y una ruta que no existe no
+    es un parámetro inválido.
+    """
+    permission_classes = [ReportPermission]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'reports_detail'
+
+    def get(self, request, kind, payment_id):
+        if kind not in PAYMENT_KINDS:
+            raise Http404
+        if kind == KIND_MERCADOPAGO:
+            parsed_id = parse_transaction_id(payment_id)
+        else:
+            try:
+                parsed_id = _id_field.run_validation(payment_id)
+            except serializers.ValidationError:
+                parsed_id = None
+        if parsed_id is None:
+            raise DRFValidationError({'payment_id': 'Identificador inválido.'})
+        # `organization_id` DEL ACTOR y jamás del request (orden 8.3): es lo único que acota
+        # esta consulta, y alcanza — ver el docstring de `build_payment_detail`.
+        return Response(build_payment_detail(
+            organization_id=request.user.organization_id, kind=kind, payment_id=parsed_id))
 
 
 class OccupancyReportView(_ReportView):

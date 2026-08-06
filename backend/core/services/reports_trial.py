@@ -194,7 +194,7 @@ from .reports_occupancy import DICTATED_Q
 
 # Días después de la prueba en que una compra todavía se atribuye a esa prueba. Ver la decisión
 # 7 del docstring. Global de módulo (no default de parámetro) para que un test lo pueda mover
-# con monkeypatch sin fabricar meses de historia, igual que `reports_manual.MAX_ROWS`.
+# con monkeypatch sin fabricar meses de historia, igual que `reports_revenue_detail.MAX_ROWS`.
 CONVERSION_WINDOW_DAYS = 60
 
 

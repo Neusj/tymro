@@ -282,9 +282,19 @@ REST_FRAMEWORK = {
         'advance_class_windows': os.getenv('THROTTLE_ADVANCE_CLASS_WINDOWS', '6/hour'),
         # Reportería (P3.4): lectura agregada sobre varias tablas, síncrona, con rango de hasta
         # 731 días. Freno de martilleo, no cupo de negocio -> holgado para el uso real (abrir
-        # las tres pantallas, cambiar filtros, exportar) y acotado contra el bucle. Mismo
+        # los cinco reportes, cambiar filtros, exportar) y acotado contra el bucle. Mismo
         # descuento que el resto: con LocMemCache cuenta por worker.
         'reports': os.getenv('THROTTLE_REPORTS', '120/hour'),
+        # Capa 3 del drill-down de ingresos (P3.5): el detalle de UN pago. Scope PROPIO y más
+        # holgado, y no por laxitud sino porque el patrón de uso es el opuesto al de un reporte.
+        # Un `gym_admin` que audita un mes de caja abre un pago, vuelve, abre el siguiente: son
+        # decenas de requests seguidas contra el mismo cupo que los cinco reportes y sus
+        # exports. Con el scope compartido, revisar ~100 cobros consumía el presupuesto entero y
+        # el 429 caía en la mitad de una revisión contable. Y es la request MÁS BARATA de toda
+        # la reportería: un `get_object_or_404` por PK con `select_related`, sin agregación, sin
+        # rango de fechas y sin recorrer la tabla. El gate de ROL no cambia (`ReportPermission`,
+        # solo gym_admin): esto es cupo, no autorización.
+        'reports_detail': os.getenv('THROTTLE_REPORTS_DETAIL', '600/hour'),
     },
 }
 

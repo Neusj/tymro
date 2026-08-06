@@ -1,9 +1,9 @@
 """Cimiento común de la reportería (P3.4 · Pieza 0).
 
-Acá vive lo que los tres reportes —ingresos, pagos manuales, ocupación— comparten: el
-alcance ya validado (`ReportScope`), la aritmética de períodos y buckets, y los escritores
-de export CSV/XLSX. NO hay ninguna consulta de negocio en este módulo: cada reporte arma la
-suya en su propio `reports_*.py`.
+Acá vive lo que los reportes —ingresos (con su drill-down), ocupación, retención y conversión
+de prueba— comparten: el alcance ya validado (`ReportScope`), la aritmética de períodos y
+buckets, y los escritores de export CSV/XLSX. NO hay ninguna consulta de negocio en este
+módulo: cada reporte arma la suya en su propio `reports_*.py`.
 
 DOS INVARIANTES QUE ESTE MÓDULO SOSTIENE Y NINGÚN REPORTE DEBE SALTARSE:
 
@@ -42,9 +42,9 @@ GRANULARITY_MONTH = 'month'
 GRANULARITIES = (GRANULARITY_DAY, GRANULARITY_MONTH)
 
 # --------------------------------------------------------------------------------------
-# Medios de cobro. FUENTE ÚNICA para los dos reportes de plata y para la validación del
-# parámetro `method` en la view: si cada uno tuviera su propia lista, agregar un medio en un
-# lado y no en el otro haría que el filtro aceptara un valor que el cálculo ignora.
+# Medios de cobro. FUENTE ÚNICA para las tres capas del reporte de ingresos y para la
+# validación del parámetro `method` en la view: si cada una tuviera su propia lista, agregar un
+# medio en un lado y no en el otro haría que el filtro aceptara un valor que el cálculo ignora.
 # --------------------------------------------------------------------------------------
 METHOD_MERCADOPAGO = 'mercadopago'          # cobro en línea (una sola etiqueta, aunque el
                                             # proveedor concreto sea configurable)
@@ -69,10 +69,13 @@ METHOD_LABELS = {
     METHOD_UNKNOWN: 'Sin método registrado',
 }
 
-#: medios que puede tener un ingreso (reporte de ingresos)
+#: Medios que puede tener un ingreso: los CUATRO, y es la única lista de medios que existe.
+#: Hubo una segunda (`MANUAL_METHODS`, los tres que salen de `ManualPayment`) mientras existió
+#: el reporte de pagos manuales; se borró con él. Que quede una sola no es limpieza: dos listas
+#: de medios es exactamente la forma en que un medio nuevo entra en un reporte y no en el otro.
+#: Hoy la partición manual/en-línea se pregunta comparando contra `METHOD_MERCADOPAGO`, que es
+#: el único que NO sale de `ManualPayment`.
 REVENUE_METHODS = (METHOD_MERCADOPAGO, METHOD_CASH, METHOD_TRANSFER, METHOD_UNKNOWN)
-#: medios de un cobro registrado a mano (reporte de pagos manuales)
-MANUAL_METHODS = (METHOD_CASH, METHOD_TRANSFER, METHOD_UNKNOWN)
 
 
 def manual_method_filter(method):

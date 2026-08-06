@@ -750,19 +750,43 @@ export const paymentsApi = {
   },
 }
 
-// Reportería P3.4 (gym_admin): tres reportes de solo lectura, mismo contrato de query
-// params en los tres (date_from, date_to, branch_id, granularity, + un filtro propio de
-// cada uno: method en revenue/manual-payments, discipline_id en occupancy). `export`
+// Reportería P3.4/P3.5 (gym_admin): reportes de solo lectura, mismo contrato de query
+// params en la mayoría (date_from, date_to, branch_id, granularity, + un filtro propio de
+// cada uno: method en revenue, discipline_id en occupancy, plan_id en retención). `export`
 // pide el MISMO endpoint pero con el archivo (csv/xlsx) en vez de JSON — no es una ruta
 // separada como `/teacher-payments/summary/export/`, así que exportRevenue/... reusan la
-// misma URL que revenue/manualPayments/occupancy, solo cambiando `export` y `responseType`.
+// misma URL que revenue/occupancy/..., solo cambiando `export` y `responseType`.
+// El reporte de "pagos manuales" (listado propio) se eliminó en P3.5: ese drilldown ahora
+// vive DENTRO de Ingresos (capas 2/3 de revenuePayments/revenuePaymentDetail más abajo) —
+// no reintroducir manualPayments/exportManualPayments, ese endpoint del backend ya no existe.
 export const reportsApi = {
   revenue: async (params = {}) => {
     const { data } = await api.get('/reports/revenue/', { params })
     return data
   },
-  manualPayments: async (params = {}) => {
-    const { data } = await api.get('/reports/manual-payments/', { params })
+  // Capa 2 del drilldown de Ingresos: cobros + devoluciones de UN método (mercadopago |
+  // cash | transfer | unknown), en el mismo período/sucursal que la capa 1.
+  revenuePayments: async (params = {}) => {
+    const { data } = await api.get('/reports/revenue/payments/', { params })
+    return data
+  },
+  exportRevenuePayments: async (params = {}, format = 'csv') => {
+    const response = await api.get('/reports/revenue/payments/', {
+      params: { ...params, export: format },
+      responseType: 'blob',
+    })
+    return response
+  },
+  // Capa 3 del drilldown de Ingresos: el detalle de UN pago puntual. `kind` es
+  // 'mercadopago' | 'manual', `id` es el UUID (mercadopago) o el int (manual) de esa fila.
+  // `encodeURIComponent` en los dos: `kind` e `id` salen de los params de la ruta, o sea de
+  // la URL que el usuario tiene en la barra, no de una lista cerrada nuestra. Sin escapar, un
+  // `id` con `/` o `?` reescribe el path o inyecta query params en una request de plata.
+  // El backend igual responde 400/404 a cualquier valor que no sea un UUID o un int, pero la
+  // URL tiene que llegar entera para que sea ESE 404 y no otra ruta.
+  revenuePaymentDetail: async (kind, id) => {
+    const { data } = await api.get(
+      `/reports/revenue/payments/${encodeURIComponent(kind)}/${encodeURIComponent(id)}/`)
     return data
   },
   occupancy: async (params = {}) => {
@@ -782,13 +806,6 @@ export const reportsApi = {
   },
   exportRevenue: async (params = {}, format = 'csv') => {
     const response = await api.get('/reports/revenue/', {
-      params: { ...params, export: format },
-      responseType: 'blob',
-    })
-    return response
-  },
-  exportManualPayments: async (params = {}, format = 'csv') => {
-    const response = await api.get('/reports/manual-payments/', {
       params: { ...params, export: format },
       responseType: 'blob',
     })

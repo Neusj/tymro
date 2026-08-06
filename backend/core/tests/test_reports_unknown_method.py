@@ -2,17 +2,20 @@
 
 POR QUÉ ESTE ARCHIVO EXISTE APARTE: es la regresión de un bug de dinero que apareció durante
 la construcción de P3.4, y el mismo error se cometió DOS VECES de forma independiente en los
-dos reportes de plata. La trampa es que `ManualPayment.method` tiene `choices` de dos valores,
-así que filtrar por `method__in=('cash', 'transfer')` se lee como "todos los instrumentos"
-—pero no lo es—: la columna nació en P3.2 con `blank=True, default=''` y su migración NO hizo
-backfill a propósito, porque de los cobros de 8.2/8.3 no se sabe con qué se pagaron. Esas
-filas están HOY en producción, son cobros que el gimnasio recibió, y con ese filtro
-desaparecían del ingreso bruto: el reporte informaba menos plata de la que entró.
+dos reportes de plata que había entonces. La trampa es que `ManualPayment.method` tiene
+`choices` de dos valores, así que filtrar por `method__in=('cash', 'transfer')` se lee como
+"todos los instrumentos" —pero no lo es—: la columna nació en P3.2 con `blank=True, default=''`
+y su migración NO hizo backfill a propósito, porque de los cobros de 8.2/8.3 no se sabe con qué
+se pagaron. Esas filas están HOY en producción, son cobros que el gimnasio recibió, y con ese
+filtro desaparecían del ingreso bruto: el reporte informaba menos plata de la que entró.
 
-Los tests están juntos y no repartidos en `test_reports_revenue.py` /
-`test_reports_manual.py` para que se lean como una sola afirmación de producto: NINGÚN reporte
-puede perder plata cobrada por no saber cómo se cobró. Si alguien vuelve a acotar un filtro de
-método, este archivo es el que lo frena.
+QUÉ CAMBIÓ Y QUÉ NO: el segundo reporte (`GET /api/reports/manual-payments/`) se borró al
+construir el drill-down de ingresos, y la pantalla que lo reemplaza es la CAPA 2 de ese
+drill-down. La afirmación de producto es la misma y por eso este archivo NO se borró con él:
+NINGUNA pantalla puede perder plata cobrada por no saber cómo se cobró. Ahora se verifica sobre
+las capas 1 y 2 —que además están a un clic de distancia, así que un descuadre entre ellas es
+visible para el administrador—. Si alguien vuelve a acotar un filtro de método, este archivo es
+el que lo frena.
 """
 from datetime import timedelta
 from decimal import Decimal
@@ -23,14 +26,14 @@ from django.utils import timezone
 from core.models import ManualPayment, Plan, StudentPlan
 from core.services.reports_base import (GRANULARITY_DAY, METHOD_CASH, METHOD_UNKNOWN,
                                         ReportScope)
-from core.services.reports_manual import build_manual_payments_report
 from core.services.reports_revenue import build_revenue_report
+from core.services.reports_revenue_detail import build_revenue_payments_report
 
 pytestmark = pytest.mark.django_db
 
 TODAY = timezone.localdate()
 REVENUE_URL = '/api/reports/revenue/'
-MANUAL_URL = '/api/reports/manual-payments/'
+REVENUE_PAYMENTS_URL = '/api/reports/revenue/payments/'
 
 
 @pytest.fixture
@@ -136,58 +139,53 @@ def test_the_revenue_report_can_isolate_the_unknown_method(scope, legacy_scenari
 
 
 # --------------------------------------------------------------------------------------
-# B. Reporte de pagos manuales
+# B. Capa 2 del drill-down (el listado que reemplazó al reporte de pagos manuales)
 # --------------------------------------------------------------------------------------
 
-def test_the_manual_report_lists_the_legacy_payment_instead_of_hiding_it(scope, legacy_scenario):
-    """Este reporte es la ÚNICA lectura que existe de `ManualPayment`: si acá no está, para el
-    gimnasio ese cobro no existe en ninguna pantalla."""
-    data = build_manual_payments_report(scope)
+def test_the_drilldown_lists_the_legacy_payment_instead_of_hiding_it(scope, legacy_scenario):
+    """Esta es la ÚNICA lectura que existe de `ManualPayment` desde que se borró su reporte:
+    si acá no está, para el gimnasio ese cobro no existe en ninguna pantalla."""
+    data = build_revenue_payments_report(scope, METHOD_UNKNOWN)
     methods = [row['method'] for row in data['rows']]
 
-    assert len(data['rows']) == 2
-    assert METHOD_UNKNOWN in methods
+    assert len(data['rows']) == 1
+    assert methods == [METHOD_UNKNOWN]
     # Nunca `''` en el cable: una celda vacía es indistinguible de un dato perdido.
     assert '' not in methods
-    unknown_row = next(r for r in data['rows'] if r['method'] == METHOD_UNKNOWN)
-    assert unknown_row['method_label'] == 'Sin método registrado'
+    assert data['rows'][0]['method_label'] == 'Sin método registrado'
+    assert data['rows'][0]['amount'] == 7000
 
 
-def test_the_manual_totals_keep_the_stacked_bar_identity(scope, legacy_scenario):
-    """`total == cash + transfer + unknown`, con el tercer término. Es la identidad que sostiene
-    la barra apilada del frontend Y la garantía de que no se cae plata del reporte."""
-    totals = build_manual_payments_report(scope)['totals']
+def test_the_drilldown_of_cash_does_not_swallow_the_legacy_row(scope, legacy_scenario):
+    """El otro lado del mismo bug: la fila legacy no puede aparecer DENTRO de "Efectivo".
 
-    assert totals['cash'] == 10000
-    assert totals['transfer'] == 0
-    assert totals['unknown'] == 7000
-    assert totals['total'] == totals['cash'] + totals['transfer'] + totals['unknown'] == 17000
-    assert totals['count'] == 2
-    assert totals['unknown_count'] == 1
+    Esconderla ahí sumaría bien el total pero le atribuiría al gimnasio un instrumento que
+    nunca declaró — y borraría del producto la pregunta "¿con qué cobré estos $7.000?".
+    """
+    data = build_revenue_payments_report(scope, METHOD_CASH)
 
-
-def test_the_manual_series_keeps_the_same_identity_per_bucket(scope, legacy_scenario):
-    data = build_manual_payments_report(scope)
-
-    for point in data['series']:
-        assert point['total'] == point['cash'] + point['transfer'] + point['unknown']
-    assert sum(point['total'] for point in data['series']) == 17000
+    assert [row['amount'] for row in data['rows']] == [10000]
+    assert data['totals']['gross'] == 10000
 
 
 # --------------------------------------------------------------------------------------
-# C. Los dos reportes cuentan LA MISMA plata manual
+# C. Las dos capas cuentan LA MISMA plata
 # --------------------------------------------------------------------------------------
 
-def test_both_money_reports_agree_on_the_manual_total(scope, legacy_scenario):
-    """Cruce que habría cazado el bug incluso si solo uno de los dos módulos lo tuviera:
-    el bruto manual del reporte de ingresos y el total del reporte de pagos manuales son la
-    misma plata mirada desde dos pantallas, y un administrador va a comparar los dos números."""
+def test_the_two_layers_agree_on_every_manual_method(scope, legacy_scenario):
+    """Cruce que habría cazado el bug incluso si solo una de las dos capas lo tuviera.
+
+    El administrador llega a la capa 2 haciendo CLIC sobre la fila de la capa 1, así que los dos
+    números están literalmente uno detrás del otro en la pantalla: cualquier diferencia se lee
+    como que el reporte está roto. Y en `unknown` es donde la diferencia aparecería primero.
+    """
     revenue = build_revenue_report(scope)
-    manual = build_manual_payments_report(scope)
-    manual_gross_in_revenue = sum(
-        row['gross'] for row in revenue['by_method'] if row['method'] != 'mercadopago')
 
-    assert manual_gross_in_revenue == manual['totals']['total']
+    for row in revenue['by_method']:
+        drilldown = build_revenue_payments_report(scope, row['method'])
+        assert drilldown['totals']['gross'] == row['gross'], row['method']
+        assert drilldown['totals']['payments_count'] == row['payments_count'], row['method']
+        assert sum(r['amount'] for r in drilldown['rows']) == row['gross'], row['method']
 
 
 def test_the_unknown_method_is_accepted_by_both_endpoints(api_client, legacy_scenario, org):
@@ -199,9 +197,10 @@ def test_the_unknown_method_is_accepted_by_both_endpoints(api_client, legacy_sce
               'date_to': TODAY.isoformat(), 'method': METHOD_UNKNOWN}
 
     revenue = api_client.get(REVENUE_URL, params)
-    manual = api_client.get(MANUAL_URL, params)
+    drilldown = api_client.get(REVENUE_PAYMENTS_URL, params)
 
     assert revenue.status_code == 200
     assert revenue.data['totals']['gross'] == 7000
-    assert manual.status_code == 200
-    assert manual.data['totals']['unknown'] == 7000
+    assert drilldown.status_code == 200
+    assert drilldown.data['totals']['gross'] == 7000
+    assert drilldown.data['filters']['method_label'] == 'Sin método registrado'

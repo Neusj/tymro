@@ -13,9 +13,10 @@ from .views_payments import (
     PaymentWebhookView,
 )
 from .views_reports import (
-    ManualPaymentsReportView,
     OccupancyReportView,
     RetentionReportView,
+    RevenuePaymentDetailView,
+    RevenuePaymentsReportView,
     RevenueReportView,
     TrialConversionReportView,
 )
@@ -122,8 +123,19 @@ urlpatterns = [
     # mentiría sobre su alcance, y `payments/` además es la plomería del proveedor.
     # Solo GET. El export usa el MISMO endpoint con `?export=csv|xlsx`.
     path('reports/revenue/', RevenueReportView.as_view(), name='reports-revenue'),
-    path('reports/manual-payments/', ManualPaymentsReportView.as_view(),
-         name='reports-manual-payments'),
+    # Las dos capas de zoom del reporte de ingresos: el listado de los cobros de UN medio y la
+    # ficha de un pago. Cuelgan de `reports/revenue/` y no de una raíz propia porque son ese
+    # mismo reporte con más detalle -mismos totales, mismo permiso-, no otro recurso.
+    #
+    # El detalle usa `<str:...>` en los DOS segmentos a propósito, y no `<int:>`/`<uuid:>`: con
+    # converters, un id malformado no matchearía la ruta y saldría un 404 de URLconf, que dice
+    # "acá no hay nada" cuando lo cierto es "ese id está mal escrito". La view valida la forma y
+    # devuelve 400, y reserva el 404 para el id AJENO (anti-oráculo). Además `<int:>` igual deja
+    # pasar enteros fuera del rango de bigint, que es justo el que revienta con 500 en Postgres.
+    path('reports/revenue/payments/', RevenuePaymentsReportView.as_view(),
+         name='reports-revenue-payments'),
+    path('reports/revenue/payments/<str:kind>/<str:payment_id>/',
+         RevenuePaymentDetailView.as_view(), name='reports-revenue-payment-detail'),
     path('reports/occupancy/', OccupancyReportView.as_view(), name='reports-occupancy'),
     # P3.4 · parte 2: los dos reportes de PERSONAS (vencimientos/renovaciones y conversión de
     # la clase de prueba). Misma plomería que los tres de arriba, rutas planas por el mismo

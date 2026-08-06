@@ -1,13 +1,15 @@
 """P3.4 · Pieza 0 — el cimiento de la reportería: alcance, períodos, buckets y plomería HTTP.
 
-Los tres reportes (ingresos, pagos manuales, ocupación) tienen sus propios archivos de test.
-Acá se fija lo que COMPARTEN, y que por lo tanto ninguno de ellos puede aflojar por su
-cuenta: la aritmética de `ReportScope`, el relleno de buckets, y las guardas del único camino
-de entrada (`views_reports._report_scope`) — rol, rango, granularidad, formato de export y el
-404 anti-oráculo de la sucursal ajena.
+Cada reporte tiene su propio archivo de test. Acá se fija lo que COMPARTEN, y que por lo tanto
+ninguno de ellos puede aflojar por su cuenta: la aritmética de `ReportScope`, el relleno de
+buckets, y las guardas del único camino de entrada (`views_reports._report_scope`) — rol,
+rango, granularidad, formato de export y el 404 anti-oráculo de la sucursal ajena.
 
 La guarda de rol se prueba sobre LOS TRES endpoints en la misma tabla: es la clase de regla
-que se agrega bien en un endpoint y se olvida en el que se sumó después.
+que se agrega bien en un endpoint y se olvida en el que se sumó después. El tercero de la tabla
+era `GET /api/reports/manual-payments/`, que se borró al construir el drill-down de ingresos;
+su lugar lo toma la CAPA 2 de ese drill-down, que es la pantalla que lo reemplaza y el endpoint
+de reportería más nuevo — justamente el que más riesgo tiene de haberse saltado una guarda.
 """
 from datetime import date
 
@@ -15,14 +17,24 @@ import pytest
 
 from core.services import reports_base
 from core.services.reports_base import (GRANULARITY_DAY, GRANULARITY_MONTH, MAX_PERIOD_DAYS,
-                                        ReportScope, bucket_keys, pct_delta)
+                                        METHOD_CASH, ReportScope, bucket_keys, pct_delta)
 
 pytestmark = pytest.mark.django_db
 
 REVENUE_URL = '/api/reports/revenue/'
-MANUAL_URL = '/api/reports/manual-payments/'
+REVENUE_PAYMENTS_URL = '/api/reports/revenue/payments/'
 OCCUPANCY_URL = '/api/reports/occupancy/'
-ALL_URLS = (REVENUE_URL, MANUAL_URL, OCCUPANCY_URL)
+ALL_URLS = (REVENUE_URL, REVENUE_PAYMENTS_URL, OCCUPANCY_URL)
+
+#: Parámetros SIN LOS CUALES el endpoint no puede responder, por endpoint. Hoy solo el listado
+#: del drill-down tiene uno (`method` es obligatorio ahí: ese listado explica UNA fila de
+#: `by_method` y "todos los medios" no es una fila). Se inyectan en las guardas compartidas para
+#: que lo que se mida sea la guarda y no la falta del parámetro.
+REQUIRED_PARAMS = {REVENUE_PAYMENTS_URL: {'method': METHOD_CASH}}
+
+
+def _get(api_client, url, params=None):
+    return api_client.get(url, {**REQUIRED_PARAMS.get(url, {}), **(params or {})})
 
 
 def _scope(date_from, date_to, granularity=GRANULARITY_DAY, organization_id=1, branch=None):
@@ -118,7 +130,7 @@ def gym_admin(org_a, make_user):
 
 @pytest.mark.parametrize('url', ALL_URLS)
 def test_an_anonymous_request_is_rejected(api_client, url):
-    assert api_client.get(url).status_code == 401
+    assert _get(api_client, url).status_code == 401
 
 
 @pytest.mark.parametrize('url', ALL_URLS)
@@ -134,7 +146,7 @@ def test_only_gym_admin_can_read_any_report(api_client, org_a, make_user, url, r
     org = None if role == 'superadmin' else org_a
     api_client.force_authenticate(user=make_user('u', organization=org, role=role))
 
-    assert api_client.get(url).status_code == 403
+    assert _get(api_client, url).status_code == 403
 
 
 @pytest.mark.parametrize('url', ALL_URLS)
@@ -142,7 +154,7 @@ def test_a_gym_admin_gets_its_report(api_client, gym_admin, url):
     """Sin datos el reporte responde 200 con ceros, no 404 ni 500: un gimnasio nuevo tiene
     que poder abrir la pantalla."""
     api_client.force_authenticate(user=gym_admin)
-    resp = api_client.get(url)
+    resp = _get(api_client, url)
 
     assert resp.status_code == 200
     assert resp.data['period']['date_from']
@@ -159,7 +171,7 @@ def test_a_branch_from_another_organization_is_indistinguishable_from_a_missing_
     foreign = Branch.objects.create(organization=org_b, name='Sede ajena')
     api_client.force_authenticate(user=gym_admin)
 
-    assert api_client.get(url, {'branch_id': foreign.id}).status_code == 404
+    assert _get(api_client, url, {'branch_id': foreign.id}).status_code == 404
 
 
 @pytest.mark.parametrize('url', ALL_URLS)
@@ -167,7 +179,7 @@ def test_the_organization_never_travels_in_the_request(api_client, gym_admin, or
     """Un `organization_id` en el query string se IGNORA: la organización del reporte sale
     del actor y de ningún otro lugar (regla 1 de backend/CLAUDE.md, orden 8.3)."""
     api_client.force_authenticate(user=gym_admin)
-    resp = api_client.get(url, {'organization_id': org_b.id, 'organization': org_b.id})
+    resp = _get(api_client, url, {'organization_id': org_b.id, 'organization': org_b.id})
 
     assert resp.status_code == 200
 
@@ -176,14 +188,14 @@ def test_the_organization_never_travels_in_the_request(api_client, gym_admin, or
 def test_a_malformed_date_is_a_400(api_client, gym_admin, url):
     api_client.force_authenticate(user=gym_admin)
 
-    assert api_client.get(url, {'date_from': '03-07-2026'}).status_code == 400
-    assert api_client.get(url, {'date_to': 'ayer'}).status_code == 400
+    assert _get(api_client, url, {'date_from': '03-07-2026'}).status_code == 400
+    assert _get(api_client, url, {'date_to': 'ayer'}).status_code == 400
 
 
 @pytest.mark.parametrize('url', ALL_URLS)
 def test_an_inverted_range_is_a_400(api_client, gym_admin, url):
     api_client.force_authenticate(user=gym_admin)
-    resp = api_client.get(url, {'date_from': '2026-07-31', 'date_to': '2026-07-01'})
+    resp = _get(api_client, url, {'date_from': '2026-07-31', 'date_to': '2026-07-01'})
 
     assert resp.status_code == 400
 
@@ -193,14 +205,15 @@ def test_a_range_longer_than_the_cap_is_a_400(api_client, gym_admin, url):
     """El tope no es capricho: el peor caso de un reporte de 10 años recorre todo el histórico
     de pagos del tenant dentro de una request de gunicorn con `--timeout 30`."""
     api_client.force_authenticate(user=gym_admin)
-    resp = api_client.get(url, {'date_from': '2016-01-01', 'date_to': '2026-01-01'})
+    resp = _get(api_client, url, {'date_from': '2016-01-01', 'date_to': '2026-01-01'})
 
     assert resp.status_code == 400
     # Y el límite exacto sí pasa.
     from datetime import timedelta
     start = date(2026, 1, 1)
-    ok = api_client.get(url, {'date_from': start.isoformat(),
-                              'date_to': (start + timedelta(days=MAX_PERIOD_DAYS - 1)).isoformat()})
+    ok = _get(api_client, url,
+              {'date_from': start.isoformat(),
+               'date_to': (start + timedelta(days=MAX_PERIOD_DAYS - 1)).isoformat()})
     assert ok.status_code == 200
 
 
@@ -211,13 +224,13 @@ def test_a_date_before_the_floor_is_a_400_and_not_a_500(api_client, gym_admin, u
     500 en un endpoint de dinero. El piso lo corta antes, con un mensaje que dice qué está mal."""
     api_client.force_authenticate(user=gym_admin)
 
-    assert api_client.get(url, {'date_from': '0001-01-01',
-                                'date_to': '0001-01-01'}).status_code == 400
-    assert api_client.get(url, {'date_from': '1999-12-31',
-                                'date_to': '2000-01-01'}).status_code == 400
+    assert _get(api_client, url, {'date_from': '0001-01-01',
+                                  'date_to': '0001-01-01'}).status_code == 400
+    assert _get(api_client, url, {'date_from': '1999-12-31',
+                                  'date_to': '2000-01-01'}).status_code == 400
     # Y el piso exacto sí pasa.
-    assert api_client.get(url, {'date_from': '2000-01-01',
-                                'date_to': '2000-01-31'}).status_code == 200
+    assert _get(api_client, url, {'date_from': '2000-01-01',
+                                  'date_to': '2000-01-31'}).status_code == 200
 
 
 @pytest.mark.parametrize('url', ALL_URLS)
@@ -226,8 +239,8 @@ def test_an_unknown_granularity_is_a_400_and_not_a_silent_fallback(api_client, g
     nadie se enteraría."""
     api_client.force_authenticate(user=gym_admin)
 
-    assert api_client.get(url, {'granularity': 'week'}).status_code == 400
-    assert api_client.get(url, {'granularity': 'auto'}).status_code == 200
+    assert _get(api_client, url, {'granularity': 'week'}).status_code == 400
+    assert _get(api_client, url, {'granularity': 'auto'}).status_code == 200
 
 
 @pytest.mark.parametrize('url', ALL_URLS)
@@ -236,7 +249,7 @@ def test_an_unknown_export_format_is_a_400_and_not_a_csv(api_client, gym_admin, 
     plata que alguien va a pegar en una planilla."""
     api_client.force_authenticate(user=gym_admin)
 
-    assert api_client.get(url, {'export': 'pdf'}).status_code == 400
+    assert _get(api_client, url, {'export': 'pdf'}).status_code == 400
 
 
 @pytest.mark.parametrize('url', ALL_URLS)
@@ -248,7 +261,7 @@ def test_the_export_uses_the_same_scope_as_the_json(api_client, gym_admin, url, 
     """El export no es un endpoint aparte: mismo alcance, mismos datos. Si fueran dos
     caminos, el CSV podría divergir del gráfico que el administrador está mirando."""
     api_client.force_authenticate(user=gym_admin)
-    resp = api_client.get(url, {'export': fmt})
+    resp = _get(api_client, url, {'export': fmt})
 
     assert resp.status_code == 200
     assert content_type in resp['Content-Type']

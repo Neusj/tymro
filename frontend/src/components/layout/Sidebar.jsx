@@ -181,7 +181,6 @@ const navByRole = {
       icon: <ReportsIcon />,
       children: [
         { to: '/gym-admin/reports/revenue', label: 'Ingresos' },
-        { to: '/gym-admin/reports/manual-payments', label: 'Pagos manuales' },
         { to: '/gym-admin/reports/occupancy', label: 'Ocupación' },
         { to: '/gym-admin/reports/retention', label: 'Retención' },
         { to: '/gym-admin/reports/trial-conversion', label: 'Conversión de prueba' },

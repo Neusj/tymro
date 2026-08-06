@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { branchesApi, downloadReportFile, reportsApi } from '../api/client'
 import DashboardHeader from '../components/DashboardHeader'
 import StatCard from '../components/StatCard'
@@ -32,16 +33,36 @@ function formatDeltaPct(value) {
 }
 
 export default function GymAdminRevenueReportPage() {
-  const [dateFrom, setDateFrom] = useState(() => defaultReportPeriod().dateFrom)
-  const [dateTo, setDateTo] = useState(() => defaultReportPeriod().dateTo)
-  const [branchId, setBranchId] = useState('')
-  const [method, setMethod] = useState('')
+  // Filtros en la URL (P3.5), no en useState suelto: la capa 2 (detalle de un método) es
+  // un nivel más adentro de ESTA misma pantalla, y el botón "atrás" del navegador tiene
+  // que devolver al admin al mismo período/sucursal que tenía, no resetear al mes en
+  // curso. `replace: true` al escribir para no ensuciar el historial con una entrada por
+  // cada tecla tipeada en un <input type="date">.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const defaults = defaultReportPeriod()
+  const dateFrom = searchParams.get('date_from') || defaults.dateFrom
+  const dateTo = searchParams.get('date_to') || defaults.dateTo
+  const branchId = searchParams.get('branch_id') || ''
+  const method = searchParams.get('method') || ''
+
   const [branches, setBranches] = useState([])
 
   const [report, setReport] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [exporting, setExporting] = useState('')
+
+  const setFilter = (key, value) => {
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+        if (value) next.set(key, value)
+        else next.delete(key)
+        return next
+      },
+      { replace: true },
+    )
+  }
 
   const buildParams = () => buildReportParams({ dateFrom, dateTo, branchId, extra: { method } })
 
@@ -103,11 +124,25 @@ export default function GymAdminRevenueReportPage() {
   const filters = report?.filters || {}
   const netDeltaPct = report?.comparison?.net_delta_pct
 
+  // Los mismos date_from/date_to/branch_id que esta pantalla tiene puestos viajan a la
+  // capa 2 (el método va en el PATH, no en la query — ahí ya no es un filtro, es la
+  // pantalla). Sin esto, entrar al detalle de un método y volver perdería el filtro.
+  const carryQuery = new URLSearchParams()
+  if (dateFrom) carryQuery.set('date_from', dateFrom)
+  if (dateTo) carryQuery.set('date_to', dateTo)
+  if (branchId) carryQuery.set('branch_id', branchId)
+  const carryQueryString = carryQuery.toString()
+
   const barItems = byMethod.map((row) => ({
     key: row.method,
     label: row.label || row.method,
     value: Number(row.net) || 0,
     hint: `Bruto ${clp(row.gross)} · Devoluciones ${clp(row.refunds)}`,
+    // Fila clickeable → capa 2 (detalle de ESE método). HorizontalBarChart la renderiza
+    // como <Link> real (foco de teclado + aria-label) en vez del <div> decorativo de
+    // siempre; el resto de los consumidores del componente (Ocupación) no pasan `href`
+    // y no cambian en nada.
+    href: `/gym-admin/reports/revenue/${row.method}${carryQueryString ? `?${carryQueryString}` : ''}`,
   }))
 
   return (
@@ -125,15 +160,15 @@ export default function GymAdminRevenueReportPage() {
       <ReportFilterBar
         dateFrom={dateFrom}
         dateTo={dateTo}
-        onDateFromChange={setDateFrom}
-        onDateToChange={setDateTo}
+        onDateFromChange={(value) => setFilter('date_from', value)}
+        onDateToChange={(value) => setFilter('date_to', value)}
         branches={branches}
         branchId={branchId}
-        onBranchChange={setBranchId}
+        onBranchChange={(value) => setFilter('branch_id', value)}
         extraFilter={{
           label: 'Método',
           value: method,
-          onChange: setMethod,
+          onChange: (value) => setFilter('method', value),
           options: METHOD_OPTIONS,
           allLabel: 'Todos los métodos',
         }}
@@ -190,6 +225,7 @@ export default function GymAdminRevenueReportPage() {
 
       <section className="card-surface space-y-3 p-4 sm:p-5">
         <h2 className="text-sm font-semibold text-brand-white">Por método de pago</h2>
+        <p className="text-xs text-brand-muted">Tocá un método para ver sus cobros y devoluciones uno por uno.</p>
         {loading ? (
           <p className="py-6 text-center text-sm text-brand-muted">Cargando…</p>
         ) : (

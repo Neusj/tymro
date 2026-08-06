@@ -1,5 +1,5 @@
-import { render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { MemoryRouter, useLocation } from 'react-router-dom'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('../api/client', () => ({
@@ -11,10 +11,19 @@ vi.mock('../api/client', () => ({
 import { branchesApi, reportsApi } from '../api/client'
 import GymAdminRevenueReportPage from './GymAdminRevenueReportPage'
 
-const renderPage = () =>
+// Expone la URL actual del MemoryRouter para verificar que los filtros se escriben en el
+// query string (P3.5: capa 1 pasó de useState suelto a useSearchParams) sin depender de
+// window.location, que MemoryRouter no toca.
+function LocationDisplay() {
+  const location = useLocation()
+  return <div data-testid="location">{location.pathname}{location.search}</div>
+}
+
+const renderPage = (initialEntry = '/gym-admin/reports/revenue') =>
   render(
-    <MemoryRouter initialEntries={['/gym-admin/reports/revenue']}>
+    <MemoryRouter initialEntries={[initialEntry]}>
       <GymAdminRevenueReportPage />
+      <LocationDisplay />
     </MemoryRouter>,
   )
 
@@ -96,5 +105,47 @@ describe('GymAdminRevenueReportPage', () => {
     renderPage()
     await waitFor(() => expect(reportsApi.revenue).toHaveBeenCalled())
     expect((await screen.findAllByText('Bruto')).length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('cada fila de método es un link real (no un <div>) con aria-label propio y navega a la capa 2 propagando período y sucursal', async () => {
+    reportsApi.revenue.mockResolvedValue(baseReport())
+    renderPage('/gym-admin/reports/revenue?date_from=2026-07-01&date_to=2026-07-31&branch_id=2')
+
+    const link = await screen.findByRole('link', { name: /MercadoPago/ })
+    // El destino lleva el método en el PATH y el período+sucursal en la query — el
+    // filtro "método" de la capa 1 no viaja porque en la capa 2 ya no es un filtro.
+    expect(link).toHaveAttribute(
+      'href',
+      '/gym-admin/reports/revenue/mercadopago?date_from=2026-07-01&date_to=2026-07-31&branch_id=2',
+    )
+
+    fireEvent.click(link)
+    expect(screen.getByTestId('location').textContent).toBe(
+      '/gym-admin/reports/revenue/mercadopago?date_from=2026-07-01&date_to=2026-07-31&branch_id=2',
+    )
+  })
+
+  it('lee el período/sucursal/método inicial desde el query string (no siempre el mes en curso)', async () => {
+    reportsApi.revenue.mockResolvedValue(baseReport())
+    renderPage('/gym-admin/reports/revenue?date_from=2026-01-01&date_to=2026-01-31&branch_id=9&method=cash')
+
+    await waitFor(() => expect(reportsApi.revenue).toHaveBeenCalled())
+    const [params] = reportsApi.revenue.mock.calls[0]
+    expect(params).toMatchObject({ date_from: '2026-01-01', date_to: '2026-01-31', branch_id: '9', method: 'cash' })
+  })
+
+  it('cambiar un filtro actualiza el query string con replace (no acumula historial)', async () => {
+    reportsApi.revenue.mockResolvedValue(baseReport())
+    branchesApi.list.mockResolvedValue([{ id: 3, name: 'Sede Norte' }])
+    renderPage('/gym-admin/reports/revenue?date_from=2026-07-01&date_to=2026-07-31')
+
+    const branchSelect = await screen.findByLabelText('Sucursal')
+    fireEvent.change(branchSelect, { target: { value: '3' } })
+
+    await waitFor(() =>
+      expect(screen.getByTestId('location').textContent).toBe(
+        '/gym-admin/reports/revenue?date_from=2026-07-01&date_to=2026-07-31&branch_id=3',
+      ),
+    )
   })
 })

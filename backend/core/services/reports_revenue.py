@@ -58,6 +58,15 @@ antes de restar dos reportes.
 TODO SALE DE NUESTRA BASE. Ninguna consulta al proveedor de pago: lo que se suma es lo que el
 webhook escribió (`services/payments.py`). Un reporte que consultara MercadoPago en vivo
 dependería de su disponibilidad y devolvería números distintos en dos corridas seguidas.
+
+ESTE MÓDULO ES LA CAPA 1 DE UN DRILL-DOWN DE TRES
+La capa 2 (el listado de los pagos de UN método) y la capa 3 (el detalle de un pago) viven en
+`reports_revenue_detail.py`, y consumen de acá `method_querysets` y `method_totals`. Esas dos
+funciones son públicas justo por eso: son la ÚNICA definición de qué es el bruto y qué son las
+devoluciones de cada método, y de cómo se agregan. El listado que abre el administrador al
+hacer clic sobre una fila de `by_method` tiene que sumar exactamente esa fila; si cada capa
+armara su propio queryset, el día que alguien cambie la definición del bruto una de las dos se
+quedaría atrás y el drill-down mostraría un total distinto al de la pantalla anterior.
 """
 from decimal import Decimal
 
@@ -72,7 +81,21 @@ from .reports_base import (GRANULARITY_MONTH, METHOD_LABELS, METHOD_MERCADOPAGO,
 #: Etiqueta de las filas del export que no son de un método puntual sino del total.
 ALL_METHODS_LABEL = 'Todos los métodos'
 
+#: Columna por la que se data una DEVOLUCIÓN. Una sola, y solo la tienen los cobros en línea.
+REFUNDS_DATE_FIELD = 'refunded_at'
+
 _ZERO = (Decimal('0'), 0)
+
+
+def gross_date_field(method):
+    """Columna por la que se DATA el cobro de cada método.
+
+    Existe como función y no como literal repetido porque tres cosas distintas tienen que
+    usar la misma: el filtro de rango, el `Trunc` de la serie y el orden del listado de la
+    capa 2. Si el listado ordenara por otra columna que la que lo filtra, la primera página
+    no sería la de los cobros más recientes del período.
+    """
+    return 'collected_at' if method == METHOD_MERCADOPAGO else 'recorded_at'
 
 
 def _trunc(field, granularity):
@@ -124,42 +147,98 @@ def _by_bucket(queryset, *, field, amount, scope):
     }
 
 
-def _method_data(scope, method):
-    """`(fila de by_method, {bucket: {gross, refunds, net}})` para UN método.
+def method_querysets(scope, method):
+    """`(bruto, devoluciones)` de UN método: los dos querysets que DEFINEN su plata.
 
-    Un único lugar donde se define qué es el bruto y qué las devoluciones de cada método: el
-    período anterior y el filtro por método reutilizan esta misma función, así que no pueden
-    divergir del período actual (un delta calculado con dos definiciones distintas compararía
-    manzanas con peras).
+    FUENTE ÚNICA de esa definición, y por eso es pública. La consume la capa 1 de acá abajo
+    (`_method_data`, que agrupa por bucket) y también el drill-down de
+    `reports_revenue_detail.py` (que lista las filas una por una). Con un queryset por capa,
+    cambiar mañana qué cuenta como bruto arreglaría una pantalla y dejaría la otra informando
+    otro número — y las dos están a un clic de distancia.
+
+    Los dos vienen YA acotados por organización, por sede y por el rango del período, cada uno
+    por SU columna de fecha: el bruto por la del cobro (`gross_date_field`) y las devoluciones
+    por `refunded_at`. Base caja, ver el encabezado del módulo.
+
+    `refunds` es **None** —no un queryset vacío— para los métodos manuales: no existe
+    mecanismo de devolución manual (`ManualPayment` no tiene anulación ni monto devuelto), así
+    que ahí no hay "cero devoluciones encontradas" sino "esta pregunta no aplica". El caller
+    publica igual la columna en 0; lo que no puede hacer es simular una consulta que no
+    existe.
     """
     if method == METHOD_MERCADOPAGO:
         # SIN filtro por `provider`: 'mercadopago' es la etiqueta del cobro EN LÍNEA, y el
         # proveedor es configurable. Si mañana entra otro, su plata es ingreso en línea igual y
         # no puede desaparecer del reporte por no llamarse así.
         base = _org_scoped(PaymentTransaction, scope)
-        gross = _by_bucket(_in_range(base, scope, 'collected_at'),
-                           field='collected_at', amount='amount', scope=scope)
+        gross = _in_range(base, scope, gross_date_field(method))
         # `collected_at__isnull=False`: ver el encabezado del módulo. Sin este filtro el
         # reporte restaría devoluciones de cobros que nunca sumó.
-        refunds = _by_bucket(
-            _in_range(base.filter(collected_at__isnull=False), scope, 'refunded_at'),
-            field='refunded_at', amount='refunded_amount', scope=scope)
-    else:
-        # `manual_method_filter` traduce el medio del cable al valor de la columna, y el único
-        # caso no obvio es `'unknown'` → `''`. NO se puede filtrar solo por `cash`/`transfer`:
-        # las filas cobradas antes de P3.2 tienen `method=''` (su migración no hizo backfill
-        # porque no se sabe qué fueron) y son plata REAL que ya está en producción. Dejarlas
-        # fuera del bruto haría que el reporte informe menos de lo que el gimnasio facturó.
-        base = _org_scoped(ManualPayment, scope).filter(
-            method=manual_method_filter(method))
-        gross = _by_bucket(_in_range(base, scope, 'recorded_at'),
-                           field='recorded_at', amount='amount', scope=scope)
-        refunds = {}    # no hay devolución manual; se publica en 0, no se omite
+        refunds = _in_range(base.filter(collected_at__isnull=False), scope,
+                            REFUNDS_DATE_FIELD)
+        return gross, refunds
 
-    # Redondeo al FINAL y una sola vez, sobre el monto ya sumado por el motor: redondear cada
-    # pago y después sumar acumularía el error de cada fila. Y el neto se calcula restando los
-    # ENTEROS ya publicados (no los Decimal), para que la resta que muestra el front cuadre
-    # exactamente con los dos números de al lado.
+    # `manual_method_filter` traduce el medio del cable al valor de la columna, y el único
+    # caso no obvio es `'unknown'` → `''`. NO se puede filtrar solo por `cash`/`transfer`:
+    # las filas cobradas antes de P3.2 tienen `method=''` (su migración no hizo backfill
+    # porque no se sabe qué fueron) y son plata REAL que ya está en producción. Dejarlas
+    # fuera del bruto haría que el reporte informe menos de lo que el gimnasio facturó.
+    base = _org_scoped(ManualPayment, scope).filter(method=manual_method_filter(method))
+    return _in_range(base, scope, gross_date_field(method)), None
+
+
+def _aggregate(queryset, amount_field):
+    """`(monto entero, cantidad de filas)` de un queryset entero, o `(0, 0)` si es None.
+
+    UN SOLO redondeo, al final, sobre el monto que ya sumó el motor: redondear cada pago y
+    después sumar acumularía el error de cada fila.
+    """
+    if queryset is None:
+        return 0, 0
+    agg = queryset.aggregate(total=Sum(amount_field), rows=Count('id'))
+    return int(round(agg['total'] or Decimal('0'))), agg['rows']
+
+
+def method_totals(gross_queryset, refunds_queryset):
+    """Los cinco números publicados de un método, a partir de sus dos querysets.
+
+    Pública y compartida por el MISMO motivo que `method_querysets`: la fila de `by_method`
+    (capa 1) y los `totals` del listado (capa 2) salen literalmente de esta función, así que
+    no pueden diferir ni por la definición ni por el redondeo. Es la garantía de que el total
+    del drill-down es el mismo número sobre el que el administrador hizo clic.
+
+    El neto se calcula restando los ENTEROS ya publicados (no los Decimal), para que la resta
+    que muestra el front cuadre exactamente con los dos números de al lado.
+    """
+    gross, payments_count = _aggregate(gross_queryset, 'amount')
+    refunds, refunds_count = _aggregate(refunds_queryset, 'refunded_amount')
+    return {
+        'gross': gross,
+        'refunds': refunds,
+        'net': gross - refunds,
+        'payments_count': payments_count,
+        'refunds_count': refunds_count,
+    }
+
+
+def _method_data(scope, method):
+    """`(fila de by_method, {bucket: {gross, refunds, net}})` para UN método.
+
+    El período anterior y el filtro por método reutilizan esta misma función, así que no
+    pueden divergir del período actual (un delta calculado con dos definiciones distintas
+    compararía manzanas con peras).
+    """
+    gross_queryset, refunds_queryset = method_querysets(scope, method)
+    gross = _by_bucket(gross_queryset, field=gross_date_field(method), amount='amount',
+                       scope=scope)
+    # `refunds_queryset is None` = método sin mecanismo de devolución: la serie publica 0 en
+    # todos los buckets, no omite la columna.
+    refunds = ({} if refunds_queryset is None
+               else _by_bucket(refunds_queryset, field=REFUNDS_DATE_FIELD,
+                               amount='refunded_amount', scope=scope))
+
+    # Mismo redondeo que `method_totals` y por el mismo motivo: una vez, al final, sobre el
+    # monto ya sumado por el motor.
     series = {}
     for key in bucket_keys(scope):
         bucket_gross = int(round(gross.get(key, _ZERO)[0]))
@@ -170,22 +249,15 @@ def _method_data(scope, method):
             'net': bucket_gross - bucket_refunds,
         }
 
-    # El total se suma sobre TODAS las filas que devolvió la consulta y la serie solo sobre
-    # los buckets del rango. Coinciden porque el filtro (`__date__gte/lte`) y el `Trunc`
-    # convierten a la MISMA zona, así que ningún pago del rango puede caer en un bucket que
-    # la serie no tenga. Si alguna vez divergieran, el total sería el completo y a la serie le
-    # faltaría un punto: el error se ve en el gráfico y no en la plata.
-    total_gross = int(round(sum((amount for amount, _ in gross.values()), Decimal('0'))))
-    total_refunds = int(round(sum((amount for amount, _ in refunds.values()), Decimal('0'))))
-    row = {
-        'method': method,
-        'label': METHOD_LABELS[method],
-        'gross': total_gross,
-        'refunds': total_refunds,
-        'net': total_gross - total_refunds,
-        'payments_count': sum(rows for _, rows in gross.values()),
-        'refunds_count': sum(rows for _, rows in refunds.values()),
-    }
+    # Los totales NO se suman desde los buckets de acá arriba aunque el resultado sea el mismo:
+    # salen de `method_totals`, la función que también usa la capa 2. Cuesta dos agregaciones
+    # más por método —consultas indexadas por (organización, fecha)— y a cambio hace
+    # ESTRUCTURALMENTE imposible que la fila de `by_method` y el listado que se abre al
+    # clickearla publiquen totales distintos. La serie sigue saliendo de los buckets, y suma lo
+    # mismo porque el filtro (`__date__gte/lte`) y el `Trunc` convierten a la MISMA zona: ningún
+    # pago del rango puede caer en un bucket que la serie no tenga.
+    row = {'method': method, 'label': METHOD_LABELS[method]}
+    row.update(method_totals(gross_queryset, refunds_queryset))
     return row, series
 
 

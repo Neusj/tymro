@@ -184,7 +184,7 @@ from .reports_base import bucket_key, bucket_keys, pct_delta, points_delta, rate
 # RENOVACIÓN. Ver la decisión 3 del docstring del módulo. Vive como global de módulo y no como
 # default de parámetro para que un test lo pueda mover con
 # `monkeypatch.setattr(reports_retention, 'RENEWAL_GRACE_DAYS', N)` sin fabricar meses de
-# historia, igual que `reports_manual.MAX_ROWS`.
+# historia, igual que `reports_revenue_detail.MAX_ROWS`.
 RENEWAL_GRACE_DAYS = 30
 
 # Ventana del KPI forward-looking "por vencer", en días desde HOY. Ver la decisión 5.

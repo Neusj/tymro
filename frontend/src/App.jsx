@@ -24,7 +24,8 @@ import GymAdminPlanMembershipsPage from './pages/GymAdminPlanMembershipsPage'
 import GymAdminPaymentsSettingsPage from './pages/GymAdminPaymentsSettingsPage'
 import GymAdminPaymentsTransactionsPage from './pages/GymAdminPaymentsTransactionsPage'
 import GymAdminRevenueReportPage from './pages/GymAdminRevenueReportPage'
-import GymAdminManualPaymentsReportPage from './pages/GymAdminManualPaymentsReportPage'
+import GymAdminRevenueMethodPage from './pages/GymAdminRevenueMethodPage'
+import GymAdminPaymentDetailPage from './pages/GymAdminPaymentDetailPage'
 import GymAdminOccupancyReportPage from './pages/GymAdminOccupancyReportPage'
 import GymAdminRetentionReportPage from './pages/GymAdminRetentionReportPage'
 import GymAdminTrialConversionReportPage from './pages/GymAdminTrialConversionReportPage'
@@ -323,10 +324,12 @@ export default function App() {
           </ProtectedRoute>
         }
       />
-      {/* Reportería P3.4: SOLO gym_admin (manager/monitor/teacher/student/superadmin no
+      {/* Reportería P3.4/P3.5: SOLO gym_admin (manager/monitor/teacher/student/superadmin no
           entran; el backend responde 403 a los demás roles, pero el front tampoco debe
           ofrecerles la puerta — por eso allowedRoles no incluye 'manager' ni 'monitor'
-          como sí hacen la mayoría de las rutas /gym-admin/* de arriba). */}
+          como sí hacen la mayoría de las rutas /gym-admin/* de arriba). Mismo gate exacto
+          para las capas 2 y 3 del drilldown de Ingresos: no son pantallas nuevas de
+          "otro" reporte, son la misma pantalla de Ingresos, un nivel más adentro. */}
       <Route
         path="/gym-admin/reports/revenue"
         element={
@@ -337,12 +340,29 @@ export default function App() {
           </ProtectedRoute>
         }
       />
+      {/* Capa 2 (detalle de un método): 1 solo segmento después de /revenue, ej.
+          /revenue/mercadopago. Capa 3 (detalle de un pago) es la ruta de abajo, con 2
+          segmentos, ej. /revenue/mercadopago/<uuid>. 'mercadopago' es a la vez un
+          `method` válido acá y un `kind` válido allá, pero React Router no ambigua por
+          NOMBRE de segmento sino por CANTIDAD: una URL con un segmento después de
+          /revenue solo calza contra :method, una con dos solo contra :kind/:id. Por eso
+          no hace falta /revenue/method/:method vs /revenue/payment/:kind/:id. */}
       <Route
-        path="/gym-admin/reports/manual-payments"
+        path="/gym-admin/reports/revenue/:method"
         element={
           <ProtectedRoute allowedRoles={['gym_admin']}>
             <ShellRoute>
-              <GymAdminManualPaymentsReportPage />
+              <GymAdminRevenueMethodPage />
+            </ShellRoute>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/gym-admin/reports/revenue/:kind/:id"
+        element={
+          <ProtectedRoute allowedRoles={['gym_admin']}>
+            <ShellRoute>
+              <GymAdminPaymentDetailPage />
             </ShellRoute>
           </ProtectedRoute>
         }
