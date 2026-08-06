@@ -23,14 +23,36 @@ La suite son **1302 tests** y en serie tarda **~14 min** contra Postgres. Hay do
 rápidos, **ninguno activo por defecto**: `python -m pytest` a secas sigue siendo la suite
 completa en serie.
 
-**Fijar siempre `DATABASE_URL` al Postgres de verificación** (`tymro-pg-verify`): correr a
-veces contra SQLite y a veces contra Postgres cambia el resultado de tests sensibles al
-motor, y testmon guarda un mapa único que se ensucia si alternás.
+### ⚠️ La suite corre SIEMPRE contra Postgres — SQLite está descartado
+
+**No hay que exportar nada:** `tymro/settings_test.py` ya apunta a `tymro-pg-verify`
+(`postgresql://tymro:tymro@127.0.0.1:55432/tymro`) por defecto. **El fallback a SQLite está
+deliberadamente cerrado para los tests.**
+
+Por qué: producción es Postgres y hay tests de esta suite cuyo resultado **depende del
+motor**. El caso canónico es el tope de `student_plan` en `ManualPaymentCreateSerializer`,
+que existe porque un `filter(pk=...)` fuera del rango de bigint **revienta con 500 en
+Postgres y en SQLite pasa sin chistar**. Una suite verde en SQLite NO es evidencia de que la
+rama esté sana. Además `--testmon` guarda un único mapa test→archivos por máquina, así que
+alternar de motor lo ensucia y lo hace subseleccionar en silencio.
+
+`settings_test.py` tiene dos guardas, y **cualquiera de las dos aborta la suite antes de
+correr** con un mensaje que empieza en `Postgres no disponible:`:
+
+1. **el motor resuelto no es Postgres** (cayó al fallback de SQLite, o alguien exportó un
+   `DATABASE_URL` que no es Postgres);
+2. **Postgres está configurado pero no responde** en su host/puerto (el modo de fallo real:
+   el contenedor parado). Es un socket con timeout de 3 s, así que en vez de un
+   `OperationalError` críptico en medio de la creación de las bases de test —multiplicado por
+   worker con `-n auto`— sale una sola línea legible.
+
+Si aparece ese error, levantar el contenedor: `docker start tymro-pg-verify`. Para apuntar a
+otro Postgres, exportar `DATABASE_URL` (se respeta; lo único que no se acepta es que no haya
+ninguno). El fallback a SQLite de `settings.py` sigue vivo para `runserver` en dev: el que
+está cerrado es el de los **tests**.
 
 ```bash
 cd backend
-$env:DATABASE_URL='postgresql://tymro:tymro@127.0.0.1:55432/tymro'   # bash: export DATABASE_URL=...
-
 python -m pytest --testmon    # CICLO NORMAL: solo los tests que toca tu cambio
 python -m pytest -n auto      # GATE PRE-DEPLOY: suite completa, 1 proceso por CPU
 ```
@@ -111,7 +133,8 @@ python -m pytest -n auto      # GATE PRE-DEPLOY: suite completa, 1 proceso por C
 
 `SECRET_KEY`, `DJANGO_DEBUG`/`DEBUG`, `ALLOWED_HOSTS`, `DATABASE_URL` (o `POSTGRES_DB/USER/PASSWORD/HOST/PORT`), `SQLITE_DB_NAME`, `CORS_ALLOW_ALL_ORIGINS`, `CORS_ALLOWED_ORIGINS`, `CSRF_TRUSTED_ORIGINS`, `BACKEND_PORT`, `STUDENT_CANCEL_DEADLINE_HOURS`, `STUDENT_RECURRING_CHANGE_DEADLINE_HOURS`.
 
-- DB: SQLite en dev, PostgreSQL en producción.
+- DB: SQLite en dev (`runserver`), PostgreSQL en producción. **Los tests son SIEMPRE
+  PostgreSQL** — ver § Tests; `settings_test.py` fuerza `tymro-pg-verify` y falla si no está.
 
 ## ⚠️ Advertencias (estado actual del repo)
 
