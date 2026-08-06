@@ -15,7 +15,9 @@ from .views_payments import (
 from .views_reports import (
     ManualPaymentsReportView,
     OccupancyReportView,
+    RetentionReportView,
     RevenueReportView,
+    TrialConversionReportView,
 )
 from .views import (
     AdvanceClassWindowsView,
@@ -123,5 +125,11 @@ urlpatterns = [
     path('reports/manual-payments/', ManualPaymentsReportView.as_view(),
          name='reports-manual-payments'),
     path('reports/occupancy/', OccupancyReportView.as_view(), name='reports-occupancy'),
+    # P3.4 · parte 2: los dos reportes de PERSONAS (vencimientos/renovaciones y conversión de
+    # la clase de prueba). Misma plomería que los tres de arriba, rutas planas por el mismo
+    # motivo.
+    path('reports/retention/', RetentionReportView.as_view(), name='reports-retention'),
+    path('reports/trial-conversion/', TrialConversionReportView.as_view(),
+         name='reports-trial-conversion'),
     path('', include(router.urls)),
 ]

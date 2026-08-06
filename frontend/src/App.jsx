@@ -26,6 +26,8 @@ import GymAdminPaymentsTransactionsPage from './pages/GymAdminPaymentsTransactio
 import GymAdminRevenueReportPage from './pages/GymAdminRevenueReportPage'
 import GymAdminManualPaymentsReportPage from './pages/GymAdminManualPaymentsReportPage'
 import GymAdminOccupancyReportPage from './pages/GymAdminOccupancyReportPage'
+import GymAdminRetentionReportPage from './pages/GymAdminRetentionReportPage'
+import GymAdminTrialConversionReportPage from './pages/GymAdminTrialConversionReportPage'
 import StudentBuyPlanPage from './pages/StudentBuyPlanPage'
 import PaymentResultPage from './pages/PaymentResultPage'
 import LoginPage from './pages/LoginPage'
@@ -351,6 +353,26 @@ export default function App() {
           <ProtectedRoute allowedRoles={['gym_admin']}>
             <ShellRoute>
               <GymAdminOccupancyReportPage />
+            </ShellRoute>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/gym-admin/reports/retention"
+        element={
+          <ProtectedRoute allowedRoles={['gym_admin']}>
+            <ShellRoute>
+              <GymAdminRetentionReportPage />
+            </ShellRoute>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/gym-admin/reports/trial-conversion"
+        element={
+          <ProtectedRoute allowedRoles={['gym_admin']}>
+            <ShellRoute>
+              <GymAdminTrialConversionReportPage />
             </ShellRoute>
           </ProtectedRoute>
         }

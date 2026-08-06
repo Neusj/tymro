@@ -769,6 +769,17 @@ export const reportsApi = {
     const { data } = await api.get('/reports/occupancy/', { params })
     return data
   },
+  // P3.4 parte 2: mismo contrato de query params que los tres de arriba (date_from,
+  // date_to, branch_id, granularity, export), más el filtro propio de cada uno
+  // (plan_id en retención; trial-conversion no tiene filtro propio, solo período+sucursal).
+  retention: async (params = {}) => {
+    const { data } = await api.get('/reports/retention/', { params })
+    return data
+  },
+  trialConversion: async (params = {}) => {
+    const { data } = await api.get('/reports/trial-conversion/', { params })
+    return data
+  },
   exportRevenue: async (params = {}, format = 'csv') => {
     const response = await api.get('/reports/revenue/', {
       params: { ...params, export: format },
@@ -785,6 +796,20 @@ export const reportsApi = {
   },
   exportOccupancy: async (params = {}, format = 'csv') => {
     const response = await api.get('/reports/occupancy/', {
+      params: { ...params, export: format },
+      responseType: 'blob',
+    })
+    return response
+  },
+  exportRetention: async (params = {}, format = 'csv') => {
+    const response = await api.get('/reports/retention/', {
+      params: { ...params, export: format },
+      responseType: 'blob',
+    })
+    return response
+  },
+  exportTrialConversion: async (params = {}, format = 'csv') => {
+    const response = await api.get('/reports/trial-conversion/', {
       params: { ...params, export: format },
       responseType: 'blob',
     })

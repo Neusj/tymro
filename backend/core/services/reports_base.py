@@ -199,6 +199,37 @@ def pct_delta(current, previous):
     return round((current - previous) / previous * 100, 1)
 
 
+def rate_pct(numerator, denominator):
+    """Tasa en % con un decimal, o ``None`` si el denominador es 0.
+
+    FUENTE ÚNICA de las tasas de los reportes de RETENCIÓN y CONVERSIÓN (P3.4 parte 2), que
+    la necesitan idéntica: cada uno con su copia es como divergen dos mitades de la misma
+    feature sin que nada lo detecte.
+
+    ``None`` y NO ``0.0`` cuando no hay denominador. "0 % de renovación" sobre cero
+    vencimientos —o "0 % de conversión" sobre cero pruebas— es una afirmación FALSA: el
+    gimnasio no falló, no hubo universo. Mismo criterio que `pct_delta`, y deliberadamente
+    DISTINTO del `_rate` de `reports_occupancy`: allá el 0 sí significa algo ("no hubo cupo
+    que llenar", una oferta real sin plazas declaradas).
+    """
+    if not denominator:
+        return None
+    return round(numerator / denominator * 100, 1)
+
+
+def points_delta(current, previous):
+    """Diferencia en PUNTOS PORCENTUALES entre dos tasas, o ``None`` si falta alguna.
+
+    Para comparar TASAS entre períodos no se usa `pct_delta`: la variación porcentual de un
+    porcentaje ("la conversión creció 12 %" cuando pasó de 50 % a 56 %) es un número que
+    nadie lee bien y que se confunde con la tasa misma. Para los CONTEOS sí se usa
+    `pct_delta`, donde el % significa lo que parece.
+    """
+    if current is None or previous is None:
+        return None
+    return round(current - previous, 1)
+
+
 # --------------------------------------------------------------------------------------
 # Export. Mismo patrón que `TeacherPaymentRecordViewSet.summary_export` (views.py): el
 # formato viaja en `fmt` y NUNCA en `format`, que DRF reserva para negociación de contenido.

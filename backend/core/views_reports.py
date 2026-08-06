@@ -1,6 +1,6 @@
 """APIViews de reportería (P3.4). Split de views.py por tamaño, igual que `views_payments.py`.
 
-TRES REPORTES, UN SOLO CAMINO DE ENTRADA. Todos entran por `_report_scope`, que es el único
+CINCO REPORTES, UN SOLO CAMINO DE ENTRADA. Todos entran por `_report_scope`, que es el único
 lugar donde se resuelve QUIÉN pregunta y SOBRE QUÉ, en este orden (orden 8.3):
 
 1. `ReportPermission` — solo `gym_admin` con organización. Cualquier otro rol: 403.
@@ -11,10 +11,17 @@ lugar donde se resuelve QUIÉN pregunta y SOBRE QUÉ, en este orden (orden 8.3):
 NINGÚN REPORTE PUEDE CRUZAR ORGANIZACIÓN porque la organización no es un parámetro: no hay
 `organization_id` en el query string de ninguno de estos endpoints. Una sede ajena da 404
 (anti-oráculo, mismo criterio que `views_payments._branch_scope`) y por lo tanto tampoco es
-un camino para leer datos de otro tenant.
+un camino para leer datos de otro tenant. El mismo criterio cubre el `plan_id` propio del
+reporte de retención: se resuelve con `_scoped_id`, igual que `discipline_id` en ocupación.
 
 TODA la plata sale de NUESTRA base. Ningún reporte consulta al proveedor de pago en vivo: lo
 que el reporte suma es lo que el webhook escribió (ver `services/payments.py`).
+
+Los cinco: ingresos y pagos manuales (plata), ocupación (oferta de clases), y retención +
+conversión de prueba (P3.4 · parte 2), los dos reportes de PERSONAS: cuántas membresías se
+renuevan y cuántos prospectos que probaron una clase terminan comprando. Comparten la misma
+plomería (`_ReportView`, `ReportScope`, export CSV/XLSX) pero cada uno arma su propia consulta
+en su `services/reports_*.py`.
 """
 from datetime import date, datetime
 
@@ -26,7 +33,7 @@ from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
-from .models import Branch, Discipline
+from .models import Branch, Discipline, Plan
 from .permissions import ReportPermission
 from .services import reports_base
 from .services.reports_base import (MANUAL_METHODS, MAX_PERIOD_DAYS, REVENUE_METHODS,
@@ -34,7 +41,10 @@ from .services.reports_base import (MANUAL_METHODS, MAX_PERIOD_DAYS, REVENUE_MET
 from .services.reports_manual import (build_manual_payments_report,
                                       manual_payments_export_spec)
 from .services.reports_occupancy import build_occupancy_report, occupancy_export_spec
+from .services.reports_retention import build_retention_report, retention_export_spec
 from .services.reports_revenue import build_revenue_report, revenue_export_spec
+from .services.reports_trial import (build_trial_conversion_report,
+                                     trial_conversion_export_spec)
 
 # Misma validación de FORMA que `views_payments._branch_scope` y por los mismos motivos
 # (`int()` acepta floats y bools en silencio; fuera del rango de bigint el `filter(id=...)`
@@ -248,3 +258,42 @@ class OccupancyReportView(_ReportView):
 
     def export_spec(self, data):
         return occupancy_export_spec(data)
+
+
+class RetentionReportView(_ReportView):
+    """`GET /api/reports/retention/` — vencimientos y renovaciones del período.
+
+    Filtro propio: `plan_id`, resuelto con `_scoped_id` (MISMO patrón que `discipline_id` en
+    `OccupancyReportView`) para que un id de otro gimnasio dé 404 y no filtre nada. El resto
+    de las reglas de negocio —qué cuenta como renovación, la ventana de gracia, el filtro de
+    sede que incluye los planes globales— viven enteras en
+    `services/reports_retention.build_retention_report`; acá no se reimplementa nada de eso.
+    """
+    export_filename = 'vencimientos'
+    export_sheet_title = 'Vencimientos'
+
+    def build(self, request, scope):
+        plan = _scoped_id(request.user, request.query_params.get('plan_id'), Plan, 'plan_id')
+        return build_retention_report(scope, plan=plan)
+
+    def export_spec(self, data):
+        return retention_export_spec(data)
+
+
+class TrialConversionReportView(_ReportView):
+    """`GET /api/reports/trial-conversion/` — conversión de la clase de prueba a membresía
+    de pago.
+
+    Sin filtros propios más allá del `scope` (período + sucursal): el filtro de sede
+    solo aplica del lado del trial (`GymClass.branch` es NOT NULL); la compra se busca por
+    organización, nunca por sede. Ver el docstring de
+    `services/reports_trial.build_trial_conversion_report` para el porqué.
+    """
+    export_filename = 'conversion_prueba'
+    export_sheet_title = 'Conversión de prueba'
+
+    def build(self, request, scope):
+        return build_trial_conversion_report(scope)
+
+    def export_spec(self, data):
+        return trial_conversion_export_spec(data)
