@@ -471,6 +471,20 @@ export const expiryNotificationConfigApi = {
   },
 }
 
+// Configuración del valor de "clase gratis" usado para calcular el pago al profesor en
+// planes con discount_percentage=100 (gratuitos). Contrato: free_class_teacher_payment_value
+// (número, nace en 0). En 0 el backend rechaza la creación/edición de planes gratuitos.
+export const teacherPaymentConfigApi = {
+  get: async (orgId) => {
+    const { data } = await api.get(`/organizations/${orgId}/teacher-payment-config/`)
+    return data
+  },
+  update: async (orgId, payload) => {
+    const { data } = await api.put(`/organizations/${orgId}/teacher-payment-config/`, payload)
+    return data
+  },
+}
+
 export const recurringEnrollmentsApi = {
   list: async (params = {}) => {
     const { data } = await api.get('/recurring-enrollments/', { params })

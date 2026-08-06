@@ -12,6 +12,7 @@ import GymAdminDisciplinesPage from './pages/GymAdminDisciplinesPage'
 import GymAdminHolidaysPage from './pages/GymAdminHolidaysPage'
 import GymAdminTrialFollowupPage from './pages/GymAdminTrialFollowupPage'
 import GymAdminExpiryNotificationConfigPage from './pages/GymAdminExpiryNotificationConfigPage'
+import GymAdminTeacherPaymentConfigPage from './pages/GymAdminTeacherPaymentConfigPage'
 import GymAdminImportPage from './pages/GymAdminImportPage'
 import GymAdminBranchesPage from './pages/GymAdminBranchesPage'
 import GymAdminAttendanceQrPage from './pages/GymAdminAttendanceQrPage'
@@ -433,6 +434,16 @@ export default function App() {
           <ProtectedRoute allowedRoles={['gym_admin']}>
             <ShellRoute>
               <GymAdminExpiryNotificationConfigPage />
+            </ShellRoute>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/gym-admin/settings/teacher-payment"
+        element={
+          <ProtectedRoute allowedRoles={['gym_admin']}>
+            <ShellRoute>
+              <GymAdminTeacherPaymentConfigPage />
             </ShellRoute>
           </ProtectedRoute>
         }

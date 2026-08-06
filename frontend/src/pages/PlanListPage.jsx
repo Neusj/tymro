@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { createPlan, getPlans, organizationsApi, removePlan, updatePlan } from '../api/client'
+import { createPlan, getPlans, organizationsApi, removePlan, teacherPaymentConfigApi, updatePlan } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import ConfirmDialog from '../components/ConfirmDialog'
 import DashboardHeader from '../components/DashboardHeader'
 import DataTable from '../components/ui/DataTable'
 import FormModal from '../components/FormModal'
 import ValueBadge from '../components/ui/ValueBadge'
+import { clp } from '../utils/format'
 
 const initialForm = {
   name: '',
@@ -84,6 +85,15 @@ export default function PlanListPage({
   const [deleting, setDeleting] = useState(null)
   const [form, setForm] = useState(initialForm)
 
+  // Planes 100% gratuitos: el pago al profesor se calcula sobre un valor por organización
+  // (teacher-payment-config). El front SOLO refleja la regla del backend antes de mandar el
+  // POST/PATCH — ver `submit`.
+  const [checkingFreeConfig, setCheckingFreeConfig] = useState(false)
+  const [pendingPayload, setPendingPayload] = useState(null)
+  const [blockingFreePlan, setBlockingFreePlan] = useState(false)
+  const [confirmingFreePlan, setConfirmingFreePlan] = useState(false)
+  const [freeClassValue, setFreeClassValue] = useState(0)
+
   const loadData = async () => {
     setLoading(true)
     setError('')
@@ -105,32 +115,14 @@ export default function PlanListPage({
     loadData()
   }, [])
 
-  const submit = async (event) => {
-    event.preventDefault()
+  // Envía el payload de verdad (create o update). Separado de `submit` porque el camino de
+  // los planes gratuitos necesita intercalar un chequeo (y potencialmente un modal) ANTES
+  // de llegar acá.
+  const persistPlan = async (payload) => {
     setError('')
     setNotice('')
     setSaving(true)
     try {
-      const normalizedName = String(form.name ?? '').trim()
-      if (!normalizedName) {
-        setError('El nombre del plan es obligatorio.')
-        return
-      }
-      const unlimitedClasses = toBool(form.unlimited_classes, false)
-      const payload = {
-        name: normalizedName,
-        plan_type: form.plan_type || 'monthly',
-        total_classes: unlimitedClasses ? 0 : Number(form.total_classes),
-        unlimited_classes: unlimitedClasses,
-        duration_days: Number(form.duration_days),
-        price: Number(form.price),
-        discount_percentage: Number(form.discount_percentage),
-        is_public: toBool(form.is_public, true),
-        is_active: toBool(form.is_active, true),
-      }
-      if (user?.role === 'superadmin') {
-        payload.organization = form.organization
-      }
       let response
       if (editing) {
         response = await updatePlan(editing.id, payload)
@@ -146,6 +138,86 @@ export default function PlanListPage({
       setError(firstApiError(apiError?.response?.data, editing ? 'No se pudo actualizar el plan.' : 'No se pudo crear el plan.'))
     } finally {
       setSaving(false)
+    }
+  }
+
+  const submit = async (event) => {
+    event.preventDefault()
+    setError('')
+    setNotice('')
+
+    const normalizedName = String(form.name ?? '').trim()
+    if (!normalizedName) {
+      setError('El nombre del plan es obligatorio.')
+      return
+    }
+    const unlimitedClasses = toBool(form.unlimited_classes, false)
+    const payload = {
+      name: normalizedName,
+      plan_type: form.plan_type || 'monthly',
+      total_classes: unlimitedClasses ? 0 : Number(form.total_classes),
+      unlimited_classes: unlimitedClasses,
+      duration_days: Number(form.duration_days),
+      price: Number(form.price),
+      discount_percentage: Number(form.discount_percentage),
+      is_public: toBool(form.is_public, true),
+      is_active: toBool(form.is_active, true),
+    }
+    if (user?.role === 'superadmin') {
+      payload.organization = form.organization
+    }
+
+    // Plan 100% gratuito: el pago al profesor sale de un valor configurable por
+    // organización. Con esa config en 0 el backend rechaza con 400 (ver contrato en
+    // teacher-payment-config); acá solo evitamos el viaje redondo cuando podemos.
+    if (payload.discount_percentage === 100) {
+      const orgIdForCheck = user?.role === 'superadmin' ? payload.organization : user?.organization
+      setCheckingFreeConfig(true)
+      try {
+        const config = await teacherPaymentConfigApi.get(orgIdForCheck)
+        const configValue = Number(config?.free_class_teacher_payment_value) || 0
+        setCheckingFreeConfig(false)
+        setPendingPayload(payload)
+        if (configValue <= 0) {
+          setBlockingFreePlan(true)
+        } else {
+          setFreeClassValue(configValue)
+          setConfirmingFreePlan(true)
+        }
+        return
+      } catch (apiError) {
+        // No pudimos leer la config (red, permisos, org sin resolver todavía). No
+        // rompemos la página: el backend sigue siendo la frontera real, y si de
+        // todas formas rechaza con 400 el catch de persistPlan lo muestra legible.
+        setCheckingFreeConfig(false)
+      }
+    }
+
+    await persistPlan(payload)
+  }
+
+  const closeBlockingFreePlanModal = () => {
+    setBlockingFreePlan(false)
+    setPendingPayload(null)
+  }
+
+  const goToTeacherPaymentConfig = () => {
+    setBlockingFreePlan(false)
+    setPendingPayload(null)
+    navigate('/gym-admin/settings/teacher-payment')
+  }
+
+  const cancelFreePlanSave = () => {
+    setConfirmingFreePlan(false)
+    setPendingPayload(null)
+  }
+
+  const confirmFreePlanSave = async () => {
+    const payload = pendingPayload
+    setConfirmingFreePlan(false)
+    setPendingPayload(null)
+    if (payload) {
+      await persistPlan(payload)
     }
   }
 
@@ -370,8 +442,12 @@ export default function PlanListPage({
             Plan activo
           </label>
           <div className="md:col-span-2 flex justify-end">
-            <button type="submit" disabled={saving} className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white disabled:opacity-60">
-              {saving ? 'Guardando...' : 'Guardar'}
+            <button
+              type="submit"
+              disabled={saving || checkingFreeConfig}
+              className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+            >
+              {saving ? 'Guardando...' : checkingFreeConfig ? 'Verificando...' : 'Guardar'}
             </button>
           </div>
         </form>
@@ -385,6 +461,25 @@ export default function PlanListPage({
         loading={saving}
         onCancel={() => setDeleting(null)}
         onConfirm={confirmDelete}
+      />
+
+      <ConfirmDialog
+        open={blockingFreePlan}
+        title="Falta configurar el pago al profesor"
+        description="No puedes crear planes gratuitos hasta configurar el valor de clase gratis para el pago al profesor."
+        confirmLabel="Ir a configuración"
+        onCancel={closeBlockingFreePlanModal}
+        onConfirm={goToTeacherPaymentConfig}
+      />
+
+      <ConfirmDialog
+        open={confirmingFreePlan}
+        title="Plan gratuito"
+        description={`Este plan es gratuito. El pago al profesor se calculará sobre el valor configurado (${clp(freeClassValue)}).`}
+        confirmLabel="Aceptar"
+        loading={saving}
+        onCancel={cancelFreePlanSave}
+        onConfirm={confirmFreePlanSave}
       />
     </div>
   )

@@ -57,7 +57,9 @@ def _class_hours(class_instance):
 
 
 def _calculate_revenue_for_class(class_instance):
-    logs = ConsumptionLog.objects.select_related('student_plan').filter(class_instance=class_instance)
+    logs = ConsumptionLog.objects.select_related(
+        'student_plan', 'student_plan__organization'
+    ).filter(class_instance=class_instance)
     total_revenue = 0.0
     for log in logs:
         student_plan = getattr(log, 'student_plan', None)
@@ -69,6 +71,18 @@ def _calculate_revenue_for_class(class_instance):
         # Hasta cerrar la política en el módulo de pagos a profesores, los consumos de
         # planes ilimitados se EXCLUYEN de la base de ingreso automática (no aportan).
         if student_plan.unlimited_classes:
+            continue
+        # Plan gratuito (build free-plans): `final_price` es 0 y dividirlo por
+        # `total_classes` pagaría $0 al profesor, lo cual es incorrecto. Se usa DIRECTO
+        # el valor de clase gratis configurado por la organización (NO se divide: es un
+        # valor POR CLASE, no el precio del plan completo). Criterio "gratis" es
+        # `discount_percentage == 100`, NO `final_price == 0` (ese campo puede quedar
+        # NULL en registros legacy y no se quiere enganchar ese caso).
+        # La organización sale de `student_plan.organization` (FK propia, copiada del
+        # plan al vender) y NO de `student_plan.plan.organization`: ese join al catálogo
+        # ya causó fugas cross-tenant en este repo (ver `fk-propia-sin-organizacion`).
+        if float(student_plan.discount_percentage or 0) == 100:
+            total_revenue += float(student_plan.organization.free_class_teacher_payment_value or 0)
             continue
         final_price = float(student_plan.final_price or 0)
         total_classes = int(student_plan.total_classes or 0)
@@ -104,7 +118,7 @@ def _calculate_plan_price_revenue_for_class(class_instance, base):
         return 0.0
 
     logs = (
-        ConsumptionLog.objects.select_related('student_plan')
+        ConsumptionLog.objects.select_related('student_plan', 'student_plan__organization')
         .filter(class_instance=class_instance, user_id__in=student_ids)
         .order_by('user_id', '-consumed_at', '-id')
     )
@@ -116,6 +130,13 @@ def _calculate_plan_price_revenue_for_class(class_instance, base):
         seen_users.add(log.user_id)
         student_plan = getattr(log, 'student_plan', None)
         if not student_plan or student_plan.unlimited_classes:
+            continue
+        # Plan gratuito (build free-plans): mismo criterio y misma razón que en
+        # `_calculate_revenue_for_class` (arriba) — valor de clase gratis de la org
+        # DIRECTO, sin dividir por `total_classes`, por `discount_percentage == 100` y
+        # no por `final_price == 0`. Org sale de `student_plan.organization` (FK propia).
+        if float(student_plan.discount_percentage or 0) == 100:
+            total_revenue += float(student_plan.organization.free_class_teacher_payment_value or 0)
             continue
         final_price = float(student_plan.final_price or 0)
         total_classes = int(student_plan.total_classes or 0)

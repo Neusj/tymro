@@ -112,6 +112,14 @@ class Organization(TimestampedModel):
         validators=[MaxValueValidator(90)],
         help_text='Días de gracia antes de podar una clase terminada sin inscripciones ni historia.',
     )
+    free_class_teacher_payment_value = models.FloatField(
+        default=0,
+        validators=[MinValueValidator(0)],
+        help_text=(
+            'Valor de UNA clase de un plan gratuito, para el pago al profesor. '
+            '0 = sin configurar (bloquea la creación de planes gratuitos).'
+        ),
+    )
 
     class Meta:
         ordering = ['name']

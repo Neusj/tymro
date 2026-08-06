@@ -1,4 +1,5 @@
-﻿from datetime import timedelta
+﻿import math
+from datetime import timedelta
 from decimal import Decimal
 
 from django.conf import settings
@@ -616,6 +617,32 @@ class OrganizationExpiryNotificationConfigSerializer(serializers.ModelSerializer
         # descendente), y persistir `value` crudo haría que la API guardara algo distinto a
         # lo que guarda el admin con el mismo input.
         return probe.reminder_days_before
+
+
+class OrganizationTeacherPaymentConfigSerializer(serializers.ModelSerializer):
+    """Valor de clase gratis para el pago al profesor, editable desde el panel.
+
+    A diferencia de `OrganizationExpiryNotificationConfigSerializer` (arriba), acá NO hay
+    un modelo de config aparte: el campo vive directo en `Organization`, así que el GET del
+    endpoint no crea ninguna fila (ver `OrganizationViewSet.teacher_payment_config`).
+    """
+
+    class Meta:
+        model = Organization
+        fields = ['free_class_teacher_payment_value']
+
+    def validate_free_class_teacher_payment_value(self, value):
+        # Guarda contra NaN/Infinity: `MinValueValidator(0)` del modelo NO los frena
+        # (`nan < 0` es False), psycopg2 los manda tal cual a Postgres (`'NaN'::float`) y
+        # Postgres los acepta. El valor queda persistido y, apenas alguien serializa esa
+        # organización (login, /api/me/), `JSONRenderer` con STRICT_JSON revienta con 500
+        # para TODA la org (no solo para quien lo guardó). No "simplificar" esto asumiendo
+        # que el validator del modelo ya cubre el caso: no lo cubre.
+        if not math.isfinite(value):
+            raise serializers.ValidationError('El valor debe ser un número finito.')
+        if value > 1_000_000_000:
+            raise serializers.ValidationError('El valor es demasiado alto.')
+        return value
 
 
 class DisciplineSerializer(serializers.ModelSerializer):

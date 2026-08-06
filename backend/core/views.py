@@ -73,6 +73,7 @@ from .serializers import (
     ManualPaymentSerializer,
     OrganizationExpiryNotificationConfigSerializer,
     OrganizationSerializer,
+    OrganizationTeacherPaymentConfigSerializer,
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
     PlanSerializer,
@@ -1709,6 +1710,36 @@ class OrganizationViewSet(ModelViewSet):
 
         serializer = OrganizationExpiryNotificationConfigSerializer(
             config, data=request.data, partial=True,
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['get', 'put'], url_path='teacher-payment-config')
+    def teacher_payment_config(self, request, pk=None):
+        """Valor de clase gratis para el pago al profesor (build free-plans).
+
+        Mismo molde que `expiry_notification_config`, arriba: se busca la organización SIN
+        pasar por `get_queryset()` para distinguir 404 (no existe) de 403 (existe pero es
+        ajena), y el permiso es `_can_manage_org_resource` (superadmin, o el gym_admin de
+        ESA organización). NO `_can_manage_operational_resource`: esto es CONFIGURACIÓN de
+        organización, no un recurso operativo, y ese otro check deja entrar al manager.
+
+        DIFERENCIA con `expiry_notification_config`/`trial_followup_config`: acá NO hay un
+        modelo de config aparte. El campo vive en la propia `Organization`, así que el GET
+        no crea ninguna fila (no hay `get_or_create`).
+        """
+        organization = Organization.objects.filter(pk=pk).first()
+        if organization is None:
+            raise NotFound('Organización no encontrada.')
+        if not _can_manage_org_resource(request.user, organization.id):
+            raise PermissionDenied('No tienes permisos para gestionar esta configuración.')
+
+        if request.method == 'GET':
+            return Response(OrganizationTeacherPaymentConfigSerializer(organization).data)
+
+        serializer = OrganizationTeacherPaymentConfigSerializer(
+            organization, data=request.data, partial=True,
         )
         serializer.is_valid(raise_exception=True)
         serializer.save()
@@ -3782,10 +3813,44 @@ class MembershipPlanViewSet(ModelViewSet):
             return base_queryset
         return base_queryset.none()
 
+    @staticmethod
+    def _validate_free_plan_teacher_payment_config(serializer, organization):
+        """Bloquea crear/editar un plan gratuito si la org no configuró el valor de
+        clase gratis para el pago al profesor (build teacher-payment-free-plans).
+
+        ⚠️ Se llama DESPUÉS de las guardas de permiso/pertenencia cross-org de
+        `perform_create`/`perform_update` (lección 8.3): si corriera antes, el status
+        code (400 config vs 403 permiso) sería un oráculo de la config de OTRA org.
+
+        Criterio de "gratis": `discount_percentage == 100` sobre el `Plan`. NO
+        `price == 0` ni `final_price == 0` (ese campo es de `StudentPlan`, no del
+        catálogo, y además puede quedar NULL en registros legacy).
+        """
+        # En un update parcial `discount_percentage` puede no venir en el payload:
+        # el valor EFECTIVO es el que ya tiene la instancia si no se está cambiando.
+        discount_percentage = serializer.validated_data.get(
+            'discount_percentage', getattr(serializer.instance, 'discount_percentage', 0)
+        )
+        if float(discount_percentage or 0) != 100:
+            return
+        if not organization or float(organization.free_class_teacher_payment_value or 0) <= 0:
+            raise ValidationError({
+                'discount_percentage': [
+                    'Para crear planes gratuitos primero tenés que configurar el valor '
+                    'de clase gratis para el pago al profesor, en la configuración de la '
+                    'organización.'
+                ]
+            })
+
     def perform_create(self, serializer):
         user = self.request.user
         if not (_is_superadmin(user) or _is_gym_admin(user)):
             raise PermissionDenied('No tienes permisos para crear planes.')
+        if _is_gym_admin(user):
+            organization = user.organization
+        else:
+            organization = serializer.validated_data.get('organization')
+        self._validate_free_plan_teacher_payment_config(serializer, organization)
         if _is_gym_admin(user):
             serializer.save(organization=user.organization)
             return
@@ -3797,6 +3862,11 @@ class MembershipPlanViewSet(ModelViewSet):
             raise PermissionDenied('No tienes permisos para editar planes.')
         if _is_gym_admin(user) and serializer.instance.organization_id != user.organization_id:
             raise PermissionDenied('No puedes editar planes de otra organización.')
+        if _is_gym_admin(user):
+            organization = user.organization
+        else:
+            organization = serializer.validated_data.get('organization') or serializer.instance.organization
+        self._validate_free_plan_teacher_payment_config(serializer, organization)
         if _is_gym_admin(user):
             serializer.save(organization=user.organization)
             return
