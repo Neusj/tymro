@@ -91,6 +91,17 @@ function isVirtualClass(row) {
   return String(row?.id || '').startsWith('virtual:')
 }
 
+function reservationPayloadForClass(gymClass) {
+  const payload = { status: 'active' }
+  if (isVirtualClass(gymClass)) {
+    payload.class_template_id = gymClass.class_template
+    payload.date = String(gymClass.start_datetime || '').slice(0, 10)
+  } else {
+    payload.gym_class = gymClass.id
+  }
+  return payload
+}
+
 function reservationBlockedMessage(row) {
   if (row?.reservable === false) {
     return 'No se puede reservar con tanta anticipacion'
@@ -253,10 +264,6 @@ export default function StudentClassesPage({ mode = 'available' }) {
       setError(reservationBlockedMessage(gymClass))
       return
     }
-    if (isVirtualClass(gymClass)) {
-      setNotice('La reserva de clases proyectadas se conectara en el siguiente paso.')
-      return
-    }
     if (!hasPlanBalance) {
       setError('Sin clases disponibles')
       return
@@ -264,7 +271,7 @@ export default function StudentClassesPage({ mode = 'available' }) {
     setWorkingKey(`reserve-${gymClass.id}`)
     setError('')
     try {
-      const payload = { gym_class: gymClass.id, status: 'active' }
+      const payload = reservationPayloadForClass(gymClass)
       if (requiresPlanChoice) {
         payload.student_plan_id = Number(studentPlanId)
       }
@@ -283,10 +290,6 @@ export default function StudentClassesPage({ mode = 'available' }) {
   const openSingleReserveConfirm = (row) => {
     if (row.reservable === false) {
       setError(reservationBlockedMessage(row))
-      return
-    }
-    if (isVirtualClass(row)) {
-      setNotice('La reserva de clases proyectadas se conectara en el siguiente paso.')
       return
     }
     resetPlanSelection()
@@ -470,7 +473,7 @@ export default function StudentClassesPage({ mode = 'available' }) {
     try {
       const results = await Promise.allSettled(
         reservables.map((item) => {
-          const payload = { gym_class: item.id, status: 'active' }
+          const payload = reservationPayloadForClass(item)
           if (requiresPlanChoice) {
             payload.student_plan_id = Number(studentPlanId)
           }
@@ -504,12 +507,11 @@ export default function StudentClassesPage({ mode = 'available' }) {
       const started = new Date(item.start_datetime).getTime() <= now
       const recurringForTemplate = item.class_template ? recurringByTemplate[item.class_template] : null
       const pausedSeries = Boolean(item.class_template && recurringForTemplate && !recurringForTemplate.is_active)
-      return item.status === 'scheduled' && !started && !pausedSeries && item.reservable !== false && !isVirtualClass(item)
+      return item.status === 'scheduled' && !started && !pausedSeries && item.reservable !== false
     })
 
     if (reservables.length === 0) {
-      const selectedVirtual = selectedRows.some((item) => isVirtualClass(item))
-      setError(selectedVirtual ? 'La reserva de clases proyectadas se conectara en el siguiente paso.' : 'No hay clases seleccionadas para reservar.')
+      setError('No hay clases seleccionadas para reservar.')
       return
     }
 

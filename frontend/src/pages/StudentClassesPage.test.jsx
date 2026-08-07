@@ -313,6 +313,48 @@ describe('StudentClassesPage — selector de dia por fecha', () => {
     expect(screen.queryByText(/virtual:/i)).not.toBeInTheDocument()
   })
 
+  it('reserva una clase virtual enviando class_template_id y date', async () => {
+    const virtualDate = FUTURE_ISO.slice(0, 10)
+    classesApi.byDate.mockImplementation((date, params = {}) => {
+      if (params.status_in?.includes('completed')) {
+        return Promise.resolve([])
+      }
+      return Promise.resolve([
+        {
+          id: `virtual:45:${virtualDate}`,
+          name: 'Clase proyectada',
+          status: 'scheduled',
+          start_datetime: FUTURE_ISO,
+          end_datetime: FUTURE_ISO,
+          capacity: 12,
+          enrollments_count: 0,
+          branch_name: 'Sede',
+          teacher_name: 'Prof',
+          discipline_name: 'BJJ',
+          class_template: 45,
+          class_template_name: 'BJJ tarde',
+          reservable: true,
+        },
+      ])
+    })
+    enrollmentsApi.create.mockResolvedValue({})
+
+    renderPage('available')
+    const user = userEvent.setup()
+
+    await user.click(await screen.findByRole('button', { name: 'Reservar' }))
+    const dialog = await screen.findByRole('dialog')
+    await user.click(within(dialog).getByRole('button', { name: 'Reservar' }))
+
+    await waitFor(() =>
+      expect(enrollmentsApi.create).toHaveBeenCalledWith({
+        class_template_id: 45,
+        date: virtualDate,
+        status: 'active',
+      }),
+    )
+  })
+
   it('deshabilita reservar y muestra mensaje cuando reservable es false', async () => {
     const today = todayIsoDate()
     classesApi.byDate.mockImplementation((date, params = {}) => {
@@ -615,7 +657,7 @@ describe('StudentClassesPage — bulk con selector de plan (#9 T4 fix)', () => {
           class_template: null,
         },
         {
-          id: 702,
+          id: `virtual:88:${FUTURE_ISO.slice(0, 10)}`,
           name: 'Clase B',
           status: 'scheduled',
           start_datetime: FUTURE_ISO,
@@ -625,7 +667,7 @@ describe('StudentClassesPage — bulk con selector de plan (#9 T4 fix)', () => {
           branch_name: 'Sede',
           teacher_name: 'Prof',
           discipline_name: 'Yoga',
-          class_template: null,
+          class_template: 88,
         },
       ])
       .mockResolvedValueOnce([])
@@ -662,7 +704,12 @@ describe('StudentClassesPage — bulk con selector de plan (#9 T4 fix)', () => {
     // El selector se abrió UNA vez y el mismo plan se aplicó a TODO el lote.
     await waitFor(() => expect(enrollmentsApi.create).toHaveBeenCalledTimes(2))
     expect(enrollmentsApi.create).toHaveBeenCalledWith({ gym_class: 701, status: 'active', student_plan_id: 22 })
-    expect(enrollmentsApi.create).toHaveBeenCalledWith({ gym_class: 702, status: 'active', student_plan_id: 22 })
+    expect(enrollmentsApi.create).toHaveBeenCalledWith({
+      class_template_id: 88,
+      date: FUTURE_ISO.slice(0, 10),
+      status: 'active',
+      student_plan_id: 22,
+    })
   })
 })
 

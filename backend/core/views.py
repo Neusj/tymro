@@ -3888,6 +3888,109 @@ class EnrollmentViewSet(ModelViewSet):
         cancel_enrollment_with_refund(enrollment)
         return Response(self.get_serializer(enrollment).data)
 
+    @staticmethod
+    def _request_has_real_gym_class(data):
+        return data.get('gym_class') not in (None, '')
+
+    @staticmethod
+    def _request_has_virtual_class_reference(data):
+        return data.get('class_template_id') not in (None, '') or data.get('date') not in (None, '')
+
+    @staticmethod
+    def _template_datetime(template, target_date, value_time):
+        return timezone.make_aware(
+            datetime.combine(target_date, value_time),
+            timezone.get_current_timezone(),
+        )
+
+    def _actor_organization_id_for_virtual_reservation(self):
+        user = self.request.user
+        if getattr(user, 'organization_id', None):
+            return user.organization_id
+        return None
+
+    def _materialize_virtual_class_for_reservation(self, *, class_template_id, raw_date):
+        organization_id = self._actor_organization_id_for_virtual_reservation()
+        if not organization_id:
+            raise NotFound('Plantilla no encontrada.')
+
+        try:
+            template_id = int(class_template_id)
+        except (TypeError, ValueError):
+            raise NotFound('Plantilla no encontrada.')
+
+        # Pertenencia PRIMERO: el lookup acotado por organizacion hace indistinguibles
+        # "no existe" y "existe en otro tenant". Recién después se leen reglas de negocio
+        # de la plantilla o la ventana de reserva.
+        template = ClassTemplate.objects.select_related(
+            'organization', 'branch', 'teacher', 'class_type', 'discipline', 'created_by'
+        ).filter(pk=template_id, organization_id=organization_id).first()
+        if template is None:
+            raise NotFound('Plantilla no encontrada.')
+
+        if not raw_date:
+            raise ValidationError({'date': 'Este parametro es obligatorio.'})
+        target_date = parse_date(str(raw_date))
+        if target_date is None or str(raw_date) != target_date.isoformat():
+            raise ValidationError({'date': 'Formato invalido. Usa YYYY-MM-DD.'})
+
+        today = timezone.localdate()
+        window_days = getattr(template.organization, 'max_reservation_window_days', 21) or 21
+        if target_date < today or target_date > today + timedelta(days=window_days):
+            raise ValidationError({'detail': 'No se puede reservar con tanta anticipacion'})
+
+        if target_date.weekday() != template.weekday:
+            raise ValidationError({'date': 'La fecha no corresponde al dia de la plantilla.'})
+        if target_date < template.start_date or (template.end_date and target_date > template.end_date):
+            raise ValidationError({'date': 'La plantilla no esta vigente para esa fecha.'})
+        if not template.is_active:
+            raise ValidationError({'class_template_id': 'Solo puedes reservar plantillas activas.'})
+
+        start_datetime = self._template_datetime(template, target_date, template.start_time)
+        end_datetime = self._template_datetime(template, target_date, template.end_time)
+        gym_class, _created = GymClass.objects.get_or_create(
+            class_template=template,
+            start_datetime=start_datetime,
+            defaults={
+                'organization': template.organization,
+                'branch': template.branch,
+                'teacher': template.teacher,
+                'class_type': template.class_type,
+                'discipline': template.discipline,
+                'name': template.name or (
+                    template.class_type.name if template.class_type else f'Clase {template.get_weekday_display()}'
+                ),
+                'end_datetime': end_datetime,
+                'capacity': template.capacity,
+                'is_trial_eligible': template.is_trial_eligible,
+                'status': GymClass.Status.SCHEDULED,
+                'created_by': template.created_by,
+                'is_active': True,
+                'has_substitute': template.has_substitute,
+                'substitute_name': template.substitute_name,
+            },
+        )
+        return gym_class
+
+    def create(self, request, *args, **kwargs):
+        if self._request_has_real_gym_class(request.data):
+            return super().create(request, *args, **kwargs)
+        if not self._request_has_virtual_class_reference(request.data):
+            return super().create(request, *args, **kwargs)
+
+        with transaction.atomic():
+            gym_class = self._materialize_virtual_class_for_reservation(
+                class_template_id=request.data.get('class_template_id'),
+                raw_date=request.data.get('date'),
+            )
+            payload = request.data.copy()
+            payload['gym_class'] = gym_class.id
+            serializer = self.get_serializer(data=payload)
+            serializer.is_valid(raise_exception=True)
+            self.perform_create(serializer)
+            headers = self.get_success_headers(serializer.data)
+            return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
     def perform_create(self, serializer):
         # CRÍTICO (9.1), primera línea, antes de CUALQUIER branch: `Enrollment.student_plan`
         # es un FK real (T1). Si `student_plan_id` sigue en `validated_data` cuando se
