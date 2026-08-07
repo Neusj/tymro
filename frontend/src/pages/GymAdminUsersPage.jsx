@@ -193,6 +193,15 @@ export default function GymAdminUsersPage() {
                   Planes
                 </button>
               ) : null}
+              {row.role === 'student' ? (
+                <button
+                  type="button"
+                  onClick={() => navigate(`/gym-admin/students/overview?student_id=${row.id}`)}
+                  className="rounded border border-brand-orange/40 px-2 py-1 text-xs text-amber-200"
+                >
+                  Vista integral
+                </button>
+              ) : null}
               <button type="button" onClick={() => setDeleting(row)} className="rounded border border-brand-red/40 px-2 py-1 text-xs text-red-200">
                 Eliminar
               </button>

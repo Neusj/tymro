@@ -20,6 +20,7 @@ from .views_reports import (
     RevenueReportView,
     TrialConversionReportView,
 )
+from .views_student_overview import StudentOverviewView
 from .views import (
     AdvanceClassWindowsView,
     BranchViewSet,
@@ -143,5 +144,20 @@ urlpatterns = [
     path('reports/retention/', RetentionReportView.as_view(), name='reports-retention'),
     path('reports/trial-conversion/', TrialConversionReportView.as_view(),
          name='reports-trial-conversion'),
+    # Vista integral de UN alumno (P4 · Feature B): membresías, consumo, asistencia,
+    # reservas y recurrencias en una sola lectura agregada. Ruta PLANA, mismo motivo que
+    # `reports/`: no es un recurso REST (no se crea, no se borra, no tiene un ViewSet detrás)
+    # sino una LECTURA AGREGADA de varias tablas para UN alumno. Solo GET, solo `gym_admin`
+    # (ver `views_student_overview.py`).
+    #
+    # `<str:student_id>` y NO `<int:>`, a propósito, mismo motivo que
+    # `reports/revenue/payments/<str:kind>/<str:payment_id>/` unas líneas arriba: con
+    # converter, un id malformado no matchearía la ruta y saldría un 404 de URLconf que dice
+    # "acá no hay nada" cuando lo cierto es "ese id está mal escrito". Además `<int:>` deja
+    # pasar enteros fuera del rango de bigint, que revientan con 500 en PostgreSQL. La view
+    # valida la forma y devuelve 400; el 404 queda reservado para el alumno ajeno/inexistente
+    # (anti-oráculo).
+    path('students/<str:student_id>/overview/', StudentOverviewView.as_view(),
+         name='student-overview'),
     path('', include(router.urls)),
 ]

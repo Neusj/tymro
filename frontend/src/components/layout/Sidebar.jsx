@@ -112,6 +112,17 @@ function QrIcon() {
   )
 }
 
+function StudentOverviewIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5">
+      <circle cx="11" cy="8" r="3" />
+      <path d="M5 20c0-3.3 2.7-6 6-6s6 2.7 6 6" />
+      <circle cx="18" cy="16" r="3.2" />
+      <path d="m20.3 18.3 1.7 1.7" />
+    </svg>
+  )
+}
+
 function SettingsIcon() {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5">
@@ -140,6 +151,10 @@ const navByRole = {
   gym_admin: [
     { type: 'item', to: '/gym-admin/dashboard', label: 'Dashboard', icon: <DashboardIcon /> },
     { type: 'item', to: '/gym-admin/users', label: 'Usuarios', icon: <UsersIcon /> },
+    // P4 · Feature B: buscar un alumno y ver su vista integral (membresías, consumo,
+    // asistencia, reservas, recurrencias) en una sola pantalla. Sin id preseleccionado —la
+    // propia pantalla trae el selector de alumno, mismo patrón que "Asignar plan" más abajo.
+    { type: 'item', to: '/gym-admin/students/overview', label: 'Vista integral alumno', icon: <StudentOverviewIcon /> },
     { type: 'item', to: '/gym-admin/branches', label: 'Sucursales', icon: <BranchesIcon /> },
     { type: 'item', to: '/gym-admin/attendance-qr', label: 'QR asistencia', icon: <ClassesIcon /> },
     { type: 'item', to: '/gym-admin/import', label: 'Importar datos', icon: <ImportIcon /> },

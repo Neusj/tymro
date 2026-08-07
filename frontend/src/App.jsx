@@ -21,6 +21,7 @@ import AttendanceScreenPage from './pages/AttendanceScreenPage'
 import AttendanceScreenAutoPage from './pages/AttendanceScreenAutoPage'
 import GymAdminDashboard from './pages/GymAdminDashboard'
 import GymAdminUsersPage from './pages/GymAdminUsersPage'
+import GymAdminStudentOverviewPage from './pages/GymAdminStudentOverviewPage'
 import GymAdminPlanMembershipsPage from './pages/GymAdminPlanMembershipsPage'
 import GymAdminPaymentsSettingsPage from './pages/GymAdminPaymentsSettingsPage'
 import GymAdminPaymentsTransactionsPage from './pages/GymAdminPaymentsTransactionsPage'
@@ -219,6 +220,25 @@ export default function App() {
           <ProtectedRoute allowedRoles={['gym_admin', 'manager', 'monitor']}>
             <ShellRoute>
               <GymAdminUsersPage />
+            </ShellRoute>
+          </ProtectedRoute>
+        }
+      />
+      {/* P4 · Feature B: vista integral de UN alumno (membresías, consumo, asistencia,
+          reservas, recurrencias). SOLO gym_admin — es superficie financiera
+          (`payment_status` de cada membresía), mismo criterio que la reportería: manager y
+          monitor no entran (backend responde 403; el front tampoco ofrece la puerta). Sin
+          `superadmin` a propósito: la pantalla es de la organización del gym_admin, no de la
+          plataforma (decisión a confirmar por Javier, ver views_student_overview.py). Sin
+          segmento de id en la ruta: el alumno se elige con `?student_id=` (mismo patrón que
+          `/gym-admin/plans/assign?user_id=`), así que la misma pantalla sirve tanto al acceso
+          directo desde una fila de Usuarios como a la entrada libre desde el Sidebar. */}
+      <Route
+        path="/gym-admin/students/overview"
+        element={
+          <ProtectedRoute allowedRoles={['gym_admin']}>
+            <ShellRoute>
+              <GymAdminStudentOverviewPage />
             </ShellRoute>
           </ProtectedRoute>
         }

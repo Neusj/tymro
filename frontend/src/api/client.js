@@ -707,6 +707,16 @@ export const getMyMemberships = async () => {
   return data
 }
 
+// P4 · Feature B (gym_admin, solo lectura): vista integral de UN alumno de la propia
+// organización — membresías, consumo, asistencia, reservas y recurrencias vigentes en una
+// sola lectura agregada. `params` acepta los límites del historial acotado (opcionales):
+// `consumption_limit`, `attendance_limit`, `reservations_limit`, cada uno con un tope duro
+// que decide el backend (el front no puede pedir más de ahí aunque lo intente).
+export const getStudentOverview = async (studentId, params = {}) => {
+  const { data } = await api.get(`/students/${encodeURIComponent(studentId)}/overview/`, { params })
+  return data
+}
+
 // Pagos con MercadoPago (Checkout Pro + OAuth por organización). Todo por la
 // instancia autenticada `api`: los cuatro endpoints exigen token (nunca publicApi).
 // La activación real del plan la confirma el webhook del backend, no estas llamadas.
