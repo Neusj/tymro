@@ -13,6 +13,26 @@ import string
 from .fields import EncryptedTextField
 
 
+# P4 — doble identidad del administrador.
+#
+# `CustomUser.role` es una opción ÚNICA y el par (email, RUT) es único por organización:
+# no hay forma de tener dos roles ni de duplicar el usuario. En vez de inventar un rol
+# compuesto —que encendería el riesgo de autopago y autoasignación en TODOS los endpoints
+# a la vez, sin punto de corte—, se amplía la ELEGIBILIDAD: un `gym_admin` puede además
+# ser sujeto de las dos identidades operativas de su propio gimnasio.
+#
+# Estas constantes responden "¿QUÉ ROL PUEDE SER esto?" (validación de integridad), nunca
+# "¿quién puede HACER esto?" (autorización): eso sigue viviendo en `accounts.roles` y en
+# las guardas de las views, que no se tocan. Y NINGUNA de las dos dice nada de
+# `organization_id`: la pertenencia se valida SIEMPRE aparte y DESPUÉS (lección 8.3), así
+# que un admin de otra organización jamás resulta elegible por esta vía.
+#
+# Literales y no `CustomUser.Role.*` porque este módulo no importa `accounts.models`
+# (las FKs usan referencias lazy); es el mismo criterio que ya usaban los `clean()`.
+TEACHER_ELIGIBLE_ROLES = frozenset({'teacher', 'gym_admin'})
+STUDENT_SUBJECT_ROLES = frozenset({'student', 'gym_admin'})
+
+
 # Subdominios reservados para la plataforma: ninguna organización puede tomarlos
 # (el apex y estos labels resuelven a contexto plataforma / infra, no a una org).
 RESERVED_SUBDOMAINS = {
@@ -1433,14 +1453,18 @@ class ClassTemplate(TimestampedModel):
             raise ValidationError({'end_date': 'La fecha de termino no puede ser menor a la fecha de inicio.'})
         if self.capacity <= 0:
             raise ValidationError({'capacity': 'La capacidad debe ser mayor a cero.'})
-        if self.teacher and self.teacher.role != 'teacher':
-            raise ValidationError({'teacher': 'El usuario seleccionado no es profesor.'})
         # Del profesor se validaba solo el ROL, no la organización. Las instancias que la
         # serie genera NO vuelven a pasar por `GymClassSerializer` (que sí lo valida), así
         # que un profe ajeno acá terminaba dictando clases de esta organización y
         # arrastraba su `TeacherPaymentRecord` cruzando el borde.
+        #
+        # Va PRIMERO, antes del check de rol (lección 8.3 / P4): con el rol adelante, los dos
+        # mensajes distinguían el rol de una cuenta de otro tenant.
         if self.teacher and self.organization_id and self.teacher.organization_id != self.organization_id:
             raise ValidationError({'teacher': 'El profesor no pertenece a la organizacion indicada.'})
+        # P4: `gym_admin` también es elegible como profesor de SU organización.
+        if self.teacher and self.teacher.role not in TEACHER_ELIGIBLE_ROLES:
+            raise ValidationError({'teacher': 'El usuario seleccionado no es profesor.'})
         if self.branch and self.organization_id and self.branch.organization_id != self.organization_id:
             raise ValidationError({'branch': 'La sucursal no pertenece a la organizacion indicada.'})
         if self.class_type and self.organization_id and self.class_type.organization_id != self.organization_id:
@@ -1578,12 +1602,26 @@ class RecurringEnrollment(TimestampedModel):
         return f'{self.student} -> {self.class_template}'
 
     def clean(self):
-        if self.student and self.student.role != 'student':
+        # ORGANIZACIÓN PRIMERO, ROL DESPUÉS (lección 8.3 / P4): con el rol adelante, el par
+        # de mensajes distinguía el rol de una cuenta de otro tenant.
+        #
+        # Se testean los `_id` y no los descriptores: `student` y `class_template` son FKs NO
+        # anulables, así que `self.class_template` sobre una instancia a la que todavía no se
+        # le asignó la FK levanta `RelatedObjectDoesNotExist` —subclase de `AttributeError`,
+        # NO de `ValidationError`—, y `full_clean()` llama a `clean()` aunque `clean_fields()`
+        # ya haya fallado. Con los descriptores, este check adelantado convertía en 500 lo que
+        # antes salía como 400 por el check de rol.
+        if (
+            self.class_template_id
+            and self.student_id
+            and self.class_template.organization_id != self.student.organization_id
+        ):
+            raise ValidationError({'class_template': 'La plantilla no pertenece a la organizacion del alumno.'})
+        # P4: `gym_admin` también puede ser sujeto de una recurrencia (identidad de alumno).
+        if self.student and self.student.role not in STUDENT_SUBJECT_ROLES:
             raise ValidationError({'student': 'Solo se pueden crear recurrencias para usuarios student.'})
         if self.end_date and self.end_date < self.start_date:
             raise ValidationError({'end_date': 'La fecha de termino no puede ser menor a la fecha de inicio.'})
-        if self.class_template and self.student and self.class_template.organization_id != self.student.organization_id:
-            raise ValidationError({'class_template': 'La plantilla no pertenece a la organizacion del alumno.'})
         if not self.class_template:
             return
         if self.start_date < self.class_template.start_date:

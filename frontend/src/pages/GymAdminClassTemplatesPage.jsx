@@ -7,7 +7,7 @@ import DashboardHeader from '../components/DashboardHeader'
 import DataTable from '../components/ui/DataTable'
 import MultiSelectDropdown from '../components/ui/MultiSelectDropdown'
 import ValueBadge from '../components/ui/ValueBadge'
-import { canManageAdmin } from '../utils/roles'
+import { canManageAdmin, teacherEligibleRoleParam } from '../utils/roles'
 
 const initialForm = {
   name: '',
@@ -88,7 +88,7 @@ export default function GymAdminClassTemplatesPage() {
       const [templatesData, branchesData, teachersData, classTypeData, disciplineData] = await Promise.all([
         classTemplatesApi.list({ ordering: 'start_date' }),
         branchesApi.list(),
-        usersApi.list({ role: 'teacher' }),
+        usersApi.list({ role: teacherEligibleRoleParam }),
         classTypesApi.list(),
         disciplinesApi.list(),
       ])

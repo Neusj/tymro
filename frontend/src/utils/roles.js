@@ -24,6 +24,23 @@ export const roleLabels = {
 // Roles de plataforma: nunca se ofrecen al gestionar usuarios de organización.
 export const platformRoles = ['superadmin']
 
+// Roles que pueden DICTAR una clase o una serie (P4: doble identidad del admin).
+// Espejo de `TEACHER_ELIGIBLE_ROLES` en backend/core/models.py, que es la fuente
+// canónica: acá solo llena el selector de profesor. El backend igual valida el rol Y la
+// organización al guardar, así que esto no es una restricción, es qué se ofrece.
+export const teacherEligibleRoles = ['teacher', 'gym_admin']
+
+// Valor para `GET /api/users/?role=`, que acepta varios roles separados por coma.
+export const teacherEligibleRoleParam = teacherEligibleRoles.join(',')
+
+// Roles que pueden SER sujeto de plan / inscripción (P4: doble identidad del admin).
+// Espejo de `STUDENT_SUBJECT_ROLES` en backend/core/models.py. Mismo criterio que el de
+// profesor: solo decide qué se OFRECE en los selectores; la validación real (rol +
+// organización) la hace el backend al guardar.
+export const studentSubjectRoles = ['student', 'gym_admin']
+
+export const studentSubjectRoleParam = studentSubjectRoles.join(',')
+
 export const defaultRouteByRole = (role) => roleRoutes[role] || '/login'
 
 // --- Capacidades (espejo de accounts/roles.py) ---

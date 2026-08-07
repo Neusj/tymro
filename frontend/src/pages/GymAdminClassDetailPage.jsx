@@ -7,7 +7,7 @@ import DashboardHeader from '../components/DashboardHeader'
 import FormModal from '../components/FormModal'
 import DataTable from '../components/ui/DataTable'
 import ValueBadge from '../components/ui/ValueBadge'
-import { canManageOperational } from '../utils/roles'
+import { canManageOperational, studentSubjectRoleParam } from '../utils/roles'
 import { firstApiError } from '../utils/format'
 
 function formatDateTime(value) {
@@ -53,7 +53,7 @@ export default function GymAdminClassDetailPage() {
   const loadData = async () => {
     setLoading(true)
     try {
-      const [classData, studentsData] = await Promise.all([classesApi.retrieve(id), usersApi.list({ role: 'student' })])
+      const [classData, studentsData] = await Promise.all([classesApi.retrieve(id), usersApi.list({ role: studentSubjectRoleParam })])
       setGymClass(classData)
       setStudents(studentsData)
     } finally {

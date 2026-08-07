@@ -16,6 +16,8 @@ from accounts.rut import clean_rut
 from .services.public_urls import trial_signup_url
 
 from .models import (
+    STUDENT_SUBJECT_ROLES,
+    TEACHER_ELIGIBLE_ROLES,
     Attendance,
     AttendanceChangeLog,
     Branch,
@@ -885,11 +887,29 @@ class EnrollmentSerializer(serializers.ModelSerializer):
         if not gym_class:
             raise serializers.ValidationError({'gym_class': 'La clase es obligatoria.'})
 
-        if student.role != User.Role.STUDENT:
-            raise serializers.ValidationError({'student': 'Solo se pueden inscribir usuarios con rol student.'})
+        # ACTOR ↔ CLASE, PRIMERO DE TODO. `gym_class` y `student` son `PrimaryKeyRelatedField`
+        # contra `.objects.all()`, así que acá puede llegar cualquier id de la plataforma.
+        # Esta guarda vivía AL FINAL del bloque, después de los checks de rol, estado y
+        # horario, y eso la volvía inútil como frontera: con `gym_class` Y `student` ambos de
+        # OTRA organización, el par es coherente entre sí, pasaba el check sujeto↔clase de
+        # abajo, y el mensaje lo decidía el rol del sujeto —o, para un sujeto elegible, los
+        # checks de estado y horario, que filtraban si una clase AJENA está cancelada, cerrada
+        # o ya empezó—. Puesta primero, cualquier clase que no sea del actor muere con un
+        # único mensaje antes de que se lea NADA de la clase ni del sujeto.
+        if user and roles.is_org_admin(user) and gym_class.organization_id != user.organization_id:
+            raise serializers.ValidationError({'gym_class': 'Solo puedes gestionar clases de tu organización.'})
 
+        # ORGANIZACIÓN PRIMERO, ROL DESPUÉS (lección 8.3), por el mismo motivo que en
+        # `GymClassSerializer`: el orden inverso convertía el par de mensajes en un oráculo
+        # de rol sobre cuentas de otros tenants. Todo id ajeno tiene que responder lo mismo,
+        # sea cual sea su rol.
         if student.organization_id != gym_class.organization_id:
             raise serializers.ValidationError({'student': 'No puedes inscribir alumnos de otra organización.'})
+
+        # P4: `gym_admin` también puede ser el sujeto inscrito (identidad de alumno). A esta
+        # altura el triángulo actor↔clase↔sujeto ya está cerrado por las dos guardas de arriba.
+        if student.role not in STUDENT_SUBJECT_ROLES:
+            raise serializers.ValidationError({'student': 'Solo se pueden inscribir usuarios con rol student.'})
 
         if gym_class.status == GymClass.Status.CANCELLED:
             raise serializers.ValidationError({'gym_class': 'No puedes reservar una clase cancelada.'})
@@ -900,9 +920,6 @@ class EnrollmentSerializer(serializers.ModelSerializer):
 
         if status_value == 'active' and gym_class.status in TERMINAL_CLASS_STATUSES:
             raise serializers.ValidationError({'gym_class': 'No puedes reservar una clase cerrada.'})
-
-        if user and roles.is_org_admin(user) and gym_class.organization_id != user.organization_id:
-            raise serializers.ValidationError({'gym_class': 'Solo puedes gestionar clases de tu organización.'})
 
         duplicate_exists = Enrollment.objects.filter(gym_class=gym_class, student=student)
         if instance:
@@ -1085,10 +1102,19 @@ class GymClassSerializer(serializers.ModelSerializer):
         if class_template and class_template.organization_id != organization.id:
             raise serializers.ValidationError({'class_template': 'La plantilla no pertenece a la organización indicada.'})
 
-        if teacher.role != User.Role.TEACHER:
-            raise serializers.ValidationError({'teacher': 'El usuario seleccionado no es profesor.'})
+        # ORGANIZACIÓN PRIMERO, ROL DESPUÉS (lección 8.3). `teacher` es un
+        # `PrimaryKeyRelatedField` contra `User.objects.all()`, así que acá puede llegar el id
+        # de CUALQUIER usuario de la plataforma. Con el rol primero, los dos mensajes se
+        # volvían un oráculo: "no es profesor" vs "debe pertenecer a la misma organización"
+        # distinguía el ROL de una cuenta ajena sobre ids autoincrementales y adivinables
+        # —y P4 lo empeoraba, porque ahora también delataría qué cuentas de otro tenant son
+        # `gym_admin`—. Con la organización primero, todo id ajeno responde lo mismo.
         if teacher.organization_id != organization.id:
             raise serializers.ValidationError({'teacher': 'El profesor debe pertenecer a la misma organización.'})
+        # P4: `gym_admin` también es elegible como profesor. Este check es de INTEGRIDAD
+        # (¿puede este rol dictar?) y ya corre sobre un usuario confirmado de la organización.
+        if teacher.role not in TEACHER_ELIGIBLE_ROLES:
+            raise serializers.ValidationError({'teacher': 'El usuario seleccionado no es profesor.'})
 
         if start_datetime and end_datetime and end_datetime <= start_datetime:
             raise serializers.ValidationError({'end_datetime': 'La fecha de término debe ser posterior al inicio.'})
@@ -1455,11 +1481,18 @@ class RecurringEnrollmentSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({'student': 'El alumno es obligatorio.'})
         if not class_template:
             raise serializers.ValidationError({'class_template': 'La plantilla es obligatoria.'})
-        if not class_template.is_active:
-            raise serializers.ValidationError({'class_template': 'Solo puedes suscribirte a plantillas activas.'})
 
+        # ORGANIZACIÓN PRIMERO, ESTADO DESPUÉS (lección 8.3). `class_template` resuelve
+        # contra `ClassTemplate.objects.all()`, así que con `is_active` adelante el par de
+        # mensajes —"solo plantillas activas" vs "no pertenece a tu organización"— era un
+        # oráculo del `is_active` de las series de OTRO gimnasio, sobre ids adivinables.
+        # Es el mismo corte que hace el `clean()` del modelo; acá es el que de verdad se
+        # ejecuta, porque este `validate()` corta antes de instanciarlo.
         if class_template.organization_id != student.organization_id:
             raise serializers.ValidationError({'class_template': 'La plantilla no pertenece a tu organización.'})
+
+        if not class_template.is_active:
+            raise serializers.ValidationError({'class_template': 'Solo puedes suscribirte a plantillas activas.'})
 
         data = {
             'student': student,
@@ -1985,7 +2018,33 @@ class StudentPlanAssignPaymentSerializer(serializers.Serializer):
 
 
 class StudentPlanAssignSerializer(serializers.Serializer):
-    user = serializers.PrimaryKeyRelatedField(queryset=User.objects.filter(role=User.Role.STUDENT, is_active=True))
+    # P4: `gym_admin` también puede recibir un plan.
+    #
+    # El queryset NO se acota por organización, igual que antes: este serializer no tiene
+    # `context` garantizado. El corte cross-org NO se movió con P4 —sigue exactamente donde
+    # estaba para un alumno ajeno—, pero conviene ser preciso sobre DÓNDE está, que son dos
+    # lugares distintos según el payload:
+    #   - sujeto ajeno + plan propio  → 400 de `validate()` ("el plan no pertenece a la
+    #     organización del alumno"), acá abajo, dentro de `is_valid()`;
+    #   - sujeto ajeno + plan de ESA misma org ajena → 403 de la view (`assign`), que es el
+    #     único caso que llega hasta las guardas. OJO: ese 403 es para un actor `gym_admin`.
+    #     `assign` también admite `superadmin`, que es rol de PLATAFORMA y no tiene guarda
+    #     cross-org acá —para él ese par coherente se asigna—; lo que lo acota es la guarda
+    #     de actor-de-pago de la view, que lo deja solo en la vía `free`.
+    #
+    # ORÁCULO CONOCIDO Y ACEPTADO: al resolver contra un queryset de plataforma, un id que
+    # existe y es elegible da un error distinto de uno que no existe, así que el endpoint
+    # deja enumerar qué cuentas de OTROS tenants son sujetos de plan activos. Es preexistente
+    # (ya pasaba con `student`), y P4 lo ensancha a los `gym_admin`. No filtra ningún DATO,
+    # solo existencia+elegibilidad sobre ids autoincrementales. Cerrarlo de verdad exige el
+    # patrón de `ManualPaymentCreateSerializer` —`IntegerField` crudo y resolución en la view
+    # dentro del scope del actor, con 404 uniforme—, que es un cambio de contrato del
+    # endpoint y no entra en este diff. Y hay que aplicarlo a LOS DOS campos: `plan` (línea
+    # de abajo) tiene exactamente el mismo agujero —existencia + `is_active` de planes de
+    # otro tenant—, así que cerrar solo `user` deja el oráculo vivo por la otra puerta.
+    user = serializers.PrimaryKeyRelatedField(
+        queryset=User.objects.filter(role__in=STUDENT_SUBJECT_ROLES, is_active=True)
+    )
     plan = serializers.PrimaryKeyRelatedField(queryset=Plan.objects.filter(is_active=True))
     start_date = serializers.DateField()
     discount_percentage = serializers.FloatField(required=False, min_value=0, max_value=100)

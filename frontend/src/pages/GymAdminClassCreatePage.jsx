@@ -7,6 +7,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { branchesApi, classTypesApi, classesApi, disciplinesApi, usersApi } from '../api/client'
+import { teacherEligibleRoleParam } from '../utils/roles'
 import DashboardHeader from '../components/DashboardHeader'
 
 const initialForm = {
@@ -34,7 +35,7 @@ export default function GymAdminClassCreatePage() {
   const loadData = async () => {
     const [branchesData, teachersData, classTypeData, disciplineData] = await Promise.all([
       branchesApi.list(),
-      usersApi.list({ role: 'teacher' }),
+      usersApi.list({ role: teacherEligibleRoleParam }),
       classTypesApi.list(),
       disciplinesApi.list(),
     ])

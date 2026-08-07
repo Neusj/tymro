@@ -576,16 +576,41 @@ def _roster_row(api_client, ctx, endpoint='enrolled-students', actor='admin'):
 
 
 @pytest.mark.parametrize('actor', ['admin', 'manager', 'teacher'])
-@pytest.mark.parametrize('endpoint', ['enrolled-students', 'enrollable-students'])
-def test_financial_readers_get_the_payment_status(api_client, roster, actor, endpoint):
-    """Mismos lectores que reciben el motivo real del bloqueo en 7.3: todos menos monitor."""
-    plan = _plan(roster['org'], name='Pack 10')
-    target = roster['student'] if endpoint == 'enrolled-students' else roster['candidate']
-    _membership(target, plan, classes_used=2, final_price=30000)
+def test_financial_readers_get_the_payment_status(api_client, roster, actor):
+    """Mismos lectores que reciben el motivo real del bloqueo en 7.3: todos menos monitor.
 
-    row = _roster_row(api_client, roster, endpoint=endpoint, actor=actor)
+    Solo sobre `enrolled-students`. El otro roster, `enrollable-students`, DEJÓ de publicar
+    los ejes financieros — ver el test de abajo, que ancla esa divergencia.
+    """
+    plan = _plan(roster['org'], name='Pack 10')
+    _membership(roster['student'], plan, classes_used=2, final_price=30000)
+
+    row = _roster_row(api_client, roster, endpoint='enrolled-students', actor=actor)
 
     assert row['plan_payment_status'] == 'unpaid'
+
+
+@pytest.mark.parametrize('actor', ['admin', 'manager', 'teacher', 'monitor'])
+def test_the_enrollment_picker_never_publishes_the_payment_axis_to_anyone(
+        api_client, roster, actor):
+    """P4/1c: `enrollable-students` es un PICKER —elegir a quién inscribir—, no una vista
+    financiera, y omite los dos ejes de pago para TODO lector, no solo el monitor.
+
+    El corte es por SUPERFICIE, no por actor, y por eso es un parámetro distinto de
+    `expose_reason`. Motivo: desde que el `gym_admin` es sujeto inscribible (P4), el picker
+    empezó a publicar el estado de pago de la membresía del ADMIN a cualquier lector del
+    picker —incluido el profesor de la clase, que antes no podía ni obtener su email—.
+    """
+    plan = _plan(roster['org'], name='Pack 10')
+    _membership(roster['candidate'], plan, classes_used=2, final_price=30000)
+
+    row = _roster_row(api_client, roster, endpoint='enrollable-students', actor=actor)
+
+    assert 'plan_payment_status' not in row
+    assert 'plan_enrollment_fee_status' not in row
+    # Lo operativo SÍ sigue: es lo que decide si se puede inscribir.
+    assert 'plan_status' in row
+    assert 'has_available_classes' in row
 
 
 def test_monitor_never_receives_the_payment_status(api_client, roster):

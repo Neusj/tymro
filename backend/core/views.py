@@ -29,6 +29,8 @@ from rest_framework.viewsets import ModelViewSet
 from accounts import roles
 
 from .models import (
+    STUDENT_SUBJECT_ROLES,
+    TEACHER_ELIGIBLE_ROLES,
     Attendance,
     AttendanceChangeLog,
     Branch,
@@ -178,6 +180,49 @@ def _is_teacher(user):
 
 def _is_student(user):
     return _user_role(user) == User.Role.STUDENT
+
+
+def _acts_as_student(user):
+    """IDENTIDAD de alumno: este usuario puede tener plan, reservar, marcarse asistencia
+    por QR y leer sus propios `/my-*`.
+
+    P4 (doble identidad): además del `student`, el `gym_admin` de una organización. No es
+    una capacidad administrativa, así que NO se expresa con `roles.is_org_admin` —eso
+    incluiría a `manager`, que queda deliberadamente afuera— ni con `_is_gym_admin` a
+    secas: se exige `organization_id` porque sin ancla de tenant no hay gimnasio del que
+    ser alumno.
+
+    Este helper amplía SOLO las superficies donde el actor opera sobre SUS PROPIOS datos
+    (los cuatro `/my-*` y el QR de auto-marcado). El resto de los `_is_student(...)` de
+    este módulo siguen intactos a propósito: describen el CAMINO del alumno (auto-scoping
+    del queryset, plazos de cancelación, vitrina de planes), y un admin que ya tiene el
+    camino administrativo no debe entrar por los dos a la vez.
+    """
+    if _is_student(user):
+        return True
+    return _is_gym_admin(user) and bool(getattr(user, 'organization_id', None))
+
+
+def _role_filter_values(raw_role):
+    """Roles pedidos en `?role=`. Acepta uno (`teacher`) o varios separados por coma
+    (`teacher,gym_admin`), que es lo que necesita el selector de profesores desde que el
+    `gym_admin` también puede dictar (P4).
+
+    NO es una barrera de seguridad y no debe usarse como tal: el aislamiento lo da el
+    filtro por `organization_id` de cada rama de `get_queryset`, y cualquier actor que
+    pueda listar por rol ya puede listar SIN `role` y ver exactamente el mismo conjunto.
+    Esto es comodidad de filtrado. Sin valor -> lista vacía (no filtra).
+    """
+    if not raw_role:
+        return []
+    return [value for value in (part.strip() for part in str(raw_role).split(',')) if value]
+
+
+def _only_platform_roles(role_values):
+    """True si se pidió al menos un rol y TODOS son de plataforma. Es la condición que
+    habilita al superadmin a listar sin `organization_id`: un solo rol de organización en
+    la lista obliga a declarar la organización, igual que antes."""
+    return bool(role_values) and all(value in roles.PLATFORM_ROLES for value in role_values)
 
 
 def _as_id_list(raw_ids):
@@ -463,7 +508,7 @@ def _get_latest_student_plan_map(student_ids, organization_id):
     return plan_by_user
 
 
-def _plan_status_payload(state, *, expose_reason=True):
+def _plan_status_payload(state, *, expose_reason=True, include_financial_axes=True):
     """Proyeccion del estado de la membresia al payload del roster.
 
     Ya no queda NADA que decidir aca: el predicado lo resuelve `describe_student_plan` y la
@@ -523,7 +568,25 @@ def _plan_status_payload(state, *, expose_reason=True):
             'plan_expiry_alert_level': state.alert_level,
             'plan_expiry_alert_message': state.alert_message,
         }
-    if expose_reason:
+    # `include_financial_axes=False` corta los dos ejes financieros para TODO lector, sin
+    # importar su rol — es un corte por SUPERFICIE, no por actor, y por eso es un parámetro
+    # aparte de `expose_reason` (que es el corte por lector: "todos menos monitor").
+    #
+    # Lo usa el PICKER de inscripción (`enrollable-students`): para elegir a quién inscribir
+    # alcanzan la identidad y el saldo, el estado de pago nunca hizo falta ahí. Desde que el
+    # `gym_admin` es sujeto inscribible (P4) el picker lo publicaba a todos sus lectores,
+    # incluido el profesor de la clase, que pasaba a leer el estado de pago de la membresía
+    # de su propio administrador.
+    #
+    # ⚠️ ALCANCE EXACTO, para no leer de más: esto tapa la ventana PRE-inscripción. Una vez
+    # que el admin se inscribe, `enrolled-students` sí le publica los dos ejes al profesor de
+    # la clase (llamada de más abajo, con el default), que es el contrato preexistente del
+    # roster de inscritos y no se tocó acá.
+    #
+    # ⚠️ DEFAULT ABIERTO, misma trampa que documenta `_may_see_plan_reason`: una superficie
+    # NUEVA que llame a esta función sin pensarlo publica los dos ejes. Si agregás una,
+    # decidí este parámetro a mano.
+    if expose_reason and include_financial_axes:
         payload['plan_payment_status'] = state.payment_status
         payload['plan_enrollment_fee_status'] = state.enrollment_fee_status
     return payload
@@ -566,6 +629,12 @@ def _may_see_plan_reason(user):
     (`permissions.py`: "monitor solo lectura"). Cualquier superficie NUEVA que publique
     estado financiero de una membresia tiene que repetir este corte a mano; apoyarse en la
     clase de permiso le entrega el dato al monitor sin que nada falle.
+
+    Este flag es el corte por LECTOR. Hay un segundo corte, ortogonal, por SUPERFICIE:
+    `_plan_status_payload(..., include_financial_axes=False)`, que apaga los dos ejes
+    financieros para todos los lectores de una superficie que no es financiera (hoy, el
+    picker `enrollable-students`). Los dos son default-ABIERTO, asi que una superficie nueva
+    tiene que decidir los DOS a mano.
 
     Desde 8.1 este mismo flag gobierna `plan_payment_status`, y desde 8.4 tambien
     `plan_enrollment_fee_status`: los dos son dato financiero en TODOS sus valores y para el
@@ -1473,7 +1542,11 @@ class AttendanceQrPreviewView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        if not _is_student(request.user):
+        # P4: el `gym_admin` se auto-marca igual que un alumno. El scope no lo da el rol
+        # sino `_qr_preview_payload` → `_find_qr_candidate`, que solo mira clases donde
+        # ESTE usuario tiene un `Enrollment` activo Y que pertenecen a la organización del
+        # QR, con `student.organization_id != organization_id` cortando antes.
+        if not _acts_as_student(request.user):
             raise PermissionDenied('Solo alumnos pueden marcar asistencia por QR.')
         # Frescura del QR se valida UNA sola vez, aquí (firma + ventana + enrollment).
         payload = _load_qr_token(request.query_params.get('token'))
@@ -1492,7 +1565,10 @@ class AttendanceQrCheckInView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        if not _is_student(request.user):
+        # P4: mismo criterio que el preview. Las tres guardas que siguen (grant propio,
+        # organización del grant == la del actor, y la clase resuelta dentro de esa misma
+        # organización) son las que aíslan, y ninguna depende del rol.
+        if not _acts_as_student(request.user):
             raise PermissionDenied('Solo alumnos pueden marcar asistencia por QR.')
 
         # Confirma con el GRANT, no con el token del QR: ya no puede vencerse a mitad.
@@ -1930,27 +2006,29 @@ class UserViewSet(ModelViewSet):
 
         if _is_superadmin(user):
             organization_id = self.request.query_params.get('organization_id')
-            role = self.request.query_params.get('role')
+            role_values = _role_filter_values(self.request.query_params.get('role'))
 
             if self.action == 'list':
                 if not organization_id:
                     # Sin organización solo se listan usuarios de plataforma
                     # (superadmins, que no tienen organización); el resto exige org.
-                    if role in roles.PLATFORM_ROLES:
-                        return queryset.filter(role=role)
+                    # Con varios roles, TODOS tienen que ser de plataforma: mezclar uno de
+                    # organización en la lista no puede servir de rodeo para el `organization_id`.
+                    if _only_platform_roles(role_values):
+                        return queryset.filter(role__in=role_values)
                     return queryset.none()
                 queryset = queryset.filter(organization_id=organization_id)
 
-            if role:
-                queryset = queryset.filter(role=role)
+            if role_values:
+                queryset = queryset.filter(role__in=role_values)
             return queryset
 
         # gym_admin/manager (escritura) y monitor (solo lectura) ven su organización.
         if (roles.is_org_admin(user) or _is_monitor(user)) and user.organization_id:
-            role = self.request.query_params.get('role')
+            role_values = _role_filter_values(self.request.query_params.get('role'))
             queryset = queryset.filter(organization_id=user.organization_id)
-            if role:
-                queryset = queryset.filter(role=role)
+            if role_values:
+                queryset = queryset.filter(role__in=role_values)
             return queryset
 
         if _is_teacher(user) or _is_student(user) or _is_monitor(user):
@@ -1963,7 +2041,7 @@ class UserViewSet(ModelViewSet):
         if (
             _is_superadmin(request.user)
             and not request.query_params.get('organization_id')
-            and request.query_params.get('role') not in roles.PLATFORM_ROLES
+            and not _only_platform_roles(_role_filter_values(request.query_params.get('role')))
         ):
             raise PermissionDenied('Debes filtrar por organization_id para listar usuarios como superadmin.')
         return super().list(request, *args, **kwargs)
@@ -2477,11 +2555,24 @@ class GymClassViewSet(ModelViewSet):
 
         expose_reason = _may_see_plan_reason(user)
         active_enrolled_ids = set(gym_class.enrollments.filter(status='active').values_list('student_id', flat=True))
+        # P4: el `gym_admin` también es sujeto inscribible, así que tiene que aparecer en el
+        # picker o la doble identidad queda inalcanzable por UI. El aislamiento es
+        # `organization_id=gym_class.organization_id` y no se toca: un admin de otra
+        # organización no entra acá, igual que no entraba un alumno ajeno.
         candidates = User.objects.filter(
-            role=User.Role.STUDENT,
+            role__in=STUDENT_SUBJECT_ROLES,
             organization_id=gym_class.organization_id,
             is_active=True,
         ).order_by('first_name', 'last_name', 'username')
+        # El PROFESOR de esta clase no se ofrece como alumno de esta clase. Con la doble
+        # identidad, quien la dicta puede ser `gym_admin` y por lo tanto sujeto inscribible:
+        # sin esto, el picker le ofrecía inscribirse en su propia clase y marcarse presente,
+        # y esa asistencia alimenta SU liquidación (`teacher_payments`: `per_student` y el
+        # umbral de mínimo de alumnos cuentan `Attendance.PRESENT`). Autoservicio sobre el
+        # propio pago, que es justo lo que los candados de P4 cierran en las otras vías.
+        # Condicionado porque `GymClass.teacher` es nullable (SET_NULL).
+        if gym_class.teacher_id:
+            candidates = candidates.exclude(id=gym_class.teacher_id)
         candidate_ids = list(candidates.values_list('id', flat=True))
         active_plan_by_student = _get_active_student_plan_map(candidate_ids, gym_class.organization_id)
         latest_plan_by_student = _get_latest_student_plan_map(candidate_ids, gym_class.organization_id)
@@ -2496,7 +2587,11 @@ class GymClassViewSet(ModelViewSet):
             )
             state = describe_student_plan(student_plan, today)
             remaining_classes, has_available, unlimited = _roster_plan_balance(student_plan, state)
-            plan_status = _plan_status_payload(state, expose_reason=expose_reason)
+            # Sin ejes financieros: ver `_plan_status_payload`. El picker publica saldo y
+            # vigencia —que es lo que decide si se puede inscribir—, nunca estado de pago.
+            plan_status = _plan_status_payload(
+                state, expose_reason=expose_reason, include_financial_axes=False
+            )
             full_name = f'{student.first_name} {student.last_name}'.strip()
             results.append(
                 {
@@ -3504,7 +3599,10 @@ class RecurringEnrollmentViewSet(ModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='my')
     def my_recurring(self, request):
-        if not _is_student(request.user):
+        # P4: el admin lee SUS recurrencias. `get_queryset()` ya lo acota por
+        # `class_template__organization_id == user.organization_id` en la rama de
+        # org_admin, y el `student_id` de acá lo reduce a lo propio.
+        if not _acts_as_student(request.user):
             raise PermissionDenied('Este endpoint es solo para alumnos.')
         queryset = self.get_queryset().filter(student_id=request.user.id, is_active=True)
         serializer = self.get_serializer(queryset, many=True)
@@ -3584,7 +3682,10 @@ class EnrollmentViewSet(ModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='my')
     def my_reservations(self, request):
-        if not _is_student(request.user):
+        # P4: el admin lee SUS reservas. Mismo argumento que `my_recurring`:
+        # `get_queryset()` ya filtró por `gym_class__organization_id` en la rama de
+        # org_admin, así que el `student_id` propio no puede alcanzar otra organización.
+        if not _acts_as_student(request.user):
             raise PermissionDenied('Este endpoint es solo para alumnos.')
         queryset = self.get_queryset().filter(student_id=request.user.id)
         serializer = self.get_serializer(queryset, many=True)
@@ -3965,6 +4066,41 @@ class MembershipPlanViewSet(ModelViewSet):
         if plan.organization_id != student.organization_id:
             raise PermissionDenied('No puedes asignar un plan de otra organización.')
 
+        # CANDADO DE AUTOASIGNACIÓN (P4). Desde que el `gym_admin` puede ser sujeto de plan,
+        # `student` puede ser el propio actor. Autoasignarse una BECA es cortesía legítima y
+        # queda permitida; declararse a sí mismo un PAGO MANUAL no, por el mismo motivo que
+        # `ManualPaymentCreateView`: `record_manual_payment` de más abajo escribe la misma
+        # fila de caja y ensuciaría el reporte de ingresos sin contraparte.
+        #
+        # Va DESPUÉS de las tres guardas cross-org de arriba (lección 8.3) y ANTES de la
+        # invariante de precio: si el actor se apunta a sí mismo con `manual`, el motivo
+        # correcto del 400 es el autopago, no el precio.
+        if student.id == user.id:
+            if payment['method'] != StudentPlanAssignPaymentSerializer.METHOD_FREE:
+                raise ValidationError({
+                    'payment': (
+                        'No podés declararte un pago a vos mismo. Para asignarte un plan sin '
+                        'costo usá `payment.method: "free"`; un cobro real lo tiene que '
+                        'registrar otro administrador.'
+                    ),
+                })
+            # La beca fija `discount_percentage = 100` en el serializer SIN pasar por
+            # `PlanViewSet._validate_free_plan_teacher_payment_config`, que es la que exige
+            # tener configurado el valor de clase gratis antes de crear un plan gratuito. Sin
+            # esta línea, el admin tenía en `assign` una puerta trasera a un plan al 100% de
+            # descuento con la config en cero — y el profesor que le dicte esas clases cobra
+            # $0 por ellas (`teacher_payments.py`: el aporte de una clase gratis ES ese
+            # valor). Se aplica al AUTOSERVICIO, que es la vía sin segunda firma.
+            organization = getattr(user, 'organization', None)
+            if not organization or float(organization.free_class_teacher_payment_value or 0) <= 0:
+                raise ValidationError({
+                    'payment': (
+                        'Para asignarte un plan sin costo primero tenés que configurar el '
+                        'valor de clase gratis para el pago al profesor, en la configuración '
+                        'de la organización.'
+                    ),
+                })
+
         if payment['method'] == StudentPlanAssignPaymentSerializer.METHOD_MANUAL:
             # Invariante `manual ⟹ final_price > 0`: en `_payment_status` (services/plans.py)
             # FREE gana sobre PAID cuando el precio de venta es 0. Un `ManualPayment` colgado
@@ -4074,7 +4210,9 @@ class MembershipPlanViewSet(ModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='my-plan')
     def my_plan(self, request):
-        if not _is_student(request.user):
+        # P4: el admin consulta SU membresía vigente. `get_active_student_plan` filtra por
+        # `user` Y por `organization_id` del propio usuario, así que no hay superficie ajena.
+        if not _acts_as_student(request.user):
             raise PermissionDenied('Solo estudiantes pueden consultar su plan activo.')
         student_plan = _get_active_student_plan(request.user)
         if not student_plan:
@@ -4083,7 +4221,9 @@ class MembershipPlanViewSet(ModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='my-memberships')
     def my_memberships(self, request):
-        if not _is_student(request.user):
+        # P4: el admin lista SUS membresías vigentes. El queryset de abajo ya ancla
+        # `user=request.user` + `organization_id=request.user.organization_id`.
+        if not _acts_as_student(request.user):
             raise PermissionDenied('Este endpoint es solo para alumnos.')
 
         today = timezone.localdate()
@@ -4109,11 +4249,20 @@ class MembershipPlanViewSet(ModelViewSet):
         user = request.user
         plan = self.get_object()
 
+        # SIN filtro de rol, a propósito. El rol NUNCA aportó al aislamiento acá —`plan_id`
+        # sale de un `get_object()` ya acotado y la rama de gym_admin suma `organization_id`—
+        # y en cambio abría un DEAD-END: `_cascade_blocker` cuenta TODAS las filas del plan,
+        # así que cualquier membresía cuyo dueño tenga hoy un rol fuera del filtro quedaba
+        # invisible acá (no listada, DELETE 404) pero seguía bloqueando el borrado del plan
+        # (400, y encima lo desactivaba). El caso frecuente no es el admin de P4 sino el
+        # ALUMNO CON PLAN QUE ASCIENDE A PROFE: nada impide ese cambio de rol. Filtrar por el
+        # rol ACTUAL del dueño para decidir si una membresía HISTÓRICA existe es la premisa
+        # equivocada; la membresía es del plan y de la organización, no del rol.
         if _is_superadmin(user):
             memberships_queryset = (
                 StudentPlan.objects.select_related('user', 'plan')
                 .prefetch_related('origin_transactions', 'manual_payments', 'charge_line_items')   # eje de pago + desglose sin N+1 por membresia
-                .filter(plan_id=plan.id, user__role=User.Role.STUDENT)
+                .filter(plan_id=plan.id)
                 .order_by('-is_active', '-start_date', '-id')
             )
         elif _is_gym_admin(user):
@@ -4124,7 +4273,7 @@ class MembershipPlanViewSet(ModelViewSet):
             memberships_queryset = (
                 StudentPlan.objects.select_related('user', 'plan')
                 .prefetch_related('origin_transactions', 'manual_payments', 'charge_line_items')   # eje de pago + desglose sin N+1 por membresia
-                .filter(plan_id=plan.id, user__role=User.Role.STUDENT, organization_id=user.organization_id)
+                .filter(plan_id=plan.id, organization_id=user.organization_id)
                 .order_by('-is_active', '-start_date', '-id')
             )
         else:
@@ -4141,7 +4290,7 @@ class MembershipPlanViewSet(ModelViewSet):
         if _is_superadmin(user):
             membership = (
                 StudentPlan.objects.select_related('user', 'plan')
-                .filter(id=membership_id, plan_id=plan.id, user__role=User.Role.STUDENT)
+                .filter(id=membership_id, plan_id=plan.id)
                 .first()
             )
         elif _is_gym_admin(user):
@@ -4153,7 +4302,6 @@ class MembershipPlanViewSet(ModelViewSet):
                 .filter(
                     id=membership_id,
                     plan_id=plan.id,
-                    user__role=User.Role.STUDENT,
                     organization_id=user.organization_id,
                 )
                 .first()
@@ -4273,6 +4421,25 @@ class ManualPaymentCreateView(APIView):
             # organización" convierte el endpoint en un oráculo de membresías ajenas.
             raise NotFound('Membresía no encontrada.')
 
+        # CANDADO DE AUTOPAGO (P4). Desde que el `gym_admin` puede tener membresía propia,
+        # el único rol con acceso a este endpoint puede apuntarlo a SÍ MISMO: se registraría
+        # plata que nadie recibió y entraría al reporte de ingresos —bruto por `collected_at`,
+        # sin contraparte ni segunda firma— indistinguible de una venta real. La cortesía
+        # legítima (regalarse el plan) tiene su vía en `assign` con `payment.method: "free"`,
+        # que no mueve caja.
+        #
+        # Va DESPUÉS del lookup cross-org (lección 8.3): si corriera antes, el 400 de
+        # autopago contra el 404 de "no es tuya" distinguiría membresías ajenas por el status
+        # code. Acá la membresía YA está confirmada como de la organización del actor, así
+        # que el 400 no revela nada que el actor no pueda ver.
+        if membership.user_id == user.id:
+            raise ValidationError({
+                'student_plan': (
+                    'No podés registrar un pago manual sobre tu propia membresía. Pedí a '
+                    'otro administrador que lo registre.'
+                )
+            })
+
         try:
             payment = record_manual_payment(
                 student_plan=membership,
@@ -4382,8 +4549,12 @@ class TeacherPaymentRuleViewSet(ModelViewSet):
         if not allowed:
             raise PermissionDenied('No tienes permisos para gestionar asignaciones de esta regla.')
 
+        # P4: el pool incluye a los `gym_admin` de la organización de la regla, que también
+        # pueden dictar. El `organization_id=rule.organization_id` es lo que aísla y no se
+        # toca: un admin de otra org no aparece acá, y como `valid_ids` sale de ESTE mismo
+        # queryset, tampoco es asignable por id en el PUT.
         teachers_qs = User.objects.filter(
-            role=User.Role.TEACHER,
+            role__in=TEACHER_ELIGIBLE_ROLES,
             is_active=True,
             organization_id=rule.organization_id,
         ).order_by('first_name', 'last_name', 'username')
@@ -4567,7 +4738,13 @@ class TeacherPaymentRecordViewSet(ModelViewSet):
             raise ValidationError({'period': 'year/month invalidos.'})
 
         # El profesor debe pertenecer a la organizacion (evita marcar profes de otra org).
-        teacher = User.objects.filter(id=teacher_id, organization_id=organization_id, role=User.Role.TEACHER).first()
+        # P4: un `gym_admin` que dicta clases genera `TeacherPaymentRecord` igual que
+        # cualquier profe (`calculate_teacher_payment` nunca miró el rol), asi que tiene que
+        # ser liquidable o el pago le quedaba calculado y sin poder marcarse como pagado.
+        # El `organization_id` sigue siendo el aislante.
+        teacher = User.objects.filter(
+            id=teacher_id, organization_id=organization_id, role__in=TEACHER_ELIGIBLE_ROLES
+        ).first()
         if teacher is None:
             raise ValidationError({'teacher_id': 'Profesor no encontrado en la organizacion.'})
 

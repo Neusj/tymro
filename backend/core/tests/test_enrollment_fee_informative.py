@@ -221,22 +221,18 @@ def test_overdue_enrollment_fee_is_purely_informational(setup):
 # --------------------------------------------------------------------------------------
 
 @pytest.mark.parametrize('endpoint', ['enrolled-students', 'enrollable-students'])
-def test_roster_hides_enrollment_fee_axis_from_monitor_but_shows_it_to_staff(
+def test_no_roster_ever_shows_the_enrollment_fee_axis_to_the_monitor(
         api_client, roster, endpoint):
     """Hoy la matrícula impaga sigue bloqueando la vigencia, así que
     `_is_redacted_for_non_financial` (vigente-pero-inusable) redacta la fila del monitor a
     `plan_status == 'unavailable'`. 8.4 saca la matrícula del bloqueo: ya no hay nada que
     redactar por ese motivo y el monitor ve `plan_status == 'active'`, sin la clave nueva
     `plan_enrollment_fee_status` (mismo criterio incondicional que ya usa `plan_payment_status`,
-    regresión 8.1). El staff financiero SÍ recibe el eje con su valor real.
+    regresión 8.1).
 
-    Parametrizado sobre los DOS rosters (`enrolled-students`/`enrollable-students`): hoy
-    comparten el mismo punto de emisión (`_plan_status_payload`), pero nada ancla que sigan
-    compartiéndolo — sin este segundo caso, un refactor que los separe podría des-gatear el
-    campo nuevo en `enrollable-students` sin que ningún test rojo lo detecte. `_roster_row`
-    lee `ctx['student']` para `enrolled-students` y `ctx['candidate']` para
-    `enrollable-students`, así que la membresía con matrícula impaga se crea sobre el
-    alumno que corresponde a cada endpoint.
+    La mitad del MONITOR sigue parametrizada sobre los dos rosters: para él el corte vale en
+    los dos, y por motivos distintos (en `enrolled-students` porque es monitor, en
+    `enrollable-students` porque el picker ya no lo publica para nadie).
     """
     target = roster['student'] if endpoint == 'enrolled-students' else roster['candidate']
     _plan_with_fee(roster['org'], target, Decimal('50000'), plan=_plan(roster['org']))
@@ -246,7 +242,25 @@ def test_roster_hides_enrollment_fee_axis_from_monitor_but_shows_it_to_staff(
     assert 'plan_payment_status' not in monitor_row
     assert monitor_row['plan_status'] == 'active'
 
-    staff_row = _roster_row(api_client, roster, endpoint=endpoint, actor='admin')
+
+def test_the_enrolled_roster_shows_the_enrollment_fee_axis_to_staff(api_client, roster):
+    """El staff financiero SÍ recibe el eje con su valor real — pero SOLO en el roster de
+    inscritos.
+
+    ⚠️ Este test estaba parametrizado sobre los DOS rosters, con el argumento de que nada
+    anclaba que siguieran compartiendo `_plan_status_payload` y un refactor podía
+    des-gatearlo en `enrollable-students` sin que nada se pusiera rojo. Ese argumento seguía
+    siendo bueno: es exactamente lo que pasó, salvo que **a propósito**. P4/1c separó los dos
+    rosters porque el picker no es una vista financiera y, con el `gym_admin` como sujeto
+    inscribible, publicar ahí el eje le entregaba al profesor de la clase el estado de pago
+    de su administrador. La divergencia ahora está anclada por el test explícito
+    `test_the_enrollment_picker_never_publishes_the_payment_axis_to_anyone`
+    (`test_plan_payment_status.py`), que es el que hay que romper para revertirla.
+    """
+    _plan_with_fee(roster['org'], roster['student'], Decimal('50000'), plan=_plan(roster['org']))
+
+    staff_row = _roster_row(api_client, roster, endpoint='enrolled-students', actor='admin')
+
     assert 'plan_enrollment_fee_status' in staff_row
     assert staff_row['plan_enrollment_fee_status'] == 'pending'
 

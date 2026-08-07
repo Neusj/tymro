@@ -4,6 +4,7 @@ import { assignPlanToUser, getPlans, usersApi } from '../api/client'
 import DashboardHeader from '../components/DashboardHeader'
 import { useAuth } from '../auth/AuthContext'
 import { todayLocalISO } from '../utils/format'
+import { studentSubjectRoleParam } from '../utils/roles'
 
 function firstApiError(detail, fallback) {
   if (!detail) {
@@ -126,7 +127,7 @@ export default function AssignPlanPage() {
       if (organizationId) {
         params.organization_id = organizationId
       }
-      const [usersData, plansData] = await Promise.all([usersApi.list({ ...params, role: 'student' }), getPlans()])
+      const [usersData, plansData] = await Promise.all([usersApi.list({ ...params, role: studentSubjectRoleParam }), getPlans()])
       const userList = toList(usersData)
       const planList = toList(plansData)
       setStudents(userList)
