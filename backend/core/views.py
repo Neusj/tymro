@@ -118,7 +118,7 @@ from .services.manual_payments import (
     record_manual_payment,
 )
 from .services.plans import REASON_PLAN_UNAVAILABLE, AlertLevel, describe_student_plan
-from .services.public_urls import organization_public_base_url
+from .services.public_urls import organization_public_base_url, platform_public_base_url
 from .services.reservations import (
     ReservationRuleError,
     cancel_enrollment_with_refund,
@@ -842,7 +842,12 @@ class PasswordResetRequestView(APIView):
         if user:
             uid = urlsafe_base64_encode(force_bytes(user.pk))
             token = default_token_generator.make_token(user)
-            base = organization_public_base_url(getattr(user, 'organization', None))
+            user_organization = getattr(user, 'organization', None)
+            base = (
+                organization_public_base_url(user_organization)
+                if user_organization is not None
+                else platform_public_base_url()
+            )
             reset_link = f"{base}/reset-password?uid={uid}&token={token}"
             try:
                 send_mail(

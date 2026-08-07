@@ -259,34 +259,34 @@ def test_disabled_registration_blocks_by_subdomain(api_client, make_organization
 # --- 7) Base de los emails por subdominio ---------------------------------------
 
 def _prod_settings(settings):
-    settings.BASE_DOMAIN = 'tymroapp.com'
-    settings.FRONTEND_URL = 'https://tymroapp.com'
+    settings.BASE_DOMAIN = 'tymroapp.cl'
+    settings.FRONTEND_URL = 'https://tymroapp.cl'
 
 
 def test_verify_email_link_uses_subdomain(api_client, make_organization, mailoutbox, settings):
     _prod_settings(settings)
     make_organization(name='Cross')  # subdomain 'org-1'
     payload = {'first_name': 'Pros', 'email': 'pros@example.com', 'password': STRONG_PASSWORD}
-    resp = api_client.post(REGISTER_URL, payload, format='json', HTTP_HOST='org-1.tymroapp.com')
+    resp = api_client.post(REGISTER_URL, payload, format='json', HTTP_HOST='org-1.tymroapp.cl')
     assert resp.status_code == 201, resp.content
-    assert 'https://org-1.tymroapp.com/verify-email?uid=' in mailoutbox[0].body
+    assert 'https://org-1.tymroapp.cl/verify-email?uid=' in mailoutbox[0].body
 
 
 def test_reset_password_link_uses_subdomain_for_org_user(api_client, make_organization, make_user, mailoutbox, settings):
     _prod_settings(settings)
     org = make_organization(name='Cross')
     make_user('stu', organization=org, role='student', email='stu@example.com')
-    resp = api_client.post('/api/password-reset/', {'email': 'stu@example.com'}, format='json', HTTP_HOST='org-1.tymroapp.com')
+    resp = api_client.post('/api/password-reset/', {'email': 'stu@example.com'}, format='json', HTTP_HOST='org-1.tymroapp.cl')
     assert resp.status_code == 200
-    assert 'https://org-1.tymroapp.com/reset-password?uid=' in mailoutbox[0].body
+    assert 'https://org-1.tymroapp.cl/reset-password?uid=' in mailoutbox[0].body
 
 
-def test_reset_password_link_apex_for_platform_user(api_client, make_user, mailoutbox, settings):
+def test_reset_password_link_uses_app_subdomain_for_platform_user(api_client, make_user, mailoutbox, settings):
     _prod_settings(settings)
     make_user('root', organization=None, role='superadmin', email='root@example.com')
-    resp = api_client.post('/api/password-reset/', {'email': 'root@example.com'}, format='json', HTTP_HOST='tymroapp.com')
+    resp = api_client.post('/api/password-reset/', {'email': 'root@example.com'}, format='json', HTTP_HOST='app.tymroapp.cl')
     assert resp.status_code == 200
-    assert 'https://tymroapp.com/reset-password?uid=' in mailoutbox[0].body
+    assert 'https://app.tymroapp.cl/reset-password?uid=' in mailoutbox[0].body
 
 
 # --- 5) Rate-limit del registro público -----------------------------------------

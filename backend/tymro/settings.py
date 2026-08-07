@@ -85,6 +85,7 @@ ALLOWED_HOSTS = _env_list(
         'localhost', '127.0.0.1', 'backend', 'frontend',
         '.localhost',  # subdominios de tenant en dev (r2b-qa.localhost, gym-test.localhost, ...)
         'tymroapp.com', 'qa.tymroapp.com', '.tymroapp.com',  # apex + subdominios de tenant en prod
+        'tymroapp.cl', 'qa.tymroapp.cl', '.tymroapp.cl',
         '.trycloudflare.com',
     ],
 )
@@ -121,7 +122,7 @@ MIDDLEWARE = [
 ]
 
 # Dominio base para resolver el subdominio de tenant. dev: 'localhost'
-# (los subdominios *.localhost resuelven a 127.0.0.1 en Chromium); prod: 'tymroapp.com'.
+# (los subdominios *.localhost resuelven a 127.0.0.1 en Chromium); prod: 'tymroapp.cl'.
 BASE_DOMAIN = os.getenv('BASE_DOMAIN', 'localhost')
 
 ROOT_URLCONF = 'tymro.urls'
@@ -199,13 +200,16 @@ CORS_ALLOWED_ORIGINS = _env_list(
         'http://127.0.0.1:5173',
         'https://tymroapp.com',
         'https://qa.tymroapp.com',
+        'https://tymroapp.cl',
+        'https://qa.tymroapp.cl',
     ],
 )
 CORS_ALLOWED_ORIGIN_REGEXES = [
     r'^https://.*\.trycloudflare\.com$',
-    # Subdominios de tenant: dev (*.localhost:5173) y prod (*.tymroapp.com).
+    # Subdominios de tenant: dev (*.localhost:5173) y prod (*.tymroapp.com / *.tymroapp.cl).
     r'^http://[a-z0-9-]+\.localhost:5173$',
     r'^https://[a-z0-9-]+\.tymroapp\.com$',
+    r'^https://[a-z0-9-]+\.tymroapp\.cl$',
 ]
 CSRF_TRUSTED_ORIGINS = _env_list(
     'CSRF_TRUSTED_ORIGINS',
@@ -216,6 +220,9 @@ CSRF_TRUSTED_ORIGINS = _env_list(
         'https://tymroapp.com',
         'https://qa.tymroapp.com',
         'https://*.tymroapp.com',
+        'https://tymroapp.cl',
+        'https://qa.tymroapp.cl',
+        'https://*.tymroapp.cl',
         'https://*.trycloudflare.com',
     ],
 )
@@ -311,8 +318,11 @@ EMAIL_BACKEND = os.getenv(
 ANYMAIL = {'RESEND_API_KEY': os.getenv('RESEND_API_KEY', '')}
 DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'no-reply@tymroapp.com')
 
-# URL base del frontend para armar el link de reset de contraseña.
+# URL base del frontend para armar links públicos por organización.
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173')
+# URL de la app de plataforma (superadmin). Si no se define, el helper usa app.<BASE_DOMAIN>
+# cuando FRONTEND_URL apunta al apex de producción, y conserva FRONTEND_URL en local/QA.
+PLATFORM_FRONTEND_URL = os.getenv('PLATFORM_FRONTEND_URL', '')
 
 # Validez del token de reset de contraseña (segundos). Default 3 días.
 PASSWORD_RESET_TIMEOUT = int(os.getenv('PASSWORD_RESET_TIMEOUT', str(60 * 60 * 24 * 3)))

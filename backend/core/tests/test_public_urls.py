@@ -1,7 +1,7 @@
 """Valor exacto de las URLs públicas construidas por subdominio de la organización."""
 import pytest
 
-from core.services.public_urls import organization_public_base_url, trial_signup_url
+from core.services.public_urls import organization_public_base_url, platform_public_base_url, trial_signup_url
 
 pytestmark = pytest.mark.django_db
 
@@ -42,6 +42,23 @@ def test_base_url_falls_back_to_apex_without_subdomain(make_organization, settin
 def test_base_url_none_org_is_apex(settings):
     _prod(settings)
     assert organization_public_base_url(None) == 'https://tymroapp.com'
+
+
+def test_platform_base_url_uses_app_subdomain_when_frontend_is_apex(settings):
+    _prod(settings)
+    assert platform_public_base_url() == 'https://app.tymroapp.com'
+
+
+def test_platform_base_url_can_be_configured_explicitly(settings):
+    _prod(settings)
+    settings.PLATFORM_FRONTEND_URL = 'https://admin.tymroapp.cl/'
+    assert platform_public_base_url() == 'https://admin.tymroapp.cl'
+
+
+def test_platform_base_url_keeps_local_frontend(settings):
+    settings.BASE_DOMAIN = 'localhost'
+    settings.FRONTEND_URL = 'http://localhost:5173'
+    assert platform_public_base_url() == 'http://localhost:5173'
 
 
 # --- Serializers usan el helper (Task 2) ---------------------------------------
