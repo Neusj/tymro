@@ -20,6 +20,8 @@ const initialForm = {
   end_datetime: '',
   capacity: 10,
   is_trial_eligible: false,
+  has_substitute: false,
+  substitute_name: '',
 }
 
 export default function GymAdminClassCreatePage() {
@@ -222,6 +224,41 @@ export default function GymAdminClassCreatePage() {
               </span>
             </span>
           </label>
+
+          <div className="md:col-span-2 space-y-3 rounded-lg border border-brand-line bg-black/20 px-3 py-3 text-sm">
+            <label className="flex items-start gap-3">
+              <input
+                type="checkbox"
+                checked={form.has_substitute}
+                onChange={(event) => {
+                  const checked = event.target.checked
+                  // Al desmarcar, se limpia el nombre: no puede quedar un suplente
+                  // "fantasma" cargado si el check se apaga (mismo invariante que exige
+                  // el backend).
+                  setForm((prev) => ({ ...prev, has_substitute: checked, substitute_name: checked ? prev.substitute_name : '' }))
+                }}
+                className="mt-0.5 h-4 w-4 shrink-0 accent-brand-orange"
+              />
+              <span>
+                <span className="font-semibold text-brand-white">Clase con suplente</span>
+                <span className="mt-0.5 block text-xs text-brand-muted">
+                  Quien está asignado sigue siendo el titular para el pago. El suplente es solo un registro de quién dio la clase.
+                </span>
+              </span>
+            </label>
+            {form.has_substitute ? (
+              <label className="block space-y-1 pl-7 text-sm">
+                <span>Nombre del suplente</span>
+                <input
+                  required
+                  value={form.substitute_name}
+                  onChange={(event) => setForm((prev) => ({ ...prev, substitute_name: event.target.value }))}
+                  placeholder="Nombre y apellido"
+                  className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
+                />
+              </label>
+            ) : null}
+          </div>
 
           {error ? <p className="md:col-span-2 rounded-lg border border-brand-red/50 bg-brand-red/10 px-3 py-2 text-sm text-red-200">{error}</p> : null}
 

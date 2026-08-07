@@ -1018,6 +1018,8 @@ class GymClassSerializer(serializers.ModelSerializer):
             'can_suspend',
             'can_reactivate',
             'is_active',
+            'has_substitute',
+            'substitute_name',
             'enrollments_count',
             'attendances_count',
             'present_attendances_count',
@@ -1131,6 +1133,19 @@ class GymClassSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({'status': 'Usa las acciones de cierre/cancelación para cambiar a un estado terminal.'})
         if incoming_status == GymClass.Status.SUSPENDED:
             raise serializers.ValidationError({'status': 'Usa la acción de suspender para suspender una clase.'})
+
+        # P4 #A (clase con suplente): normalización determinista sobre el estado RESULTANTE,
+        # no sobre lo que llegó en `attrs` — esto es un PATCH parcial, así que un campo ausente
+        # se resuelve con el valor actual de la instancia (o el default en creación).
+        # `has_substitute=False` fuerza `substitute_name=''` (nunca dejar un nombre huérfano de
+        # un check apagado); `has_substitute=True` exige un nombre no vacío.
+        resultant_has_substitute = attrs.get('has_substitute', getattr(instance, 'has_substitute', False))
+        if resultant_has_substitute:
+            resultant_substitute_name = attrs.get('substitute_name', getattr(instance, 'substitute_name', ''))
+            if not str(resultant_substitute_name or '').strip():
+                raise serializers.ValidationError({'substitute_name': 'Ingresa el nombre del suplente.'})
+        else:
+            attrs['substitute_name'] = ''
 
         return attrs
 
@@ -1248,6 +1263,8 @@ class ClassTemplateSerializer(serializers.ModelSerializer):
             'start_date',
             'end_date',
             'is_active',
+            'has_substitute',
+            'substitute_name',
             'generated_instances_count',
             'has_active_enrollments',
             'created_by',
@@ -1333,6 +1350,18 @@ class ClassTemplateSerializer(serializers.ModelSerializer):
             model_instance.clean()
         except DjangoValidationError as exc:
             raise serializers.ValidationError(exc.message_dict or {'detail': exc.messages})
+
+        # P4 #A (clase con suplente): misma normalización determinista que
+        # `GymClassSerializer.validate` — estado RESULTANTE (payload si vino, instancia si no),
+        # no solo lo que llegó en `attrs`, porque esto también es un PATCH parcial.
+        resultant_has_substitute = attrs.get('has_substitute', getattr(instance, 'has_substitute', False))
+        if resultant_has_substitute:
+            resultant_substitute_name = attrs.get('substitute_name', getattr(instance, 'substitute_name', ''))
+            if not str(resultant_substitute_name or '').strip():
+                raise serializers.ValidationError({'substitute_name': 'Ingresa el nombre del suplente.'})
+        else:
+            attrs['substitute_name'] = ''
+
         return attrs
 
 

@@ -328,6 +328,17 @@ class GymClass(TimestampedModel):
     )
     reactivation_expected_date = models.DateField(null=True, blank=True)
     is_active = models.BooleanField(default=True)
+    # Clase con suplente (P4 #A): registro/visualización PURO, no toca a quién se le paga.
+    # `teacher` sigue siendo el titular asignado y sigue siendo el ÚNICO que
+    # `calculate_teacher_payment` (services/teacher_payments.py) considera — estos dos campos
+    # no se leen en ningún camino de pago, adrede. El arreglo económico con el suplente ocurre
+    # FUERA de la plataforma (decisión de producto #11).
+    # `substitute_name` es texto libre, NO una FK a `CustomUser`: el suplente puede no existir
+    # en el sistema (un profe externo, alguien que cubre por única vez). Normalización en
+    # `GymClassSerializer.validate`: `has_substitute=False` fuerza el nombre a `''` (sin
+    # huérfanos de un check apagado) y `has_substitute=True` exige nombre no vacío.
+    has_substitute = models.BooleanField(default=False)
+    substitute_name = models.CharField(max_length=150, blank=True, default='')
 
     class Meta:
         ordering = ['-start_datetime']
@@ -1439,6 +1450,16 @@ class ClassTemplate(TimestampedModel):
         blank=True,
         related_name='created_class_templates',
     )
+    # Clase con suplente (P4 #A): MISMOS dos campos que `GymClass.has_substitute` /
+    # `substitute_name`, con el mismo significado (registro puro, el pago sigue yendo al
+    # `teacher` titular). Acá son el DEFAULT de la serie, y siguen exactamente el mismo
+    # contrato de propagación que `is_trial_eligible`/`capacity`/`teacher` hoy (no se inventa
+    # uno nuevo): `generate_instances_for_template_range` (services/recurrence.py) los copia a
+    # cada instancia NUEVA al materializar, y `apply_template_updates_to_future_instances` los
+    # reescribe también en las instancias futuras YA materializadas que no tengan inscritos
+    # activos (esas quedan protegidas). Una instancia ya cerrada o con inscritos no se toca.
+    has_substitute = models.BooleanField(default=False)
+    substitute_name = models.CharField(max_length=150, blank=True, default='')
 
     class Meta:
         ordering = ['weekday', 'start_time', 'id']

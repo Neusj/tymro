@@ -353,3 +353,42 @@ describe('GymAdminClassTemplatesPage — formulario de creacion (multi-dia, sin 
     expect(payload).not.toHaveProperty('end_date')
   })
 })
+
+describe('GymAdminClassTemplatesPage — clase con suplente (P4 #A)', () => {
+  beforeEach(() => {
+    branchesApi.list.mockResolvedValue([{ id: 1, name: 'Sede Centro' }])
+    usersApi.list.mockResolvedValue([{ id: 2, first_name: 'Ana', last_name: 'Prof', username: 'ana' }])
+    classTypesApi.list.mockResolvedValue([{ id: 3, name: 'Funcional' }])
+    disciplinesApi.list.mockResolvedValue([{ id: 4, name: 'Crossfit' }])
+  })
+
+  it('el input de nombre del suplente solo aparece cuando el check esta marcado', async () => {
+    renderPage()
+    await screen.findByRole('heading', { name: /^crear clase$/i })
+
+    // Cerrado por defecto: el input no esta montado.
+    expect(screen.queryByLabelText(/nombre del suplente/i)).not.toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('checkbox', { name: /clase con suplente/i }))
+
+    expect(screen.getByLabelText(/nombre del suplente/i)).toBeInTheDocument()
+
+    // Al destildar, el input se desmonta de nuevo (y el nombre se limpia, ver siguiente test).
+    await userEvent.click(screen.getByRole('checkbox', { name: /clase con suplente/i }))
+
+    expect(screen.queryByLabelText(/nombre del suplente/i)).not.toBeInTheDocument()
+  })
+
+  it('al destildar el check se limpia el nombre cargado (no manda un suplente huerfano)', async () => {
+    classTemplatesApi.create.mockResolvedValue({ created: [{ id: 40 }], skipped: [] })
+    renderPage()
+    await screen.findByRole('heading', { name: /^crear clase$/i })
+
+    await userEvent.click(screen.getByRole('checkbox', { name: /clase con suplente/i }))
+    await userEvent.type(screen.getByLabelText(/nombre del suplente/i), 'Marcela Rios')
+    await userEvent.click(screen.getByRole('checkbox', { name: /clase con suplente/i }))
+    await userEvent.click(screen.getByRole('checkbox', { name: /clase con suplente/i }))
+
+    expect(screen.getByLabelText(/nombre del suplente/i)).toHaveValue('')
+  })
+})

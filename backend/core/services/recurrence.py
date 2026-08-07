@@ -274,6 +274,10 @@ def generate_instances_for_template_range(template, from_date=None, until_date=N
                     status=GymClass.Status.SCHEDULED,
                     created_by=created_by or template.created_by,
                     is_active=True,
+                    # P4 #A: la instancia nueva hereda el suplente default de la serie. Mismo
+                    # tratamiento que el resto de los campos de plantilla en este `create`.
+                    has_substitute=template.has_substitute,
+                    substitute_name=template.substitute_name,
                 )
         except IntegrityError:
             summary['skipped'].append({'date': occurrence_date.isoformat(), 'reason': 'duplicate_instance'})
@@ -328,6 +332,10 @@ def apply_template_updates_to_future_instances(template, now=None):
         gym_class.is_trial_eligible = template.is_trial_eligible
         gym_class.start_datetime = _combine_local_datetime(class_date, template.start_time)
         gym_class.end_datetime = _combine_local_datetime(class_date, template.end_time)
+        # P4 #A: mismo contrato que `is_trial_eligible` — editar la serie reescribe el
+        # suplente en las instancias futuras sin inscritos activos.
+        gym_class.has_substitute = template.has_substitute
+        gym_class.substitute_name = template.substitute_name
 
         # Tarea 11.A: el solape de profesor ya no protege la instancia de la
         # actualización (el producto decidió permitirlo). Acá vivía el chequeo
@@ -344,6 +352,8 @@ def apply_template_updates_to_future_instances(template, now=None):
                 'is_trial_eligible',
                 'start_datetime',
                 'end_datetime',
+                'has_substitute',
+                'substitute_name',
                 'updated_at',
             ]
         )

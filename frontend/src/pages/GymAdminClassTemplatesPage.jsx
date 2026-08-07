@@ -23,6 +23,8 @@ const initialForm = {
   capacity: 20,
   is_active: true,
   is_trial_eligible: false,
+  has_substitute: false,
+  substitute_name: '',
 }
 
 const weekdayLabels = ['Lunes', 'Martes', 'Miercoles', 'Jueves', 'Viernes', 'Sabado', 'Domingo']
@@ -131,6 +133,8 @@ export default function GymAdminClassTemplatesPage() {
       capacity: row.capacity || 20,
       is_active: row.is_active,
       is_trial_eligible: Boolean(row.is_trial_eligible),
+      has_substitute: Boolean(row.has_substitute),
+      substitute_name: row.substitute_name || '',
     })
   }
 
@@ -311,6 +315,12 @@ export default function GymAdminClassTemplatesPage() {
       { key: 'name', label: 'Clase', render: (row) => row.name || `Clase #${row.id}` },
       { key: 'branch_name', label: 'Sucursal' },
       { key: 'teacher_name', label: 'Profesor' },
+      {
+        key: 'substitute_name',
+        label: 'Suplente',
+        mobile: 'secondary',
+        render: (row) => (row.has_substitute ? row.substitute_name || '-' : <span className="text-brand-muted">Sin suplente</span>),
+      },
       { key: 'class_type_name', label: 'Tipo', render: (row) => <ValueBadge kind="class_type" value={row.class_type_name} /> },
       { key: 'discipline_name', label: 'Disciplina', render: (row) => <ValueBadge kind="discipline" value={row.discipline_name} /> },
       { key: 'weekday', label: 'Dia', render: (row) => weekdayLabels[row.weekday] || '-' },
@@ -509,6 +519,40 @@ export default function GymAdminClassTemplatesPage() {
               </span>
             </span>
           </label>
+          <div className="md:col-span-2 space-y-3 rounded-lg border border-brand-line bg-black/20 px-3 py-3 text-sm">
+            <label className="flex items-start gap-3">
+              <input
+                type="checkbox"
+                checked={form.has_substitute}
+                onChange={(event) => {
+                  const checked = event.target.checked
+                  // Al desmarcar, se limpia el nombre: no puede quedar un suplente
+                  // "fantasma" cargado si el check se apaga (mismo invariante que exige
+                  // el backend).
+                  setForm((prev) => ({ ...prev, has_substitute: checked, substitute_name: checked ? prev.substitute_name : '' }))
+                }}
+                className="mt-0.5 h-4 w-4 shrink-0 accent-brand-orange"
+              />
+              <span>
+                <span className="font-semibold text-brand-white">Clase con suplente</span>
+                <span className="mt-0.5 block text-xs text-brand-muted">
+                  Define el suplente por defecto de la serie. Quien está asignado sigue siendo el titular para el pago; las clases nuevas que se generen heredan este valor.
+                </span>
+              </span>
+            </label>
+            {form.has_substitute ? (
+              <label className="block space-y-1 pl-7 text-sm">
+                <span>Nombre del suplente</span>
+                <input
+                  required
+                  value={form.substitute_name}
+                  onChange={(event) => setForm((prev) => ({ ...prev, substitute_name: event.target.value }))}
+                  placeholder="Nombre y apellido"
+                  className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
+                />
+              </label>
+            ) : null}
+          </div>
           <div className="md:col-span-2 flex justify-end gap-2">
             {editingId ? (
               <button type="button" onClick={resetForm} className="rounded-xl border border-brand-line px-4 py-2 text-sm font-semibold text-brand-white">

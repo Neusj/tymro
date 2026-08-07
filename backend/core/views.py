@@ -2360,6 +2360,7 @@ class GymClassViewSet(ModelViewSet):
         start_date_from = self.request.query_params.get('start_date_from')
         start_date_to = self.request.query_params.get('start_date_to')
         has_series = self.request.query_params.get('has_series')
+        has_substitute = self.request.query_params.get('has_substitute')
         ordering = self.request.query_params.get('ordering')
 
         ordering_map = {
@@ -2395,6 +2396,11 @@ class GymClassViewSet(ModelViewSet):
                 queryset = queryset.filter(class_template__isnull=False)
             elif has_series_value in {'false', '0', 'no'}:
                 queryset = queryset.filter(class_template__isnull=True)
+            has_substitute_value = str(has_substitute or '').strip().lower()
+            if has_substitute_value in {'true', '1', 'yes'}:
+                queryset = queryset.filter(has_substitute=True)
+            elif has_substitute_value in {'false', '0', 'no'}:
+                queryset = queryset.filter(has_substitute=False)
             return queryset
 
         if _is_superadmin(user):

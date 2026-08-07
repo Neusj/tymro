@@ -31,6 +31,12 @@ const STATUS_OPTIONS = [
   { value: 'cancelled', label: 'Cancelada' },
 ]
 
+const SUBSTITUTE_OPTIONS = [
+  { value: '', label: 'Todas' },
+  { value: 'true', label: 'Con suplente' },
+  { value: 'false', label: 'Sin suplente' },
+]
+
 export default function GymAdminClassesPage() {
   const { user } = useAuth()
   const canManage = canManageOperational(user?.role)
@@ -45,6 +51,7 @@ export default function GymAdminClassesPage() {
   const [error, setError] = useState('')
   const [activeStatus, setActiveStatus] = useState('')
   const [activeDiscipline, setActiveDiscipline] = useState('')
+  const [activeSubstitute, setActiveSubstitute] = useState('')
 
   const disciplineOptions = useMemo(
     () => [
@@ -62,8 +69,11 @@ export default function GymAdminClassesPage() {
     if (activeDiscipline) {
       params.discipline = activeDiscipline
     }
+    if (activeSubstitute) {
+      params.has_substitute = activeSubstitute
+    }
     return params
-  }, [activeStatus, activeDiscipline])
+  }, [activeStatus, activeDiscipline, activeSubstitute])
 
   const loadData = async () => {
     setLoading(true)
@@ -146,6 +156,12 @@ export default function GymAdminClassesPage() {
       { key: 'name', label: 'Clase' },
       { key: 'branch_name', label: 'Sucursal' },
       { key: 'teacher_name', label: 'Profesor' },
+      {
+        key: 'substitute_name',
+        label: 'Suplente',
+        mobile: 'secondary',
+        render: (row) => (row.has_substitute ? row.substitute_name || '-' : <span className="text-brand-muted">Sin suplente</span>),
+      },
       { key: 'class_type_name', label: 'Tipo', render: (row) => <ValueBadge kind="class_type" value={row.class_type_name} /> },
       { key: 'discipline_name', label: 'Disciplina', render: (row) => <ValueBadge kind="discipline" value={row.discipline_name} /> },
       // TODO unificacion: esta columna sigue diciendo "Serie" (jerga vieja) porque renombrarla a
@@ -247,15 +263,17 @@ export default function GymAdminClassesPage() {
         />
 
         <FilterPanel
-          activeCount={(activeStatus ? 1 : 0) + (activeDiscipline ? 1 : 0)}
+          activeCount={(activeStatus ? 1 : 0) + (activeDiscipline ? 1 : 0) + (activeSubstitute ? 1 : 0)}
           onClear={() => {
             setActiveStatus('')
             setActiveDiscipline('')
+            setActiveSubstitute('')
           }}
         >
           <div className="flex flex-wrap items-center gap-2">
             <FilterDropdown label="Estado" value={activeStatus} options={STATUS_OPTIONS} onChange={setActiveStatus} />
             <FilterDropdown label="Disciplina" value={activeDiscipline} options={disciplineOptions} onChange={setActiveDiscipline} />
+            <FilterDropdown label="Suplente" value={activeSubstitute} options={SUBSTITUTE_OPTIONS} onChange={setActiveSubstitute} />
           </div>
         </FilterPanel>
       </section>

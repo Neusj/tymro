@@ -252,6 +252,21 @@ export default function GymAdminClassDetailPage() {
         </article>
       </section>
 
+      {gymClass?.has_substitute ? (
+        <section className="card-surface flex items-start gap-3 border-brand-orange/40 bg-brand-orange/5 p-4">
+          <span className="mt-0.5 inline-flex items-center rounded-full border border-brand-orange/40 bg-white/[0.04] px-2.5 py-0.5 text-[11px] font-semibold text-amber-200">
+            Suplente
+          </span>
+          <div className="text-sm">
+            <p className="font-semibold text-brand-white">{gymClass.substitute_name || '-'}</p>
+            <p className="mt-0.5 text-xs text-brand-muted">
+              Dio la clase en lugar de {gymClass.teacher_name || 'el profesor asignado'}. El profesor titular sigue siendo{' '}
+              {gymClass.teacher_name || '-'} — el suplente no cambia a quién se le paga.
+            </p>
+          </div>
+        </section>
+      ) : null}
+
       <section className="card-surface p-5">
         <h2 className="panel-title mb-4">Alumnos inscritos</h2>
         <DataTable columns={columns} data={enrollments} loading={loading} />
