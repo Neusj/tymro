@@ -1,7 +1,7 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // La página llama a estos módulos al montar (loadData). Los mockeamos para que
 // resuelvan vacío y el árbol se renderice sin red real.
@@ -42,10 +42,6 @@ beforeEach(() => {
     addListener() {},
     removeListener() {},
   })
-})
-
-afterEach(() => {
-  delete window.matchMedia
 })
 
 // R5 — banner de vencimiento: la página lee `show_expiry_banner` del array que YA
@@ -354,11 +350,10 @@ describe('StudentClassesPage — selector de dia por fecha', () => {
     const user = userEvent.setup()
 
     await user.click(await screen.findByRole('button', { name: 'Calendario' }))
-    await user.clear(screen.getByLabelText('Fecha del calendario'))
-    await user.type(screen.getByLabelText('Fecha del calendario'), '2026-12-24')
-    await user.click(screen.getByRole('button', { name: 'Aplicar fecha' }))
+    fireEvent.change(screen.getByLabelText('Fecha del calendario'), { target: { value: '2026-12-24' } })
 
     await waitFor(() => expect(classesApi.byDate).toHaveBeenCalledWith('2026-12-24', expect.any(Object)))
+    expect(screen.queryByRole('button', { name: 'Aplicar fecha' })).not.toBeInTheDocument()
   })
 })
 

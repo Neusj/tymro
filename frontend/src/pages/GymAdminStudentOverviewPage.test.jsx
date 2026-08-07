@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('../api/client', () => ({
   getStudentOverview: vi.fn(),
@@ -61,10 +61,6 @@ beforeEach(() => {
     addListener() {},
     removeListener() {},
   })
-})
-
-afterEach(() => {
-  delete window.matchMedia
 })
 
 function renderPage(initialEntry = '/gym-admin/students/overview?student_id=42') {

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef } from 'react'
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -49,8 +49,7 @@ function formatDayButton(value) {
 }
 
 export default function DaySelector({ value, onChange, className = '' }) {
-  const [calendarOpen, setCalendarOpen] = useState(false)
-  const [draftDate, setDraftDate] = useState(value)
+  const calendarInputRef = useRef(null)
 
   const weekDays = useMemo(() => {
     const monday = mondayOfWeek(value)
@@ -59,6 +58,19 @@ export default function DaySelector({ value, onChange, className = '' }) {
 
   const moveWeek = (days) => {
     onChange(toIsoDate(addDays(value, days)))
+  }
+
+  const openCalendar = () => {
+    const input = calendarInputRef.current
+    if (!input) return
+
+    input.focus()
+    if (typeof input.showPicker === 'function') {
+      input.showPicker()
+      return
+    }
+
+    input.click()
   }
 
   return (
@@ -87,14 +99,24 @@ export default function DaySelector({ value, onChange, className = '' }) {
           </button>
           <button
             type="button"
-            onClick={() => {
-              setDraftDate(value)
-              setCalendarOpen((open) => !open)
-            }}
+            onClick={openCalendar}
             className="rounded-lg border border-brand-blue px-3 py-2 text-xs font-semibold text-brand-white"
           >
             Calendario
           </button>
+          <input
+            ref={calendarInputRef}
+            type="date"
+            aria-label="Fecha del calendario"
+            value={value}
+            onChange={(event) => {
+              if (event.target.value) {
+                onChange(event.target.value)
+              }
+            }}
+            className="sr-only"
+            tabIndex={-1}
+          />
         </div>
       </div>
 
@@ -122,33 +144,6 @@ export default function DaySelector({ value, onChange, className = '' }) {
           )
         })}
       </div>
-
-      {calendarOpen ? (
-        <div className="flex flex-wrap items-end gap-2 rounded-lg border border-brand-line bg-black/20 p-3">
-          <label className="space-y-1 text-xs text-brand-muted">
-            <span>Fecha</span>
-            <input
-              type="date"
-              aria-label="Fecha del calendario"
-              value={draftDate}
-              onChange={(event) => setDraftDate(event.target.value)}
-              className="block rounded-lg border border-brand-line bg-black/30 px-3 py-2 text-sm text-brand-white"
-            />
-          </label>
-          <button
-            type="button"
-            onClick={() => {
-              if (draftDate) {
-                onChange(draftDate)
-                setCalendarOpen(false)
-              }
-            }}
-            className="rounded-lg bg-brand-blue px-3 py-2 text-xs font-semibold text-white"
-          >
-            Aplicar fecha
-          </button>
-        </div>
-      ) : null}
     </section>
   )
 }
