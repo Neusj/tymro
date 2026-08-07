@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { classTemplatesApi, classesApi, enrollmentsApi, getMyMemberships, recurringEnrollmentsApi } from '../api/client'
 import ConfirmDialog from '../components/ConfirmDialog'
 import DashboardHeader from '../components/DashboardHeader'
+import DaySelector, { todayIsoDate } from '../components/DaySelector'
 import FilterDropdown from '../components/FilterDropdown'
 import FilterPanel from '../components/FilterPanel'
 import KpiStrip from '../components/KpiStrip'
@@ -86,6 +87,17 @@ function firstApiError(detail, fallback) {
   return fallback
 }
 
+function isVirtualClass(row) {
+  return String(row?.id || '').startsWith('virtual:')
+}
+
+function reservationBlockedMessage(row) {
+  if (row?.reservable === false) {
+    return 'No se puede reservar con tanta anticipacion'
+  }
+  return ''
+}
+
 export default function StudentClassesPage({ mode = 'available' }) {
   const [availableClasses, setAvailableClasses] = useState([])
   const [historyClasses, setHistoryClasses] = useState([])
@@ -96,6 +108,7 @@ export default function StudentClassesPage({ mode = 'available' }) {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [memberships, setMemberships] = useState([])
+  const [selectedDate, setSelectedDate] = useState(todayIsoDate())
 
   const [classFilters, setClassFilters] = useState(initialAvailableClassFilters)
   const [reservationFilters, setReservationFilters] = useState(initialReservationFilters)
@@ -116,13 +129,13 @@ export default function StudentClassesPage({ mode = 'available' }) {
   // abrir/cerrar cualquiera de los tres flujos de reserva.
   const [selectedPlanId, setSelectedPlanId] = useState('')
 
-  const loadData = async () => {
+  const loadData = async (date = selectedDate) => {
     setLoading(true)
     setError('')
     try {
       const [scheduledClasses, completedClasses, myReservations, myRecurring, myMemberships] = await Promise.allSettled([
-        classesApi.list({ status_in: 'scheduled,in_progress,cancelled', ordering: 'start_datetime' }),
-        classesApi.list({ mine: true, status_in: 'completed,completed_early', ordering: '-start_datetime' }),
+        classesApi.byDate(date, { status_in: 'scheduled,in_progress,cancelled', ordering: 'start_datetime' }),
+        classesApi.byDate(date, { mine: true, status_in: 'completed,completed_early', ordering: '-start_datetime' }),
         enrollmentsApi.my(),
         recurringEnrollmentsApi.my(),
         getMyMemberships(),
@@ -155,8 +168,8 @@ export default function StudentClassesPage({ mode = 'available' }) {
   }
 
   useEffect(() => {
-    loadData()
-  }, [])
+    loadData(selectedDate)
+  }, [selectedDate])
 
   const activeReservationByClass = useMemo(() => {
     const map = {}
@@ -236,6 +249,14 @@ export default function StudentClassesPage({ mode = 'available' }) {
   }, [filteredAvailableForBooking])
 
   const reserveClass = async (gymClass, studentPlanId) => {
+    if (gymClass.reservable === false) {
+      setError(reservationBlockedMessage(gymClass))
+      return
+    }
+    if (isVirtualClass(gymClass)) {
+      setNotice('La reserva de clases proyectadas se conectara en el siguiente paso.')
+      return
+    }
     if (!hasPlanBalance) {
       setError('Sin clases disponibles')
       return
@@ -260,6 +281,14 @@ export default function StudentClassesPage({ mode = 'available' }) {
   // disponibles". Siempre pasa por el diálogo; el selector de plan aparece adentro
   // solo si hay 2+ planes usables (requiresPlanChoice).
   const openSingleReserveConfirm = (row) => {
+    if (row.reservable === false) {
+      setError(reservationBlockedMessage(row))
+      return
+    }
+    if (isVirtualClass(row)) {
+      setNotice('La reserva de clases proyectadas se conectara en el siguiente paso.')
+      return
+    }
     resetPlanSelection()
     setPendingReserve(row)
   }
@@ -475,11 +504,12 @@ export default function StudentClassesPage({ mode = 'available' }) {
       const started = new Date(item.start_datetime).getTime() <= now
       const recurringForTemplate = item.class_template ? recurringByTemplate[item.class_template] : null
       const pausedSeries = Boolean(item.class_template && recurringForTemplate && !recurringForTemplate.is_active)
-      return item.status === 'scheduled' && !started && !pausedSeries
+      return item.status === 'scheduled' && !started && !pausedSeries && item.reservable !== false && !isVirtualClass(item)
     })
 
     if (reservables.length === 0) {
-      setError('No hay clases seleccionadas para reservar.')
+      const selectedVirtual = selectedRows.some((item) => isVirtualClass(item))
+      setError(selectedVirtual ? 'La reserva de clases proyectadas se conectara en el siguiente paso.' : 'No hay clases seleccionadas para reservar.')
       return
     }
 
@@ -538,17 +568,21 @@ export default function StudentClassesPage({ mode = 'available' }) {
           const recurringForTemplate = row.class_template ? recurringByTemplate[row.class_template] : null
           const classStarted = new Date(row.start_datetime).getTime() <= Date.now()
           const isPausedSeries = Boolean(row.class_template && recurringForTemplate && !recurringForTemplate.is_active)
-          const canReserve = row.status === 'scheduled' && !classStarted && !isPausedSeries && hasPlanBalance
+          const blockedMessage = reservationBlockedMessage(row)
+          const canReserve = row.status === 'scheduled' && !classStarted && !isPausedSeries && hasPlanBalance && row.reservable !== false
           return (
-            <button
-              type="button"
-              disabled={!canReserve || workingKey === `reserve-${row.id}`}
-              onClick={() => openSingleReserveConfirm(row)}
-              title={!hasPlanBalance ? 'Sin clases disponibles' : ''}
-              className="rounded-lg border border-brand-blue bg-brand-blue/10 px-3 py-2 text-xs font-semibold text-brand-white disabled:opacity-60"
-            >
-              {workingKey === `reserve-${row.id}` ? 'Reservando...' : 'Reservar'}
-            </button>
+            <div className="space-y-1">
+              <button
+                type="button"
+                disabled={!canReserve || workingKey === `reserve-${row.id}`}
+                onClick={() => openSingleReserveConfirm(row)}
+                title={!hasPlanBalance ? 'Sin clases disponibles' : ''}
+                className="rounded-lg border border-brand-blue bg-brand-blue/10 px-3 py-2 text-xs font-semibold text-brand-white disabled:opacity-60"
+              >
+                {workingKey === `reserve-${row.id}` ? 'Reservando...' : 'Reservar'}
+              </button>
+              {blockedMessage ? <p className="text-[11px] text-brand-muted">{blockedMessage}</p> : null}
+            </div>
           )
         },
         render: (row) => {
@@ -558,9 +592,10 @@ export default function StudentClassesPage({ mode = 'available' }) {
           const classStarted = new Date(row.start_datetime).getTime() <= Date.now()
           const isPausedSeries = Boolean(row.class_template && recurringForTemplate && !recurringForTemplate.is_active)
           const canReserveSingle = row.status === 'scheduled' && !classStarted && !isPausedSeries
-          const canReserveWithPlan = canReserveSingle && hasPlanBalance
+          const canReserveWithPlan = canReserveSingle && hasPlanBalance && row.reservable !== false
           const canManageRecurringHere = Boolean(row.class_template && row.status === 'scheduled' && !classStarted)
           const isRebook = existingReservation?.status === 'cancelled'
+          const blockedMessage = reservationBlockedMessage(row)
 
           return (
             <div className="space-y-2">
@@ -590,6 +625,7 @@ export default function StudentClassesPage({ mode = 'available' }) {
                   >
                     {workingKey === `reserve-${row.id}` ? 'Reservando...' : isRebook ? 'Reservar esta clase' : 'Reservar solo esta clase'}
                   </button>
+                  {blockedMessage ? <p className="text-[11px] text-brand-muted">{blockedMessage}</p> : null}
                   <div className="flex justify-end">
                     <TouchTooltip text={!hasPlanBalance ? 'Sin clases disponibles' : isRebook ? 'Reactivara tu reserva cancelada si sigue disponible.' : 'Reserva esta clase solo para esta fecha y horario.'} />
                   </div>
@@ -930,6 +966,8 @@ export default function StudentClassesPage({ mode = 'available' }) {
       {error ? <p className="rounded-lg border border-brand-red/50 bg-brand-red/10 px-3 py-2 text-sm text-red-200">{error}</p> : null}
       {notice ? <p className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">{notice}</p> : null}
       {policyMessage ? <p className="rounded-lg border border-brand-line bg-black/20 px-3 py-2 text-xs text-brand-muted">{policyMessage}</p> : null}
+
+      <DaySelector value={selectedDate} onChange={setSelectedDate} />
 
       <section className="card-surface space-y-4 p-5">
         {mode === 'available' ? (

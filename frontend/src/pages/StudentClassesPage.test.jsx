@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 // La página llama a estos módulos al montar (loadData). Los mockeamos para que
 // resuelvan vacío y el árbol se renderice sin red real.
 vi.mock('../api/client', () => ({
-  classesApi: { list: vi.fn() },
+  classesApi: { list: vi.fn(), byDate: vi.fn() },
   enrollmentsApi: { my: vi.fn(), create: vi.fn(), cancel: vi.fn() },
   recurringEnrollmentsApi: { my: vi.fn(), update: vi.fn() },
   classTemplatesApi: { recurringEnroll: vi.fn() },
@@ -14,6 +14,7 @@ vi.mock('../api/client', () => ({
 }))
 
 import { classesApi, classTemplatesApi, enrollmentsApi, recurringEnrollmentsApi, getMyMemberships } from '../api/client'
+import { todayIsoDate } from '../components/DaySelector'
 import StudentClassesPage from './StudentClassesPage'
 
 function renderPage(mode = 'available') {
@@ -27,6 +28,7 @@ function renderPage(mode = 'available') {
 beforeEach(() => {
   vi.clearAllMocks()
   classesApi.list.mockResolvedValue([])
+  classesApi.byDate.mockImplementation((date, params) => classesApi.list(params))
   enrollmentsApi.my.mockResolvedValue([])
   recurringEnrollmentsApi.my.mockResolvedValue([])
   getMyMemberships.mockResolvedValue([])
@@ -152,6 +154,18 @@ const isoIn = (ms) => new Date(Date.now() + ms).toISOString()
 // defecto), sin reserva activa y con plan con saldo → botón "Reservar" habilitado.
 const FUTURE_ISO = new Date(Date.now() + 2 * DAY).toISOString()
 
+function weekDaysFor(value) {
+  const [year, month, day] = value.split('-').map(Number)
+  const date = new Date(year, month - 1, day)
+  const offset = date.getDay() === 0 ? -6 : 1 - date.getDay()
+  date.setDate(date.getDate() + offset)
+  return Array.from({ length: 7 }, (_, index) => {
+    const item = new Date(date)
+    item.setDate(date.getDate() + index)
+    return item.toISOString().slice(0, 10)
+  })
+}
+
 function seedReservableClass() {
   classesApi.list
     .mockResolvedValueOnce([
@@ -225,6 +239,126 @@ describe('StudentClassesPage — confirmar antes de reservar (#24)', () => {
 
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     expect(enrollmentsApi.create).not.toHaveBeenCalled()
+  })
+})
+
+describe('StudentClassesPage — selector de dia por fecha', () => {
+  beforeEach(() => {
+    window.matchMedia = (query) => ({
+      matches: query.includes('max-width'),
+      addEventListener() {},
+      removeEventListener() {},
+      addListener() {},
+      removeListener() {},
+    })
+    getMyMemberships.mockResolvedValue([
+      { id: 1, plan_name: 'Plan Basico', remaining_classes: 10, unlimited_classes: false, validity_status: 'active' },
+    ])
+  })
+
+  it('clic en otro dia dispara una nueva consulta by-date', async () => {
+    const today = todayIsoDate()
+    const otherDay = weekDaysFor(today).find((item) => item !== today)
+    classesApi.byDate.mockResolvedValue([])
+
+    renderPage('available')
+    const user = userEvent.setup()
+
+    await waitFor(() => expect(classesApi.byDate).toHaveBeenCalledWith(today, expect.any(Object)))
+    await user.click(screen.getByRole('button', { name: `Seleccionar ${otherDay}` }))
+
+    await waitFor(() => expect(classesApi.byDate).toHaveBeenCalledWith(otherDay, expect.any(Object)))
+  })
+
+  it('muestra materializadas y virtuales mezcladas sin distinguirlas visualmente', async () => {
+    const today = todayIsoDate()
+    classesApi.byDate.mockImplementation((date, params = {}) => {
+      if (params.status_in?.includes('completed')) {
+        return Promise.resolve([])
+      }
+      return Promise.resolve([
+        {
+          id: 901,
+          name: 'Clase real',
+          status: 'scheduled',
+          start_datetime: `${today}T10:00:00-04:00`,
+          end_datetime: `${today}T11:00:00-04:00`,
+          capacity: 10,
+          enrollments_count: 0,
+          branch_name: 'Sede',
+          teacher_name: 'Prof',
+          discipline_name: 'BJJ',
+          class_template: 44,
+          class_template_name: 'BJJ lunes',
+          reservable: true,
+        },
+        {
+          id: `virtual:45:${today}`,
+          name: 'Clase proyectada',
+          status: 'scheduled',
+          start_datetime: `${today}T12:00:00-04:00`,
+          end_datetime: `${today}T13:00:00-04:00`,
+          capacity: 12,
+          enrollments_count: 0,
+          branch_name: 'Sede',
+          teacher_name: 'Prof',
+          discipline_name: 'BJJ',
+          class_template: 45,
+          class_template_name: 'BJJ tarde',
+          reservable: true,
+        },
+      ])
+    })
+
+    renderPage('available')
+
+    expect(await screen.findAllByText('Clase real')).not.toHaveLength(0)
+    expect(await screen.findAllByText('Clase proyectada')).not.toHaveLength(0)
+    expect(screen.queryByText(/virtual:/i)).not.toBeInTheDocument()
+  })
+
+  it('deshabilita reservar y muestra mensaje cuando reservable es false', async () => {
+    const today = todayIsoDate()
+    classesApi.byDate.mockImplementation((date, params = {}) => {
+      if (params.status_in?.includes('completed')) {
+        return Promise.resolve([])
+      }
+      return Promise.resolve([
+        {
+          id: 902,
+          name: 'Muy futura',
+          status: 'scheduled',
+          start_datetime: `${today}T14:00:00-04:00`,
+          end_datetime: `${today}T15:00:00-04:00`,
+          capacity: 10,
+          enrollments_count: 0,
+          branch_name: 'Sede',
+          teacher_name: 'Prof',
+          discipline_name: 'BJJ',
+          class_template: null,
+          reservable: false,
+        },
+      ])
+    })
+
+    renderPage('available')
+
+    const reservar = await screen.findByRole('button', { name: 'Reservar' })
+    expect(reservar).toBeDisabled()
+    expect(screen.getByText('No se puede reservar con tanta anticipacion')).toBeInTheDocument()
+  })
+
+  it('el calendario completo permite saltar a una fecha lejana y consultar ese dia', async () => {
+    classesApi.byDate.mockResolvedValue([])
+    renderPage('available')
+    const user = userEvent.setup()
+
+    await user.click(await screen.findByRole('button', { name: 'Calendario' }))
+    await user.clear(screen.getByLabelText('Fecha del calendario'))
+    await user.type(screen.getByLabelText('Fecha del calendario'), '2026-12-24')
+    await user.click(screen.getByRole('button', { name: 'Aplicar fecha' }))
+
+    await waitFor(() => expect(classesApi.byDate).toHaveBeenCalledWith('2026-12-24', expect.any(Object)))
   })
 })
 

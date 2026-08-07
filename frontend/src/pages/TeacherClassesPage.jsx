@@ -2,6 +2,7 @@
 import { classesApi, enrollmentsApi } from '../api/client'
 import BulkActionModal from '../components/BulkActionModal'
 import DashboardHeader from '../components/DashboardHeader'
+import DaySelector, { todayIsoDate } from '../components/DaySelector'
 import FilterDropdown from '../components/FilterDropdown'
 import FilterPanel from '../components/FilterPanel'
 import KpiStrip from '../components/KpiStrip'
@@ -49,6 +50,10 @@ function firstApiError(detail, fallback) {
   return fallback
 }
 
+function isVirtualClass(row) {
+  return String(row?.id || '').startsWith('virtual:')
+}
+
 function BalanceBadge({ available, unlimited = false }) {
   const hasBalance = unlimited || Number(available || 0) > 0
   return (
@@ -74,6 +79,7 @@ function PlanStatusBadge({ student }) {
 
 export default function TeacherClassesPage({ mode = 'upcoming' }) {
   const [classes, setClasses] = useState([])
+  const [selectedDate, setSelectedDate] = useState(todayIsoDate())
   const [loading, setLoading] = useState(true)
   const [working, setWorking] = useState(false)
   const [error, setError] = useState('')
@@ -114,7 +120,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
   const loadData = async () => {
     setLoading(true)
     try {
-      const list = await classesApi.list(listParams)
+      const list = await classesApi.byDate(selectedDate, listParams)
       setClasses(list)
     } catch (apiError) {
       setError(firstApiError(apiError?.response?.data, 'No se pudieron cargar las clases.'))
@@ -128,7 +134,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
     setFilters(initialFilters)
     setSelectedIds([])
     loadData()
-  }, [mode, listParams])
+  }, [mode, listParams, selectedDate])
 
   const { disciplineOptions } = useMemo(() => extractFilterOptions(classes), [classes])
   const filteredClasses = useMemo(() => applyTeacherClassFilters(classes, filters), [classes, filters])
@@ -379,11 +385,16 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
       setError('Selecciona al menos una clase del conjunto filtrado.')
       return
     }
+    const persistedIds = selectedIds.filter((id) => !String(id).startsWith('virtual:'))
+    if (persistedIds.length === 0) {
+      setError('Las clases proyectadas se podran operar cuando exista la instancia.')
+      return
+    }
 
     setWorking(true)
     try {
       await classesApi.bulkClose({
-        class_ids: selectedIds,
+        class_ids: persistedIds,
         action,
         comment,
       })
@@ -423,11 +434,12 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
         render: (row) => {
           const canOperate = canOperateClass(row)
           const isSuspended = row.status === 'suspended'
+          const isVirtual = isVirtualClass(row)
           return (
             <>
               <button
                 type="button"
-                disabled={working}
+                disabled={working || isVirtual}
                 onClick={() => openAttendanceModal(row)}
                 className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue disabled:opacity-60"
               >
@@ -437,7 +449,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
                 <>
                   <button
                     type="button"
-                    disabled={working}
+                    disabled={working || isVirtual}
                     onClick={() => reactivateClass(row)}
                     className="w-full rounded-lg border border-emerald-500/50 px-2.5 py-1.5 text-left text-xs text-emerald-200 transition hover:border-emerald-400 disabled:opacity-60"
                   >
@@ -445,7 +457,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
                   </button>
                   <button
                     type="button"
-                    disabled={working}
+                    disabled={working || isVirtual}
                     onClick={() => closeClass(row, 'cancel')}
                     className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 transition hover:bg-brand-red/10 disabled:opacity-60"
                   >
@@ -457,7 +469,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
                 <>
                   <button
                     type="button"
-                    disabled={!canOperate || working}
+                    disabled={!canOperate || working || isVirtual}
                     onClick={() => openEnrollModal(row)}
                     className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue disabled:opacity-60"
                   >
@@ -465,7 +477,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
                   </button>
                   <button
                     type="button"
-                    disabled={!canOperate || working}
+                    disabled={!canOperate || working || isVirtual}
                     onClick={() => openEnrolledModal(row)}
                     className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue disabled:opacity-60"
                   >
@@ -473,7 +485,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
                   </button>
                   <button
                     type="button"
-                    disabled={!canOperate || working}
+                    disabled={!canOperate || working || isVirtual}
                     onClick={() => suspendClass(row)}
                     className="w-full rounded-lg border border-brand-orange/50 px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-orange disabled:opacity-60"
                   >
@@ -481,7 +493,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
                   </button>
                   <button
                     type="button"
-                    disabled={!canOperate || working}
+                    disabled={!canOperate || working || isVirtual}
                     onClick={() => closeClass(row, 'complete_early')}
                     className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue disabled:opacity-60"
                   >
@@ -489,7 +501,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
                   </button>
                   <button
                     type="button"
-                    disabled={!canOperate || working}
+                    disabled={!canOperate || working || isVirtual}
                     onClick={() => closeClass(row, 'cancel')}
                     className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 transition hover:bg-brand-red/10 disabled:opacity-60"
                   >
@@ -536,6 +548,8 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
       <DashboardHeader title={title} subtitle={subtitle} />
 
       {error ? <p className="rounded-lg border border-brand-red/50 bg-brand-red/10 px-3 py-2 text-sm text-red-200">{error}</p> : null}
+
+      <DaySelector value={selectedDate} onChange={setSelectedDate} />
 
       <section className="card-surface space-y-4 p-5">
         <KpiStrip

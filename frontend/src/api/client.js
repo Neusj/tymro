@@ -312,6 +312,10 @@ export const classesApi = {
     const { data } = await api.get('/classes/', { params })
     return data
   },
+  byDate: async (date, params = {}) => {
+    const { data } = await api.get('/classes/by-date/', { params: { ...params, date } })
+    return data
+  },
   retrieve: async (id) => {
     const { data } = await api.get(`/classes/${id}/`)
     return data

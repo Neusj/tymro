@@ -6,6 +6,7 @@ import { canManageOperational } from '../utils/roles'
 import BulkActionModal from '../components/BulkActionModal'
 import ConfirmDialog from '../components/ConfirmDialog'
 import DashboardHeader from '../components/DashboardHeader'
+import DaySelector, { todayIsoDate } from '../components/DaySelector'
 import FilterDropdown from '../components/FilterDropdown'
 import FilterPanel from '../components/FilterPanel'
 import KpiStrip from '../components/KpiStrip'
@@ -37,11 +38,15 @@ const SUBSTITUTE_OPTIONS = [
   { value: 'false', label: 'Sin suplente' },
 ]
 
+function isVirtualClass(row) {
+  return String(row?.id || '').startsWith('virtual:')
+}
+
 export default function GymAdminClassesPage() {
   const { user } = useAuth()
   const canManage = canManageOperational(user?.role)
   const [classes, setClasses] = useState([])
-  const [summary, setSummary] = useState(null)
+  const [selectedDate, setSelectedDate] = useState(todayIsoDate())
   const [disciplines, setDisciplines] = useState([])
   const [loading, setLoading] = useState(true)
   const [deleting, setDeleting] = useState(null)
@@ -78,14 +83,15 @@ export default function GymAdminClassesPage() {
   const loadData = async () => {
     setLoading(true)
     try {
-      const [classesData, summaryData, disciplinesData] = await Promise.all([
-        classesApi.list(filtersParams),
-        classesApi.dashboardSummary(filtersParams),
+      const [classesData, disciplinesData] = await Promise.all([
+        classesApi.byDate(selectedDate, filtersParams),
         disciplinesApi.list(),
       ])
       setClasses(classesData)
-      setSummary(summaryData)
       setDisciplines(disciplinesData)
+    } catch (apiError) {
+      const detail = apiError?.response?.data
+      setError(detail?.detail || 'No se pudieron cargar las clases.')
     } finally {
       setLoading(false)
     }
@@ -93,7 +99,12 @@ export default function GymAdminClassesPage() {
 
   useEffect(() => {
     loadData()
-  }, [filtersParams])
+  }, [filtersParams, selectedDate])
+
+  useEffect(() => {
+    const visibleIds = new Set(classes.map((item) => item.id))
+    setSelectedIds((prev) => prev.filter((id) => visibleIds.has(id)))
+  }, [classes])
 
   const removeClass = async () => {
     if (!deleting) {
@@ -110,10 +121,15 @@ export default function GymAdminClassesPage() {
       setError('Selecciona al menos una clase del conjunto filtrado.')
       return
     }
+    const persistedIds = selectedIds.filter((id) => !String(id).startsWith('virtual:'))
+    if (persistedIds.length === 0) {
+      setError('Las clases proyectadas se podran operar cuando exista la instancia.')
+      return
+    }
     setWorking(true)
     try {
       await classesApi.bulkClose({
-        class_ids: selectedIds,
+        class_ids: persistedIds,
         action,
         comment,
       })
@@ -129,6 +145,10 @@ export default function GymAdminClassesPage() {
   }
 
   const closeSingleClass = async (gymClass, actionName) => {
+    if (isVirtualClass(gymClass)) {
+      setError('Las clases proyectadas se podran operar cuando exista la instancia.')
+      return
+    }
     const comment = window.prompt(actionName === 'cancel' ? 'Motivo de cancelacion' : 'Motivo de cierre anticipado')
     if (!comment || !comment.trim()) {
       return
@@ -183,25 +203,46 @@ export default function GymAdminClassesPage() {
         sortable: false,
         render: (row) => {
           const canClose = !['completed', 'cancelled', 'completed_early'].includes(row.status)
+          const isVirtual = isVirtualClass(row)
           return (
             <>
-              <Link
-                to={`/gym-admin/classes/${row.id}`}
-                className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue"
-              >
-                Detalle
-              </Link>
+              {isVirtual ? (
+                <button
+                  type="button"
+                  disabled
+                  className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white opacity-60"
+                >
+                  Detalle
+                </button>
+              ) : (
+                <Link
+                  to={`/gym-admin/classes/${row.id}`}
+                  className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue"
+                >
+                  Detalle
+                </Link>
+              )}
               {canManage ? (
                 <>
-                  <Link
-                    to={`/gym-admin/classes/${row.id}/edit`}
-                    className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue"
-                  >
-                    Editar
-                  </Link>
+                  {isVirtual ? (
+                    <button
+                      type="button"
+                      disabled
+                      className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white opacity-60"
+                    >
+                      Editar
+                    </button>
+                  ) : (
+                    <Link
+                      to={`/gym-admin/classes/${row.id}/edit`}
+                      className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue"
+                    >
+                      Editar
+                    </Link>
+                  )}
                   <button
                     type="button"
-                    disabled={!canClose || working}
+                    disabled={!canClose || working || isVirtual}
                     onClick={() => closeSingleClass(row, 'complete_early')}
                     className="w-full rounded-lg border border-brand-orange/50 px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-orange disabled:opacity-60"
                   >
@@ -209,7 +250,7 @@ export default function GymAdminClassesPage() {
                   </button>
                   <button
                     type="button"
-                    disabled={!canClose || working}
+                    disabled={!canClose || working || isVirtual}
                     onClick={() => closeSingleClass(row, 'cancel')}
                     className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 transition hover:bg-brand-red/10 disabled:opacity-60"
                   >
@@ -217,8 +258,9 @@ export default function GymAdminClassesPage() {
                   </button>
                   <button
                     type="button"
+                    disabled={isVirtual}
                     onClick={() => setDeleting(row)}
-                    className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 transition hover:bg-brand-red/10"
+                    className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 transition hover:bg-brand-red/10 disabled:opacity-60"
                   >
                     Eliminar
                   </button>
@@ -232,7 +274,16 @@ export default function GymAdminClassesPage() {
     [working, canManage],
   )
 
-  const totals = summary?.totals || {}
+  const totals = useMemo(() => {
+    const totalClasses = classes.length
+    const totalActiveEnrollments = classes.reduce((sum, item) => sum + Number(item.enrollments_count || 0), 0)
+    const totalCapacity = classes.reduce((sum, item) => sum + Number(item.capacity || 0), 0)
+    return {
+      total_classes: totalClasses,
+      total_active_enrollments: totalActiveEnrollments,
+      occupancy_percent: totalCapacity > 0 ? Math.round((totalActiveEnrollments / totalCapacity) * 100) : 0,
+    }
+  }, [classes])
 
   return (
     <div className="space-y-6">
@@ -251,6 +302,8 @@ export default function GymAdminClassesPage() {
           ) : null
         }
       />
+
+      <DaySelector value={selectedDate} onChange={setSelectedDate} />
 
       <section className="card-surface p-5 space-y-4">
         <h2 className="panel-title hidden md:block">Resumen</h2>

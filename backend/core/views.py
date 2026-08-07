@@ -14,6 +14,7 @@ from django.core.mail import send_mail
 from django.db import models, transaction
 from django.db.models import ProtectedError, RestrictedError
 from django.utils import timezone
+from django.utils.dateparse import parse_date
 from django.utils.encoding import force_bytes, force_str
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from rest_framework import status
@@ -2349,72 +2350,85 @@ class GymClassViewSet(ModelViewSet):
             return GymClassDetailSerializer
         return GymClassSerializer
 
-    def get_queryset(self):
-        user = self.request.user
-        organization_id = self.request.query_params.get('organization_id')
-        status_value = self.request.query_params.get('status')
-        status_in = self.request.query_params.get('status_in')
-        discipline = self.request.query_params.get('discipline')
-        teacher_id = self.request.query_params.get('teacher_id')
-        branch_id = self.request.query_params.get('branch_id')
-        start_date_from = self.request.query_params.get('start_date_from')
-        start_date_to = self.request.query_params.get('start_date_to')
-        has_series = self.request.query_params.get('has_series')
-        has_substitute = self.request.query_params.get('has_substitute')
-        ordering = self.request.query_params.get('ordering')
-
-        ordering_map = {
+    def _class_ordering(self):
+        return {
             'start_datetime': 'start_datetime',
             'end_datetime': 'end_datetime',
             'teacher': 'teacher__first_name',
             'discipline': 'discipline__name',
             'status': 'status',
             'capacity': 'capacity',
-        }
-        default_ordering = ['start_datetime', 'id']
+        }, ['start_datetime', 'id']
 
-        def apply_common_filters(base_queryset):
-            queryset = base_queryset
-            if discipline:
-                queryset = queryset.filter(discipline__name=discipline)
-            if status_value:
-                queryset = queryset.filter(status=status_value)
-            if status_in:
-                statuses = [item.strip() for item in status_in.split(',') if item.strip()]
-                if statuses:
-                    queryset = queryset.filter(status__in=statuses)
-            if teacher_id:
-                queryset = queryset.filter(teacher_id=teacher_id)
-            if branch_id:
-                queryset = queryset.filter(branch_id=branch_id)
-            if start_date_from:
-                queryset = queryset.filter(start_datetime__date__gte=start_date_from)
-            if start_date_to:
-                queryset = queryset.filter(start_datetime__date__lte=start_date_to)
-            has_series_value = str(has_series or '').strip().lower()
-            if has_series_value in {'true', '1', 'yes'}:
-                queryset = queryset.filter(class_template__isnull=False)
-            elif has_series_value in {'false', '0', 'no'}:
-                queryset = queryset.filter(class_template__isnull=True)
-            has_substitute_value = str(has_substitute or '').strip().lower()
-            if has_substitute_value in {'true', '1', 'yes'}:
-                queryset = queryset.filter(has_substitute=True)
-            elif has_substitute_value in {'false', '0', 'no'}:
-                queryset = queryset.filter(has_substitute=False)
-            return queryset
+    def _apply_class_common_filters(self, base_queryset, *, start_date_from=None, start_date_to=None):
+        status_value = self.request.query_params.get('status')
+        status_in = self.request.query_params.get('status_in')
+        discipline = self.request.query_params.get('discipline')
+        teacher_id = self.request.query_params.get('teacher_id')
+        branch_id = self.request.query_params.get('branch_id')
+        has_series = self.request.query_params.get('has_series')
+        has_substitute = self.request.query_params.get('has_substitute')
+
+        if start_date_from is None:
+            start_date_from = self.request.query_params.get('start_date_from')
+        if start_date_to is None:
+            start_date_to = self.request.query_params.get('start_date_to')
+
+        queryset = base_queryset
+        if discipline:
+            queryset = queryset.filter(discipline__name=discipline)
+        if status_value:
+            queryset = queryset.filter(status=status_value)
+        if status_in:
+            statuses = [item.strip() for item in status_in.split(',') if item.strip()]
+            if statuses:
+                queryset = queryset.filter(status__in=statuses)
+        if teacher_id:
+            queryset = queryset.filter(teacher_id=teacher_id)
+        if branch_id:
+            queryset = queryset.filter(branch_id=branch_id)
+        if start_date_from:
+            queryset = queryset.filter(start_datetime__date__gte=start_date_from)
+        if start_date_to:
+            queryset = queryset.filter(start_datetime__date__lte=start_date_to)
+        has_series_value = str(has_series or '').strip().lower()
+        if has_series_value in {'true', '1', 'yes'}:
+            queryset = queryset.filter(class_template__isnull=False)
+        elif has_series_value in {'false', '0', 'no'}:
+            queryset = queryset.filter(class_template__isnull=True)
+        has_substitute_value = str(has_substitute or '').strip().lower()
+        if has_substitute_value in {'true', '1', 'yes'}:
+            queryset = queryset.filter(has_substitute=True)
+        elif has_substitute_value in {'false', '0', 'no'}:
+            queryset = queryset.filter(has_substitute=False)
+        return queryset
+
+    def _get_scoped_class_queryset(self, *, start_date_from=None, start_date_to=None):
+        user = self.request.user
+        organization_id = self.request.query_params.get('organization_id')
+        ordering = self.request.query_params.get('ordering')
+        ordering_map, default_ordering = self._class_ordering()
 
         if _is_superadmin(user):
             queryset = self.queryset
             if organization_id:
                 queryset = queryset.filter(organization_id=organization_id)
-            queryset = apply_common_filters(queryset)
+            queryset = self._apply_class_common_filters(
+                queryset,
+                start_date_from=start_date_from,
+                start_date_to=start_date_to,
+            )
             queryset = _apply_ordering(queryset, ordering, ordering_map, default_ordering)
             _sync_class_statuses(queryset)
             return queryset
 
         if (roles.is_org_admin(user) or _is_monitor(user)) and user.organization_id:
             queryset = self.queryset.filter(organization_id=user.organization_id)
-            queryset = apply_common_filters(queryset)
+            queryset = self._apply_class_common_filters(
+                queryset,
+                start_date_from=start_date_from,
+                start_date_to=start_date_to,
+            )
             queryset = _apply_ordering(queryset, ordering, ordering_map, default_ordering)
             _sync_class_statuses(queryset)
             return queryset
@@ -2427,7 +2441,11 @@ class GymClassViewSet(ModelViewSet):
                 self.queryset.filter(teacher_id=user.id, organization_id=user.organization_id)
                 if user.organization_id else self.queryset.none()
             )
-            queryset = apply_common_filters(queryset)
+            queryset = self._apply_class_common_filters(
+                queryset,
+                start_date_from=start_date_from,
+                start_date_to=start_date_to,
+            )
             queryset = _apply_ordering(queryset, ordering, ordering_map, default_ordering)
             _sync_class_statuses(queryset)
             return queryset
@@ -2439,12 +2457,156 @@ class GymClassViewSet(ModelViewSet):
             queryset = queryset.exclude(status=GymClass.Status.SUSPENDED)
             if mine_param in {'1', 'true', 'yes'}:
                 queryset = queryset.filter(enrollments__student_id=user.id, enrollments__status='active').distinct()
-            queryset = apply_common_filters(queryset)
+            queryset = self._apply_class_common_filters(
+                queryset,
+                start_date_from=start_date_from,
+                start_date_to=start_date_to,
+            )
             queryset = _apply_ordering(queryset, ordering, ordering_map, default_ordering)
             _sync_class_statuses(queryset)
             return queryset
 
         return self.queryset.none()
+
+    def get_queryset(self):
+        return self._get_scoped_class_queryset()
+
+    def _class_is_reservable(self, gym_class):
+        active_count = getattr(gym_class, 'active_enrollments_count', None)
+        if active_count is None:
+            active_count = gym_class.enrollments.filter(status='active').count()
+        return (
+            gym_class.start_datetime > timezone.now()
+            and gym_class.status not in {
+                GymClass.Status.CANCELLED,
+                GymClass.Status.SUSPENDED,
+                GymClass.Status.COMPLETED,
+                GymClass.Status.COMPLETED_EARLY,
+            }
+            and active_count < gym_class.capacity
+        )
+
+    def _virtual_template_queryset(self, target_date):
+        user = self.request.user
+        organization_id = self.request.query_params.get('organization_id')
+        queryset = ClassTemplate.objects.select_related(
+            'organization', 'branch', 'teacher', 'class_type', 'discipline'
+        ).filter(
+            is_active=True,
+            weekday=target_date.weekday(),
+            start_date__lte=target_date,
+        ).filter(
+            models.Q(end_date__isnull=True) | models.Q(end_date__gte=target_date)
+        )
+
+        if _is_superadmin(user):
+            if organization_id:
+                queryset = queryset.filter(organization_id=organization_id)
+            return queryset
+        if (roles.is_org_admin(user) or _is_monitor(user)) and user.organization_id:
+            return queryset.filter(organization_id=user.organization_id)
+        if _is_teacher(user) and user.organization_id:
+            return queryset.filter(organization_id=user.organization_id, teacher_id=user.id)
+        if _is_student(user) and user.organization_id:
+            mine_param = str(self.request.query_params.get('mine', '')).lower()
+            if mine_param in {'1', 'true', 'yes'}:
+                return queryset.none()
+            return queryset.filter(organization_id=user.organization_id)
+        return queryset.none()
+
+    def _virtual_payload(self, template, target_date):
+        start_datetime = timezone.make_aware(
+            datetime.combine(target_date, template.start_time),
+            timezone.get_current_timezone(),
+        )
+        end_datetime = timezone.make_aware(
+            datetime.combine(target_date, template.end_time),
+            timezone.get_current_timezone(),
+        )
+        window_days = getattr(template.organization, 'max_reservation_window_days', 21) or 21
+        reservable_until = timezone.localdate() + timedelta(days=window_days)
+        teacher_name = ''
+        if template.teacher:
+            teacher_name = f'{template.teacher.first_name} {template.teacher.last_name}'.strip()
+            teacher_name = teacher_name or template.teacher.username
+        return {
+            'id': f'virtual:{template.id}:{target_date.isoformat()}',
+            'name': template.name,
+            'organization': template.organization_id,
+            'class_template': template.id,
+            'class_template_name': template.name,
+            'branch': template.branch_id,
+            'branch_name': template.branch.name if template.branch else '',
+            'teacher': template.teacher_id,
+            'teacher_name': teacher_name,
+            'class_type': template.class_type_id,
+            'class_type_name': template.class_type.name if template.class_type else '',
+            'discipline': template.discipline_id,
+            'discipline_name': template.discipline.name if template.discipline else '',
+            'start_datetime': start_datetime.isoformat(),
+            'end_datetime': end_datetime.isoformat(),
+            'capacity': template.capacity,
+            'is_trial_eligible': template.is_trial_eligible,
+            'status': GymClass.Status.SCHEDULED,
+            'created_by': None,
+            'closed_by': None,
+            'closed_at': None,
+            'closure_comment': '',
+            'suspended_at': None,
+            'suspend_reason': '',
+            'suspended_by': None,
+            'reactivation_expected_date': None,
+            'is_suspended': False,
+            'can_suspend': False,
+            'can_reactivate': False,
+            'is_active': True,
+            'has_substitute': template.has_substitute,
+            'substitute_name': template.substitute_name,
+            'enrollments_count': 0,
+            'attendances_count': 0,
+            'present_attendances_count': 0,
+            'reservable': target_date <= reservable_until,
+        }
+
+    @action(detail=False, methods=['get'], url_path='by-date')
+    def by_date(self, request):
+        raw_date = request.query_params.get('date')
+        if not raw_date:
+            return Response({'date': 'Este parametro es obligatorio.'}, status=status.HTTP_400_BAD_REQUEST)
+        target_date = parse_date(raw_date)
+        if target_date is None or raw_date != target_date.isoformat():
+            return Response({'date': 'Formato invalido. Usa YYYY-MM-DD.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        real_queryset = self._get_scoped_class_queryset(
+            start_date_from=target_date.isoformat(),
+            start_date_to=target_date.isoformat(),
+        ).annotate(
+            active_enrollments_count=models.Count(
+                'enrollments',
+                filter=models.Q(enrollments__status='active'),
+            )
+        )
+        real_data = GymClassSerializer(real_queryset, many=True, context={'request': request}).data
+        for item, gym_class in zip(real_data, real_queryset):
+            item['reservable'] = self._class_is_reservable(gym_class)
+
+        virtual_queryset = self._virtual_template_queryset(target_date)
+        template_ids = list(virtual_queryset.values_list('id', flat=True))
+        materialized_template_ids = set(
+            GymClass.objects.filter(
+                class_template_id__in=template_ids,
+                start_datetime__date=target_date,
+            ).values_list('class_template_id', flat=True)
+        )
+        virtual_data = [
+            self._virtual_payload(template, target_date)
+            for template in virtual_queryset
+            if template.id not in materialized_template_ids
+        ]
+
+        combined = [*real_data, *virtual_data]
+        combined.sort(key=lambda item: (item['start_datetime'], str(item['id'])))
+        return Response(combined)
 
     @action(detail=False, methods=['get'], url_path='dashboard-summary')
     def dashboard_summary(self, request):

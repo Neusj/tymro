@@ -124,6 +124,11 @@ class Organization(TimestampedModel):
         validators=[MaxValueValidator(366)],
         help_text='Días hacia adelante en que se materializan clases de series recurrentes.',
     )
+    max_reservation_window_days = models.IntegerField(
+        default=21,
+        validators=[MinValueValidator(1), MaxValueValidator(366)],
+        help_text='Días hacia adelante en que se puede reservar una clase.',
+    )
     # Colchón de poda: cuántos días tiene que llevar TERMINADA una clase vacía para que el
     # job advance_class_windows la borre. Margen para backfill tardío (pasar lista el lunes
     # por la clase del viernes). 0 = sin colchón (podar apenas termina).
