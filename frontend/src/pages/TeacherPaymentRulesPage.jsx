@@ -52,6 +52,21 @@ function firstApiError(detail, fallback) {
   return fallback
 }
 
+function buildRulePayload(form) {
+  const payload = {
+    payment_type: form.payment_type,
+    amount: Number(form.amount),
+    calculation_base: form.payment_type === 'revenue_share' ? form.calculation_base : null,
+    is_active: Boolean(form.is_active),
+  }
+
+  if (form.payment_type === 'per_plan_price') {
+    payload.per_plan_price_base = form.per_plan_price_base
+  }
+
+  return payload
+}
+
 export default function TeacherPaymentRulesPage() {
   const { user } = useAuth()
   const isSuperadmin = user?.role === 'superadmin'
@@ -197,12 +212,14 @@ export default function TeacherPaymentRulesPage() {
     setNotice('')
     try {
       await teacherPaymentRulesApi.update(row.id, {
-        organization: row.organization,
-        payment_type: row.payment_type,
-        amount: Number(row.amount),
-        calculation_base: row.calculation_base || null,
-        per_plan_price_base: row.per_plan_price_base || null,
-        is_active: false,
+        ...buildRulePayload({
+          payment_type: row.payment_type,
+          amount: row.amount,
+          calculation_base: row.calculation_base || '',
+          per_plan_price_base: row.per_plan_price_base || '',
+          is_active: false,
+        }),
+        ...(isSuperadmin ? { organization: row.organization } : {}),
       })
       setNotice('Regla deshabilitada.')
       await loadData()
@@ -258,13 +275,7 @@ export default function TeacherPaymentRulesPage() {
     setError('')
     setNotice('')
     try {
-      const payload = {
-        payment_type: form.payment_type,
-        amount: Number(form.amount),
-        calculation_base: form.payment_type === 'revenue_share' ? form.calculation_base : null,
-        per_plan_price_base: form.payment_type === 'per_plan_price' ? form.per_plan_price_base : null,
-        is_active: Boolean(form.is_active),
-      }
+      const payload = buildRulePayload(form)
       if (isSuperadmin) {
         payload.organization = Number(form.organization)
       }
