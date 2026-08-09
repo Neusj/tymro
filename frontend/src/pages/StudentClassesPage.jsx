@@ -104,7 +104,13 @@ function reservationPayloadForClass(gymClass) {
 
 function reservationBlockedMessage(row) {
   if (row?.reservable === false) {
-    return 'No se puede reservar con tanta anticipacion'
+    if (row.reservation_block_message) {
+      return row.reservation_block_message
+    }
+    if (row.reservation_block_code === 'max_reservation_window_exceeded' && row.max_reservation_window_days) {
+      return `No puedes reservar con más de ${row.max_reservation_window_days} días de anticipación.`
+    }
+    return 'No se puede reservar con tanta anticipación'
   }
   return ''
 }

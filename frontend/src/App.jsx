@@ -13,6 +13,7 @@ import GymAdminHolidaysPage from './pages/GymAdminHolidaysPage'
 import GymAdminTrialFollowupPage from './pages/GymAdminTrialFollowupPage'
 import GymAdminExpiryNotificationConfigPage from './pages/GymAdminExpiryNotificationConfigPage'
 import GymAdminEnrollmentFeeConfigPage from './pages/GymAdminEnrollmentFeeConfigPage'
+import GymAdminReservationWindowConfigPage from './pages/GymAdminReservationWindowConfigPage'
 import GymAdminTeacherPaymentConfigPage from './pages/GymAdminTeacherPaymentConfigPage'
 import GymAdminImportPage from './pages/GymAdminImportPage'
 import GymAdminBranchesPage from './pages/GymAdminBranchesPage'
@@ -465,6 +466,16 @@ export default function App() {
           <ProtectedRoute allowedRoles={['gym_admin']}>
             <ShellRoute>
               <GymAdminEnrollmentFeeConfigPage />
+            </ShellRoute>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/gym-admin/settings/reservation-window"
+        element={
+          <ProtectedRoute allowedRoles={['gym_admin']}>
+            <ShellRoute>
+              <GymAdminReservationWindowConfigPage />
             </ShellRoute>
           </ProtectedRoute>
         }

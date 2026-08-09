@@ -662,6 +662,12 @@ class OrganizationEnrollmentFeeConfigSerializer(serializers.ModelSerializer):
         return value
 
 
+class OrganizationReservationWindowConfigSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Organization
+        fields = ['max_reservation_window_days']
+
+
 class DisciplineSerializer(serializers.ModelSerializer):
     class Meta:
         model = Discipline

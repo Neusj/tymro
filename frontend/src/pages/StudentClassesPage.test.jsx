@@ -375,6 +375,9 @@ describe('StudentClassesPage — selector de dia por fecha', () => {
           discipline_name: 'BJJ',
           class_template: null,
           reservable: false,
+          reservation_block_code: 'max_reservation_window_exceeded',
+          reservation_block_message: 'No puedes reservar con más de 180 días de anticipación.',
+          max_reservation_window_days: 180,
         },
       ])
     })
@@ -383,7 +386,7 @@ describe('StudentClassesPage — selector de dia por fecha', () => {
 
     const reservar = await screen.findByRole('button', { name: 'Reservar' })
     expect(reservar).toBeDisabled()
-    expect(screen.getByText('No se puede reservar con tanta anticipacion')).toBeInTheDocument()
+    expect(screen.getByText('No puedes reservar con más de 180 días de anticipación.')).toBeInTheDocument()
   })
 
   it('el calendario completo permite saltar a una fecha lejana y consultar ese dia', async () => {

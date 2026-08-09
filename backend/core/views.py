@@ -76,6 +76,7 @@ from .serializers import (
     ManualPaymentSerializer,
     OrganizationEnrollmentFeeConfigSerializer,
     OrganizationExpiryNotificationConfigSerializer,
+    OrganizationReservationWindowConfigSerializer,
     OrganizationSerializer,
     OrganizationTeacherPaymentConfigSerializer,
     PasswordResetConfirmSerializer,
@@ -128,11 +129,15 @@ from .services.reservations import (
     cancel_future_recurring_enrollments,
     get_active_student_plan,
     get_enrollment_student_plan,
+    reservation_error_payload,
+    reservation_window_state_for_class,
+    reservation_window_state_for_date,
     reserve_student_in_class,
     revert_consumption_for_class,
     revert_consumption_for_enrollment,
     rollback_consumption_for_enrollment,
     should_refund_consumption,
+    validate_reservation_window_for_date,
 )
 # El robot de la ventana rodante, el mismo que corre el cron diario: `AdvanceClassWindowsView` lo
 # dispara para UNA org (la del actor) y no reimplementa ni una línea de sus tres fases.
@@ -1197,7 +1202,7 @@ class PublicTrialBookView(APIView):
                     is_trial=True,
                 )
             except ReservationRuleError as exc:
-                return Response({'detail': exc.message}, status=status.HTTP_400_BAD_REQUEST)
+                return Response(reservation_error_payload(exc), status=status.HTTP_400_BAD_REQUEST)
 
             locked_user.has_used_trial = True
             locked_user.save(update_fields=['has_used_trial'])
@@ -1847,6 +1852,25 @@ class OrganizationViewSet(ModelViewSet):
             return Response(OrganizationEnrollmentFeeConfigSerializer(organization).data)
 
         serializer = OrganizationEnrollmentFeeConfigSerializer(
+            organization, data=request.data, partial=True,
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['get', 'put'], url_path='reservation-window-config')
+    def reservation_window_config(self, request, pk=None):
+        """Anticipación máxima para reservas, editable desde configuración de organización."""
+        organization = Organization.objects.filter(pk=pk).first()
+        if organization is None:
+            raise NotFound('Organización no encontrada.')
+        if not _can_manage_org_resource(request.user, organization.id):
+            raise PermissionDenied('No tienes permisos para gestionar esta configuración.')
+
+        if request.method == 'GET':
+            return Response(OrganizationReservationWindowConfigSerializer(organization).data)
+
+        serializer = OrganizationReservationWindowConfigSerializer(
             organization, data=request.data, partial=True,
         )
         serializer.is_valid(raise_exception=True)
@@ -2506,7 +2530,7 @@ class GymClassViewSet(ModelViewSet):
         active_count = getattr(gym_class, 'active_enrollments_count', None)
         if active_count is None:
             active_count = gym_class.enrollments.filter(status='active').count()
-        return (
+        base_reservable = (
             gym_class.start_datetime > timezone.now()
             and gym_class.status not in {
                 GymClass.Status.CANCELLED,
@@ -2516,6 +2540,16 @@ class GymClassViewSet(ModelViewSet):
             }
             and active_count < gym_class.capacity
         )
+        return base_reservable and reservation_window_state_for_class(gym_class)['within_window']
+
+    @staticmethod
+    def _reservation_window_payload(window_state):
+        return {
+            'reservation_block_code': window_state['code'],
+            'reservation_block_message': window_state['message'],
+            'max_reservation_window_days': window_state['max_reservation_window_days'],
+            'reservation_window_last_date': window_state['reservation_window_last_date'],
+        }
 
     def _virtual_template_queryset(self, target_date):
         user = self.request.user
@@ -2554,8 +2588,7 @@ class GymClassViewSet(ModelViewSet):
             datetime.combine(target_date, template.end_time),
             timezone.get_current_timezone(),
         )
-        window_days = getattr(template.organization, 'max_reservation_window_days', 21) or 21
-        reservable_until = timezone.localdate() + timedelta(days=window_days)
+        window_state = reservation_window_state_for_date(template.organization, target_date)
         teacher_name = ''
         if template.teacher:
             teacher_name = f'{template.teacher.first_name} {template.teacher.last_name}'.strip()
@@ -2596,7 +2629,8 @@ class GymClassViewSet(ModelViewSet):
             'enrollments_count': 0,
             'attendances_count': 0,
             'present_attendances_count': 0,
-            'reservable': target_date <= reservable_until,
+            'reservable': window_state['within_window'],
+            **self._reservation_window_payload(window_state),
         }
 
     @action(detail=False, methods=['get'], url_path='by-date')
@@ -2619,7 +2653,9 @@ class GymClassViewSet(ModelViewSet):
         )
         real_data = GymClassSerializer(real_queryset, many=True, context={'request': request}).data
         for item, gym_class in zip(real_data, real_queryset):
+            window_state = reservation_window_state_for_class(gym_class)
             item['reservable'] = self._class_is_reservable(gym_class)
+            item.update(self._reservation_window_payload(window_state))
 
         virtual_queryset = self._virtual_template_queryset(target_date)
         template_ids = list(virtual_queryset.values_list('id', flat=True))
@@ -3966,9 +4002,12 @@ class EnrollmentViewSet(ModelViewSet):
             raise ValidationError({'date': 'Formato invalido. Usa YYYY-MM-DD.'})
 
         today = timezone.localdate()
-        window_days = getattr(template.organization, 'max_reservation_window_days', 21) or 21
-        if target_date < today or target_date > today + timedelta(days=window_days):
-            raise ValidationError({'detail': 'No se puede reservar con tanta anticipacion'})
+        if target_date < today:
+            raise ValidationError({'date': 'No puedes reservar clases pasadas.'})
+        try:
+            validate_reservation_window_for_date(template.organization, target_date, today=today)
+        except ReservationRuleError as exc:
+            raise ValidationError(reservation_error_payload(exc))
 
         if target_date.weekday() != template.weekday:
             raise ValidationError({'date': 'La fecha no corresponde al dia de la plantilla.'})
@@ -4075,7 +4114,7 @@ class EnrollmentViewSet(ModelViewSet):
                         student_plan_id=student_plan_id,
                     )
                 except ReservationRuleError as exc:
-                    raise ValidationError({'detail': exc.message})
+                    raise ValidationError(reservation_error_payload(exc))
                 serializer.instance = enrollment
                 return
 
@@ -4089,7 +4128,7 @@ class EnrollmentViewSet(ModelViewSet):
                         student_plan_id=student_plan_id,
                     )
                 except ReservationRuleError as exc:
-                    raise ValidationError({'detail': exc.message})
+                    raise ValidationError(reservation_error_payload(exc))
                 serializer.instance = enrollment
                 return
 
@@ -4102,7 +4141,7 @@ class EnrollmentViewSet(ModelViewSet):
                         student_plan_id=student_plan_id,
                     )
                 except ReservationRuleError as exc:
-                    raise ValidationError({'detail': exc.message})
+                    raise ValidationError(reservation_error_payload(exc))
                 serializer.instance = enrollment
                 return
 
@@ -4137,7 +4176,7 @@ class EnrollmentViewSet(ModelViewSet):
                         student_plan_id=student_plan_id,
                     )
                 except ReservationRuleError as exc:
-                    raise ValidationError({'detail': exc.message})
+                    raise ValidationError(reservation_error_payload(exc))
                 return
             if new_status == 'cancelled':
                 serializer.instance = cancel_enrollment_with_refund(enrollment)

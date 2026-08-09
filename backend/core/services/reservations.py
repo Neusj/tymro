@@ -1,4 +1,5 @@
 from collections import defaultdict
+from datetime import timedelta
 
 from django.db import transaction
 from django.db.models import F, Value
@@ -17,10 +18,79 @@ TERMINAL_CLASS_STATUSES = {
 
 
 class ReservationRuleError(Exception):
-    def __init__(self, message, code='reservation_invalid'):
+    def __init__(self, message, code='reservation_invalid', extra=None):
         super().__init__(message)
         self.message = message
         self.code = code
+        self.extra = extra or {}
+
+
+REASON_MAX_RESERVATION_WINDOW_EXCEEDED = 'max_reservation_window_exceeded'
+
+
+def reservation_error_payload(exc):
+    payload = {'detail': exc.message, 'code': exc.code}
+    payload.update(getattr(exc, 'extra', {}) or {})
+    return payload
+
+
+def max_reservation_window_days(organization):
+    days = getattr(organization, 'max_reservation_window_days', None)
+    if days is None:
+        days = organization._meta.get_field('max_reservation_window_days').default
+    return int(days)
+
+
+def reservation_window_state_for_date(organization, target_date, today=None):
+    window_days = max_reservation_window_days(organization)
+    reference_date = today or timezone.localdate()
+    last_reservable_date = reference_date + timedelta(days=window_days)
+    is_within_window = target_date <= last_reservable_date
+    message = ''
+    code = ''
+    if not is_within_window:
+        code = REASON_MAX_RESERVATION_WINDOW_EXCEEDED
+        message = f'No puedes reservar con más de {window_days} días de anticipación.'
+    return {
+        'within_window': is_within_window,
+        'code': code,
+        'message': message,
+        'max_reservation_window_days': window_days,
+        'reservation_window_last_date': last_reservable_date.isoformat(),
+    }
+
+
+def reservation_window_state_for_class(gym_class, today=None):
+    target_date = timezone.localtime(gym_class.start_datetime).date()
+    return reservation_window_state_for_date(gym_class.organization, target_date, today=today)
+
+
+def validate_reservation_window_for_date(organization, target_date, today=None):
+    window_state = reservation_window_state_for_date(organization, target_date, today=today)
+    if window_state['within_window']:
+        return window_state
+    raise ReservationRuleError(
+        window_state['message'],
+        code=window_state['code'],
+        extra={
+            'max_reservation_window_days': window_state['max_reservation_window_days'],
+            'reservation_window_last_date': window_state['reservation_window_last_date'],
+        },
+    )
+
+
+def validate_reservation_window_for_class(gym_class, today=None):
+    window_state = reservation_window_state_for_class(gym_class, today=today)
+    if window_state['within_window']:
+        return window_state
+    raise ReservationRuleError(
+        window_state['message'],
+        code=window_state['code'],
+        extra={
+            'max_reservation_window_days': window_state['max_reservation_window_days'],
+            'reservation_window_last_date': window_state['reservation_window_last_date'],
+        },
+    )
 
 
 # Vocabulario de la imputación de consumo (#9 + 10.x). Los tres son FUENTE ÚNICA: los dos
@@ -551,6 +621,7 @@ def _validate_reservation_rules(*, student, gym_class, existing=None, require_pl
         raise ReservationRuleError('No puedes reservar clases pasadas o ya iniciadas.', code='class_started')
     if gym_class.status in TERMINAL_CLASS_STATUSES:
         raise ReservationRuleError('No puedes reservar una clase cerrada.', code='class_closed')
+    validate_reservation_window_for_class(gym_class)
 
     active_duplicate = Enrollment.objects.filter(gym_class=gym_class, student=student, status='active')
     if existing:
