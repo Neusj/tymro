@@ -42,7 +42,7 @@ from .models import (
     TeacherPaymentRule,
     TrialFollowupConfiguration,
 )
-from .services.plans import describe_student_plan
+from .services.plans import money, quote_student_plan_assignment, describe_student_plan
 from .services.recurrence import create_enrollments_for_recurring_subscription
 from .services.reservations import (
     REASON_PLAN_NOT_FOUND,
@@ -116,6 +116,7 @@ class OrganizationSerializer(serializers.ModelSerializer):
             'class_generation_window_days',
             'max_reservation_window_days',
             'class_pruning_grace_days',
+            'annual_enrollment_fee',
             'branches_count',
         ]
         read_only_fields = [
@@ -292,6 +293,7 @@ class CustomUserSerializer(serializers.ModelSerializer):
             'rut',
             'profile_image',
             'is_active_member',
+            'pays_enrollment_fee',
             'organization',
             'branch',
             'organization_detail',
@@ -644,6 +646,18 @@ class OrganizationTeacherPaymentConfigSerializer(serializers.ModelSerializer):
         if not math.isfinite(value):
             raise serializers.ValidationError('El valor debe ser un número finito.')
         if value > 1_000_000_000:
+            raise serializers.ValidationError('El valor es demasiado alto.')
+        return value
+
+
+class OrganizationEnrollmentFeeConfigSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Organization
+        fields = ['annual_enrollment_fee']
+
+    def validate_annual_enrollment_fee(self, value):
+        value = money(value)
+        if value > Decimal('1000000000'):
             raise serializers.ValidationError('El valor es demasiado alto.')
         return value
 
@@ -1961,6 +1975,34 @@ class ChargeLineItemInputSerializer(serializers.Serializer):
     amount = serializers.DecimalField(max_digits=10, decimal_places=2, min_value=Decimal('0.01'))
 
 
+class StudentPlanAssignmentQuoteSerializer(serializers.Serializer):
+    user = serializers.PrimaryKeyRelatedField(
+        queryset=User.objects.filter(role__in=STUDENT_SUBJECT_ROLES, is_active=True)
+    )
+    plan = serializers.PrimaryKeyRelatedField(queryset=Plan.objects.filter(is_active=True))
+    start_date = serializers.DateField(required=False)
+    discount_percentage = serializers.FloatField(required=False, min_value=0, max_value=100)
+    line_items = ChargeLineItemInputSerializer(many=True, required=False, max_length=50)
+
+    def validate(self, attrs):
+        student = attrs['user']
+        plan = attrs['plan']
+        if plan.organization_id != student.organization_id:
+            raise serializers.ValidationError({'plan': 'El plan no pertenece a la organización del alumno.'})
+        discount = attrs.get('discount_percentage')
+        if discount is None:
+            discount = plan.discount_percentage or 0
+        attrs['discount_percentage'] = discount
+        quote = quote_student_plan_assignment(
+            student=student,
+            plan=plan,
+            discount_percentage=discount,
+            line_items=attrs.get('line_items') or [],
+        )
+        attrs['quote'] = quote
+        return attrs
+
+
 class StudentPlanAssignPaymentSerializer(serializers.Serializer):
     """Sub-payload de `payment` dentro de `assign` (8.3). Declara la vía financiera de la
     membresía nueva: `free` (beca total) o `manual` (cobro fuera de línea).
@@ -1991,7 +2033,7 @@ class StudentPlanAssignPaymentSerializer(serializers.Serializer):
     METHOD_MANUAL = 'manual'
     METHOD_CHOICES = (
         (METHOD_FREE, 'Gratis (beca / giftcard)'),
-        (METHOD_MANUAL, 'Pago manual (efectivo / transferencia)'),
+        (METHOD_MANUAL, 'Pago manual'),
     )
 
     method = serializers.ChoiceField(choices=METHOD_CHOICES)
@@ -2015,7 +2057,7 @@ class StudentPlanAssignPaymentSerializer(serializers.Serializer):
                 })
             if attrs.get('manual_method') is None:
                 raise serializers.ValidationError({
-                    'manual_method': 'El método de pago (efectivo/transferencia) es obligatorio para declarar un pago manual.',
+                    'manual_method': 'El método de pago es obligatorio para declarar un pago manual.',
                 })
         else:
             # Free ES beca total, no un descuento parcial: un monto o una referencia de cobro
@@ -2123,6 +2165,13 @@ class StudentPlanAssignSerializer(serializers.Serializer):
             # del actor.
 
         attrs['end_date'] = attrs['start_date'] + timedelta(days=max(plan.duration_days - 1, 0))
+        quote = quote_student_plan_assignment(
+            student=student,
+            plan=plan,
+            discount_percentage=attrs['discount_percentage'],
+            line_items=payment.get('line_items') or [],
+        )
+        attrs['assignment_quote'] = quote
         return attrs
 
 
@@ -2155,7 +2204,38 @@ class ManualPaymentCreateSerializer(serializers.Serializer):
     # endpoint ofrezca. Todo cobro nuevo declara `cash` o `transfer` sí o sí -mismo criterio
     # que el resto del contrato acá: la forma se valida en la entrada, no se infiere.
     method = serializers.ChoiceField(choices=ManualPayment.METHOD_CHOICES)
+    plan_amount = serializers.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        min_value=Decimal('0'),
+        required=False,
+    )
+    enrollment_fee_amount = serializers.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        min_value=Decimal('0'),
+        required=False,
+    )
     reference = serializers.CharField(max_length=120, allow_blank=True, default='')
+
+    def validate(self, attrs):
+        amount = money(attrs['amount'])
+        plan_amount = attrs.get('plan_amount')
+        enrollment_fee_amount = attrs.get('enrollment_fee_amount')
+        if plan_amount is None and enrollment_fee_amount is None:
+            attrs['plan_amount'] = amount
+            attrs['enrollment_fee_amount'] = Decimal('0.00')
+            return attrs
+
+        plan_amount = money(plan_amount)
+        enrollment_fee_amount = money(enrollment_fee_amount)
+        if plan_amount + enrollment_fee_amount != amount:
+            raise serializers.ValidationError({
+                'amount': 'El desglose de plan y matrícula debe sumar el monto cobrado.',
+            })
+        attrs['plan_amount'] = plan_amount
+        attrs['enrollment_fee_amount'] = enrollment_fee_amount
+        return attrs
 
 
 class ManualPaymentSerializer(serializers.ModelSerializer):

@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('../api/client', () => ({
   assignPlanToUser: vi.fn(),
   getPlans: vi.fn(),
+  quotePlanAssignment: vi.fn(),
   usersApi: { list: vi.fn() },
 }))
 
@@ -14,7 +15,7 @@ vi.mock('../auth/AuthContext', () => ({
   useAuth: () => ({ user: mockUser }),
 }))
 
-import { assignPlanToUser, getPlans, usersApi } from '../api/client'
+import { assignPlanToUser, getPlans, quotePlanAssignment, usersApi } from '../api/client'
 import AssignPlanPage from './AssignPlanPage'
 
 const student = { id: 7, first_name: 'Ana', last_name: 'López', username: 'ana' }
@@ -43,6 +44,13 @@ beforeEach(() => {
   mockUser = { role: 'gym_admin' }
   usersApi.list.mockResolvedValue([student])
   getPlans.mockResolvedValue([activePlan])
+  quotePlanAssignment.mockResolvedValue({
+    plan_amount: '20000.00',
+    enrollment_fee_amount: '0.00',
+    line_items_total: '0.00',
+    total: '20000.00',
+    enrollment_fee_required: false,
+  })
   assignPlanToUser.mockResolvedValue({})
 })
 
@@ -187,9 +195,11 @@ describe('AssignPlanPage — vía de pago', () => {
     await userEvent.type(screen.getByLabelText('Concepto 1'), 'Pesas')
     await userEvent.type(screen.getByLabelText('Monto concepto 1'), '3000')
 
-    // ...y cambia a la vía gratis: la sección desaparece.
+    // ...y cambia a la vía gratis: los controles editables de conceptos desaparecen. El
+    // desglose calculado puede seguir mostrando la fila "Conceptos adicionales" en cero.
     await userEvent.click(screen.getByRole('button', { name: 'Gratis (beca / cortesía)' }))
-    expect(screen.queryByText('Conceptos adicionales')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Agregar concepto' })).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Concepto 1')).not.toBeInTheDocument()
 
     await userEvent.click(screen.getByRole('button', { name: 'Asignar plan' }))
 

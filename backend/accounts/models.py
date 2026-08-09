@@ -40,6 +40,10 @@ class CustomUser(AbstractUser):
     rut = models.CharField(max_length=12, null=True, blank=True)
     profile_image = models.ImageField(upload_to='users/profile_images/', blank=True, null=True)
     is_active_member = models.BooleanField(default=True)
+    pays_enrollment_fee = models.BooleanField(
+        default=True,
+        help_text='Si esta desmarcado, este alumno no debe pagar matricula anual.',
+    )
     email_verified = models.BooleanField(default=False)
     has_used_trial = models.BooleanField(default=False)
 

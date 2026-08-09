@@ -184,7 +184,7 @@ def _manual_row(payment):
     """
     student_plan = payment.student_plan
     student = student_plan.user
-    return {
+    row = {
         'kind': KIND_MANUAL,
         'id': payment.id,
         'occurred_at': payment.recorded_at.isoformat(),
@@ -203,6 +203,11 @@ def _manual_row(payment):
         'recorded_by_id': payment.recorded_by_id,
         'recorded_by_name': _recorded_by_name(payment.recorded_by),
     }
+    if _to_int(payment.plan_amount) > 0:
+        row['plan_amount'] = _to_int(payment.plan_amount)
+    if _to_int(payment.enrollment_fee_amount) > 0:
+        row['enrollment_fee_amount'] = _to_int(payment.enrollment_fee_amount)
+    return row
 
 
 def _mp_row(transaction, *, occurred_at, amount, scope, refund=False):
@@ -484,7 +489,7 @@ def _manual_detail(organization_id, payment_id):
     # SIN ninguna clave de MercadoPago, ni siquiera en null: un `status` o un
     # `provider_payment_id` vacíos en un cobro de recepción no son "sin dato", son una pregunta
     # que no existe. El front decide qué mostrar por PRESENCIA de clave.
-    return {
+    row = {
         'kind': KIND_MANUAL,
         'id': payment.id,
         'amount': _to_int(payment.amount),
@@ -507,6 +512,11 @@ def _manual_detail(organization_id, payment_id):
         'recorded_by_id': payment.recorded_by_id,
         'recorded_by_name': _recorded_by_name(payment.recorded_by),
     }
+    if _to_int(payment.plan_amount) > 0:
+        row['plan_amount'] = _to_int(payment.plan_amount)
+    if _to_int(payment.enrollment_fee_amount) > 0:
+        row['enrollment_fee_amount'] = _to_int(payment.enrollment_fee_amount)
+    return row
 
 
 def _mercadopago_detail(organization_id, transaction_id):

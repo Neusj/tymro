@@ -7,14 +7,66 @@ usuario puede mudarse de organización después). El eje de pago de la membresí
 esa columna, así que una fila con la organización equivocada le declara pagada una deuda a
 otro tenant.
 """
-from core.models import ManualPayment
+from datetime import timedelta
+
+from django.core.exceptions import ValidationError
+from django.db import transaction
+from django.utils import timezone
+
+from core.models import ManualPayment, StudentPlan
+from core.services.plans import (
+    enrollment_fee_is_valid,
+    money,
+)
 
 
 class ManualPaymentOrganizationMismatch(Exception):
     """La membresía que se intenta pagar no es de la organización que registra el cobro."""
 
 
-def record_manual_payment(*, student_plan, amount, reference, recorded_by, organization, method):
+def _stamp_enrollment_fee_payment(*, student_plan, amount, organization):
+    today = timezone.localdate()
+    if not getattr(student_plan.user, 'pays_enrollment_fee', True):
+        raise ValidationError({
+            'enrollment_fee_amount': (
+                'Este alumno no tiene matrícula obligatoria; no corresponde cobrarla.'
+            ),
+        })
+    if enrollment_fee_is_valid(student_plan, today):
+        raise ValidationError({
+            'enrollment_fee_amount': (
+                'La matrícula del alumno sigue vigente; no corresponde cobrarla nuevamente.'
+            ),
+        })
+
+    expected = money(student_plan.enrollment_fee)
+    if expected <= 0:
+        expected = money(getattr(organization, 'annual_enrollment_fee', 0))
+    if expected <= 0:
+        raise ValidationError({
+            'enrollment_fee_amount': 'La organización no tiene una matrícula anual configurada.',
+        })
+    amount = money(amount)
+    if amount != expected:
+        raise ValidationError({
+            'enrollment_fee_amount': f'La matrícula vigente a cobrar es {expected}.',
+        })
+
+    now = timezone.now()
+    student_plan.enrollment_fee = expected
+    student_plan.enrollment_fee_paid_at = now
+    student_plan.enrollment_fee_due_at = timezone.localtime(now).date() + timedelta(days=365)
+    student_plan.save(update_fields=[
+        'enrollment_fee',
+        'enrollment_fee_paid_at',
+        'enrollment_fee_due_at',
+        'updated_at',
+    ])
+    return student_plan
+
+
+def record_manual_payment(*, student_plan, amount, reference, recorded_by, organization, method,
+                          plan_amount=None, enrollment_fee_amount=None):
     """Registra un cobro fuera de línea sobre `student_plan`. Devuelve la fila creada.
 
     Vuelve a exigir la coherencia de organización aunque el llamador ya la haya validado:
@@ -42,30 +94,39 @@ def record_manual_payment(*, student_plan, amount, reference, recorded_by, organ
     justo lo que también protege al próximo caller (la carga histórica de CSV) sin que
     tenga que acordarse de repetir el chequeo.
     """
-    if student_plan.organization_id != organization.id:
-        raise ManualPaymentOrganizationMismatch(
-            'La membresía no pertenece a la organización que registra el pago.'
-        )
+    amount = money(amount)
+    fee_amount = money(enrollment_fee_amount)
+    plan_amount = money(amount if plan_amount is None and fee_amount <= 0 else plan_amount)
 
-    payment = ManualPayment(
-        organization=organization,
-        student_plan=student_plan,
-        # Sede de la membresía cobrada, derivada de la FILA y nunca del payload (mismo
-        # criterio que `organization`). NULL si la membresía es global. Se estampa acá, en la
-        # única puerta de escritura, para que el segundo caller no se olvide.
-        # `branch_id` y no `branch`: copiar el id no toca la base, mientras que leer
-        # `student_plan.branch` dispara un SELECT extra para traer una fila que no se usa.
-        branch_id=student_plan.branch_id,
-        amount=amount,
-        method=method,
-        reference=reference or '',
-        recorded_by=recorded_by,
-    )
-    # `full_clean()` y no solo `save()`: corre `clean()` —la coherencia de organización Y el
-    # corte de `method` vacío en fila nueva, los dos a nivel de modelo— y el validador de
-    # `amount`. Mismo criterio que usa el importador sobre `StudentPlan`. Es un solo INSERT,
-    # así que no hace falta `transaction.atomic()`: no hay secuencia leer-y-después-escribir
-    # que proteger.
-    payment.full_clean()
-    payment.save()
-    return payment
+    with transaction.atomic():
+        student_plan = StudentPlan.objects.select_for_update().get(pk=student_plan.pk)
+        if student_plan.organization_id != organization.id:
+            raise ManualPaymentOrganizationMismatch(
+                'La membresía no pertenece a la organización que registra el pago.'
+            )
+        if fee_amount > 0:
+            _stamp_enrollment_fee_payment(
+                student_plan=student_plan,
+                amount=fee_amount,
+                organization=organization,
+            )
+
+        payment = ManualPayment(
+            organization=organization,
+            student_plan=student_plan,
+            # Sede de la membresía cobrada, derivada de la FILA y nunca del payload (mismo
+            # criterio que `organization`). NULL si la membresía es global. Se estampa acá, en la
+            # única puerta de escritura, para que el segundo caller no se olvide.
+            # `branch_id` y no `branch`: copiar el id no toca la base, mientras que leer
+            # `student_plan.branch` dispara un SELECT extra para traer una fila que no se usa.
+            branch_id=student_plan.branch_id,
+            amount=amount,
+            plan_amount=plan_amount,
+            enrollment_fee_amount=fee_amount,
+            method=method,
+            reference=reference or '',
+            recorded_by=recorded_by,
+        )
+        payment.full_clean()
+        payment.save()
+        return payment

@@ -489,6 +489,17 @@ export const teacherPaymentConfigApi = {
   },
 }
 
+export const enrollmentFeeConfigApi = {
+  get: async (orgId) => {
+    const { data } = await api.get(`/organizations/${orgId}/enrollment-fee-config/`)
+    return data
+  },
+  update: async (orgId, payload) => {
+    const { data } = await api.put(`/organizations/${orgId}/enrollment-fee-config/`, payload)
+    return data
+  },
+}
+
 export const recurringEnrollmentsApi = {
   list: async (params = {}) => {
     const { data } = await api.get('/recurring-enrollments/', { params })
@@ -692,6 +703,11 @@ export const assignPlanToUser = async (payload) => {
   return data
 }
 
+export const quotePlanAssignment = async (payload) => {
+  const { data } = await api.post('/plans/assignment-quote/', payload)
+  return data
+}
+
 export const getPlanMemberships = async (planId) => {
   const { data } = await api.get(`/plans/${planId}/memberships/`)
   return data
@@ -793,7 +809,7 @@ export const reportsApi = {
     return data
   },
   // Capa 2 del drilldown de Ingresos: cobros + devoluciones de UN método (mercadopago |
-  // cash | transfer | unknown), en el mismo período/sucursal que la capa 1.
+  // cash | transfer | card | check | unknown), en el mismo período/sucursal que la capa 1.
   revenuePayments: async (params = {}) => {
     const { data } = await api.get('/reports/revenue/payments/', { params })
     return data

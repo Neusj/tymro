@@ -6,8 +6,14 @@ from .models import CustomUser
 
 @admin.register(CustomUser)
 class CustomUserAdmin(UserAdmin):
-    list_display = ('username', 'email', 'role', 'organization', 'branch', 'is_active_member', 'is_staff')
-    list_filter = ('role', 'organization', 'branch', 'is_active', 'is_active_member')
+    list_display = (
+        'username', 'email', 'role', 'organization', 'branch',
+        'is_active_member', 'pays_enrollment_fee', 'is_staff',
+    )
+    list_filter = (
+        'role', 'organization', 'branch', 'is_active',
+        'is_active_member', 'pays_enrollment_fee',
+    )
     fieldsets = UserAdmin.fieldsets + (
         (
             'TYMRO',
@@ -19,6 +25,7 @@ class CustomUserAdmin(UserAdmin):
                     'phone',
                     'profile_image',
                     'is_active_member',
+                    'pays_enrollment_fee',
                 )
             },
         ),
@@ -34,6 +41,7 @@ class CustomUserAdmin(UserAdmin):
                     'phone',
                     'profile_image',
                     'is_active_member',
+                    'pays_enrollment_fee',
                 )
             },
         ),

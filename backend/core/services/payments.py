@@ -435,7 +435,12 @@ def create_checkout(*, organization, user, plan=None, target_student_plan=None):
         sp = target_student_plan
         if sp.user_id != user.id or sp.plan.organization_id != organization.id:
             raise CheckoutError('La matrícula no corresponde al alumno/organización.')
-        if not (sp.enrollment_fee and sp.enrollment_fee > 0) or sp.enrollment_fee_paid_at is not None:
+        from .plans import enrollment_fee_is_valid
+        if not getattr(sp.user, 'pays_enrollment_fee', True):
+            raise CheckoutError('Este alumno no tiene matrícula pendiente para cobrar.')
+        if not (sp.enrollment_fee and sp.enrollment_fee > 0) or enrollment_fee_is_valid(
+            sp, timezone.localdate(),
+        ):
             raise CheckoutError('No hay matrícula pendiente para este plan.')
         branch = sp.branch
         enrollment_fee_amount = _clp(sp.enrollment_fee)
@@ -618,8 +623,10 @@ def apply_provider_payment(*, tx, payment):
                     tx.student_plan = sp
             elif tx.target_student_plan_id:
                 sp = tx.target_student_plan
-                sp.enrollment_fee_paid_at = timezone.now()
-                sp.save(update_fields=['enrollment_fee_paid_at', 'updated_at'])
+                paid_at = timezone.now()
+                sp.enrollment_fee_paid_at = paid_at
+                sp.enrollment_fee_due_at = timezone.localtime(paid_at).date() + timedelta(days=365)
+                sp.save(update_fields=['enrollment_fee_paid_at', 'enrollment_fee_due_at', 'updated_at'])
                 tx.student_plan = sp
             if plan_org_mismatch is None:
                 tx.processed_at = timezone.now()

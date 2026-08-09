@@ -50,6 +50,8 @@ METHOD_MERCADOPAGO = 'mercadopago'          # cobro en línea (una sola etiqueta
                                             # proveedor concreto sea configurable)
 METHOD_CASH = 'cash'                        # espeja ManualPayment.METHOD_CASH
 METHOD_TRANSFER = 'transfer'                # espeja ManualPayment.METHOD_TRANSFER
+METHOD_CARD = 'card'                        # espeja ManualPayment.METHOD_CARD
+METHOD_CHECK = 'check'                      # espeja ManualPayment.METHOD_CHECK
 
 # ⚠️ EL CUARTO MEDIO NO ES OPCIONAL, ES PLATA REAL QUE YA ESTÁ EN PRODUCCIÓN.
 # `ManualPayment.method` nació en P3.2 con `blank=True, default=''` y su migración NO hizo
@@ -66,6 +68,8 @@ METHOD_LABELS = {
     METHOD_MERCADOPAGO: 'MercadoPago',
     METHOD_CASH: 'Efectivo',
     METHOD_TRANSFER: 'Transferencia',
+    METHOD_CARD: 'Tarjeta',
+    METHOD_CHECK: 'Cheque',
     METHOD_UNKNOWN: 'Sin método registrado',
 }
 
@@ -75,7 +79,14 @@ METHOD_LABELS = {
 #: de medios es exactamente la forma en que un medio nuevo entra en un reporte y no en el otro.
 #: Hoy la partición manual/en-línea se pregunta comparando contra `METHOD_MERCADOPAGO`, que es
 #: el único que NO sale de `ManualPayment`.
-REVENUE_METHODS = (METHOD_MERCADOPAGO, METHOD_CASH, METHOD_TRANSFER, METHOD_UNKNOWN)
+REVENUE_METHODS = (
+    METHOD_MERCADOPAGO,
+    METHOD_CASH,
+    METHOD_TRANSFER,
+    METHOD_CARD,
+    METHOD_CHECK,
+    METHOD_UNKNOWN,
+)
 
 
 def manual_method_filter(method):

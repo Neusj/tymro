@@ -220,16 +220,18 @@ def test_every_method_is_published_even_when_they_are_all_in_zero(org):
     """Sin filtro de método van TODAS las filas siempre. Omitir la fila de un método sin
     movimiento se leería como "este gimnasio no cobra así", que es otra afirmación.
 
-    La cuarta fila (`unknown`) no es un caso borde decorativo: son los cobros manuales
+    La ultima fila (`unknown`) no es un caso borde decorativo: son los cobros manuales
     anteriores a P3.2, que tienen `method=''` en producción y son plata real. Ver
     `test_reports_unknown_method.py`."""
     data = build_revenue_report(_scope(org))
 
     assert [row['method'] for row in data['by_method']] == [
         METHOD_MERCADOPAGO, ManualPayment.METHOD_CASH, ManualPayment.METHOD_TRANSFER,
+        ManualPayment.METHOD_CARD, ManualPayment.METHOD_CHECK,
         METHOD_UNKNOWN]
     assert [row['label'] for row in data['by_method']] == [
-        'MercadoPago', 'Efectivo', 'Transferencia', 'Sin método registrado']
+        'MercadoPago', 'Efectivo', 'Transferencia', 'Tarjeta', 'Cheque',
+        'Sin método registrado']
     assert all(row['gross'] == 0 and row['refunds'] == 0 and row['net'] == 0
                for row in data['by_method'])
     assert data['totals'] == {'gross': 0, 'refunds': 0, 'net': 0, 'payments_count': 0,
@@ -458,9 +460,9 @@ def test_the_export_spec_keeps_gross_refunds_and_net_in_separate_columns(org, st
 
     assert spec['header'] == ['Período', 'Método', 'Bruto', 'Devoluciones', 'Neto',
                              'Cobros', 'Devoluciones (n)']
-    # Un bloque por método (período completo) y un bloque por bucket de la serie: 4 + 3.
-    assert len(spec['rows']) == 7
-    by_method, series_rows = spec['rows'][:4], spec['rows'][4:]
+    # Un bloque por método (período completo) y un bloque por bucket de la serie: 6 + 3.
+    assert len(spec['rows']) == 9
+    by_method, series_rows = spec['rows'][:6], spec['rows'][6:]
     assert all(row[0] == '2026-07-01 a 2026-07-03' for row in by_method)
     assert ['MercadoPago', 20000, 20000, 0, 1, 1] == [by_method[0][1], *by_method[0][2:]]
     assert ['Efectivo', 5000, 0, 5000, 1, 0] == [by_method[1][1], *by_method[1][2:]]
@@ -507,7 +509,7 @@ def test_via_http_the_gym_admin_gets_the_report_of_his_own_organization(
                                    'payments_count': 2, 'refunds_count': 0}
     assert resp.data['period']['date_from'] == '2026-07-01'
     assert len(resp.data['series']) == 31
-    assert len(resp.data['by_method']) == 4
+    assert len(resp.data['by_method']) == 6
 
 
 @pytest.mark.parametrize('role', ['manager', 'monitor', 'teacher', 'student'])

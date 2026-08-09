@@ -16,6 +16,8 @@ const METHOD_OPTIONS = [
   { value: 'mercadopago', label: 'MercadoPago' },
   { value: 'cash', label: 'Efectivo' },
   { value: 'transfer', label: 'Transferencia' },
+  { value: 'card', label: 'Tarjeta' },
+  { value: 'check', label: 'Cheque' },
   { value: 'unknown', label: 'Sin método registrado' },
 ]
 

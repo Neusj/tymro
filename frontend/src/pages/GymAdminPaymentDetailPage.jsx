@@ -11,11 +11,13 @@ function formatDateTime(value) {
   return date.toLocaleString('es-CL', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
-// Campos de un pago MANUAL (efectivo/transferencia/registrado a mano). `show` por default
+// Campos de un pago MANUAL (efectivo/transferencia/tarjeta/cheque/registrado a mano). `show` por default
 // es "el valor no es null/undefined/''" — regla dura del pedido: nunca una etiqueta con
 // "—" ni "N/A" colgando, si el backend no manda el dato la fila entera no se dibuja.
 const MANUAL_FIELDS = [
   { key: 'amount', label: 'Monto', format: (value) => clp(value) },
+  { key: 'plan_amount', label: 'Monto del plan', format: (value) => clp(value), show: (value) => Number(value) > 0 },
+  { key: 'enrollment_fee_amount', label: 'Matricula', format: (value) => clp(value), show: (value) => Number(value) > 0 },
   { key: 'recorded_at', label: 'Fecha de registro', format: formatDateTime },
   { key: 'method_label', label: 'Método' },
   { key: 'reference', label: 'Referencia' },

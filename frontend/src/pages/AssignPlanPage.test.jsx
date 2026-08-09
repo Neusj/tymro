@@ -5,19 +5,27 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 vi.mock('../api/client', () => ({
   assignPlanToUser: vi.fn(),
   getPlans: vi.fn(),
+  quotePlanAssignment: vi.fn(),
   usersApi: { list: vi.fn() },
 }))
 vi.mock('../auth/AuthContext', () => ({
   useAuth: () => ({ user: { role: 'gym_admin' } }),
 }))
 
-import { getPlans, usersApi } from '../api/client'
+import { getPlans, quotePlanAssignment, usersApi } from '../api/client'
 import AssignPlanPage from './AssignPlanPage'
 
 beforeEach(() => {
   vi.clearAllMocks()
   usersApi.list.mockResolvedValue([])
   getPlans.mockResolvedValue([])
+  quotePlanAssignment.mockResolvedValue({
+    plan_amount: '0.00',
+    enrollment_fee_amount: '0.00',
+    line_items_total: '0.00',
+    total: '0.00',
+    enrollment_fee_required: false,
+  })
 })
 
 afterEach(() => {

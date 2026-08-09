@@ -16,6 +16,8 @@ const METHOD_LABELS = {
   mercadopago: 'MercadoPago',
   cash: 'Efectivo',
   transfer: 'Transferencia',
+  card: 'Tarjeta',
+  check: 'Cheque',
   unknown: 'Sin método registrado',
 }
 
@@ -23,7 +25,7 @@ const METHOD_LABELS = {
 // efectivo o transferencia no tiene flujo de reembolso en el sistema — por eso el backend
 // siempre manda `refund_rows: []` para estos, y esta pantalla lo explicita en vez de
 // esconder la sección (un [] vacío dice "no hubo"; una sección ausente diría "no sé").
-const MANUAL_METHODS = new Set(['cash', 'transfer', 'unknown'])
+const MANUAL_METHODS = new Set(['cash', 'transfer', 'card', 'check', 'unknown'])
 
 function formatDateTime(value) {
   if (!value) return '—'

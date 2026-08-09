@@ -45,10 +45,18 @@ def world(make_organization, make_user):
 
 
 def _manual_payload(world, line_items):
+    total = Decimal('20000.00')
+    for item in line_items:
+        try:
+            amount = Decimal(str(item.get('amount', '0')))
+        except Exception:
+            amount = Decimal('0')
+        if amount > 0:
+            total += amount
     return {
         'user': world['student'].id, 'plan': world['plan'].id, 'start_date': str(TODAY),
         'payment': {
-            'method': 'manual', 'amount': '27000.00', 'manual_method': 'cash',
+            'method': 'manual', 'amount': str(total), 'manual_method': 'cash',
             'reference': 'efectivo', 'line_items': line_items,
         },
     }

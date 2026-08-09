@@ -145,6 +145,13 @@ class Organization(TimestampedModel):
             '0 = sin configurar (bloquea la creación de planes gratuitos).'
         ),
     )
+    annual_enrollment_fee = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=0,
+        validators=[MinValueValidator(Decimal('0'))],
+        help_text='Matrícula anual del gimnasio. 0 = sin matrícula.',
+    )
 
     class Meta:
         ordering = ['name']
@@ -813,10 +820,12 @@ class StudentPlan(TimestampedModel):
             is_new
             and self.enrollment_fee
             and self.enrollment_fee > 0
+            and self.enrollment_fee_paid_at is not None
             and self.enrollment_fee_due_at is None
-            and self.created_at is not None
         ):
-            self.enrollment_fee_due_at = (self.created_at + timedelta(days=365)).date()
+            self.enrollment_fee_due_at = (
+                timezone.localtime(self.enrollment_fee_paid_at).date() + timedelta(days=365)
+            )
             super().save(update_fields=['enrollment_fee_due_at', 'updated_at'])
 
 
@@ -1230,16 +1239,20 @@ class ManualPayment(TimestampedModel):
     # validación de choices que este campo ya trae.
     METHOD_CASH = 'cash'
     METHOD_TRANSFER = 'transfer'
+    METHOD_CARD = 'card'
+    METHOD_CHECK = 'check'
     METHOD_CHOICES = (
         (METHOD_CASH, 'Efectivo'),
         (METHOD_TRANSFER, 'Transferencia'),
+        (METHOD_CARD, 'Tarjeta'),
+        (METHOD_CHECK, 'Cheque'),
     )
     method = models.CharField(
         max_length=16,
         choices=METHOD_CHOICES,
         blank=True,
         default='',
-        help_text='Efectivo o transferencia. Vacío solo en filas históricas anteriores a P3.2.',
+        help_text='Efectivo, transferencia, tarjeta o cheque. Vacio solo en filas historicas anteriores a P3.2.',
     )
     # Texto libre OPCIONAL: nº de transferencia, folio de boleta, "efectivo caja 2". Se deja
     # vacío a propósito: el efectivo NO tiene comprobante, y exigir el campo obligaría al
@@ -1251,6 +1264,20 @@ class ManualPayment(TimestampedModel):
         blank=True,
         default='',
         help_text='Nº de transferencia, folio o nota. Vacío si fue efectivo sin comprobante.',
+    )
+    plan_amount = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=0,
+        validators=[MinValueValidator(Decimal('0'))],
+        help_text='Parte del cobro manual imputada al plan.',
+    )
+    enrollment_fee_amount = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=0,
+        validators=[MinValueValidator(Decimal('0'))],
+        help_text='Parte del cobro manual imputada a la matrícula anual.',
     )
     # Quién registró el cobro. SET_NULL —igual que `TeacherPayout.marked_by`— y no CASCADE:
     # con CASCADE, borrar al administrador que cobró BORRARÍA el cobro, y la membresía
@@ -1334,6 +1361,12 @@ class ManualPayment(TimestampedModel):
                     'registrar un cobro nuevo. El valor vacío es válido solo en las filas '
                     'registradas antes de P3.2 y no puede usarse para una fila nueva.'
                 ),
+            })
+        plan_amount = self.plan_amount or Decimal('0')
+        enrollment_fee_amount = self.enrollment_fee_amount or Decimal('0')
+        if plan_amount + enrollment_fee_amount > self.amount:
+            raise ValidationError({
+                'amount': 'El desglose de plan y matrícula no puede superar el monto cobrado.',
             })
 
 

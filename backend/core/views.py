@@ -74,6 +74,7 @@ from .serializers import (
     HolidaySerializer,
     ManualPaymentCreateSerializer,
     ManualPaymentSerializer,
+    OrganizationEnrollmentFeeConfigSerializer,
     OrganizationExpiryNotificationConfigSerializer,
     OrganizationSerializer,
     OrganizationTeacherPaymentConfigSerializer,
@@ -87,6 +88,7 @@ from .serializers import (
     RecurringEnrollmentSerializer,
     SelfProfileSerializer,
     StudentPlanAssignPaymentSerializer,
+    StudentPlanAssignmentQuoteSerializer,
     StudentPlanAssignSerializer,
     StudentPlanSerializer,
     TeacherPaymentRuleAssignmentsUpdateSerializer,
@@ -118,6 +120,7 @@ from .services.manual_payments import (
     record_manual_payment,
 )
 from .services.plans import REASON_PLAN_UNAVAILABLE, AlertLevel, describe_student_plan
+from .services.plans import current_valid_enrollment_fee_membership, effective_enrollment_fee_due_at, money
 from .services.public_urls import organization_public_base_url, platform_public_base_url
 from .services.reservations import (
     ReservationRuleError,
@@ -468,7 +471,7 @@ def _get_active_student_plan_map(student_ids, organization_id, on_date=None):
             organization_id=organization_id,
         )
         .valid_on(target_date)
-        .select_related('plan')
+        .select_related('plan', 'user')
         # El eje de pago del estado sale de estas dos FKs inversas. Sin prefetch,
         # `_plan_status_payload` dispara una consulta por alumno del roster.
         .prefetch_related('origin_transactions', 'manual_payments')
@@ -497,7 +500,7 @@ def _get_latest_student_plan_map(student_ids, organization_id):
             user_id__in=student_ids,
             organization_id=organization_id,
         )
-        .select_related('plan')
+        .select_related('plan', 'user')
         .prefetch_related('origin_transactions', 'manual_payments')   # mismo N+1 que en el mapa de vigentes
         .order_by('user_id', '-end_date', '-start_date', '-id')
     )
@@ -1821,6 +1824,29 @@ class OrganizationViewSet(ModelViewSet):
             return Response(OrganizationTeacherPaymentConfigSerializer(organization).data)
 
         serializer = OrganizationTeacherPaymentConfigSerializer(
+            organization, data=request.data, partial=True,
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['get', 'put'], url_path='enrollment-fee-config')
+    def enrollment_fee_config(self, request, pk=None):
+        """Matrícula anual de la organización.
+
+        Vive en `Organization` igual que `teacher_payment_config`: es una política del
+        gimnasio, no del plan. El valor se copia como snapshot a `StudentPlan` al vender.
+        """
+        organization = Organization.objects.filter(pk=pk).first()
+        if organization is None:
+            raise NotFound('Organización no encontrada.')
+        if not _can_manage_org_resource(request.user, organization.id):
+            raise PermissionDenied('No tienes permisos para gestionar esta configuración.')
+
+        if request.method == 'GET':
+            return Response(OrganizationEnrollmentFeeConfigSerializer(organization).data)
+
+        serializer = OrganizationEnrollmentFeeConfigSerializer(
             organization, data=request.data, partial=True,
         )
         serializer.is_valid(raise_exception=True)
@@ -4308,6 +4334,26 @@ class MembershipPlanViewSet(ModelViewSet):
         instance.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
+    @action(detail=False, methods=['post'], url_path='assignment-quote')
+    def assignment_quote(self, request):
+        user = request.user
+        if not (_is_superadmin(user) or _is_gym_admin(user)):
+            raise PermissionDenied('No tienes permisos para cotizar asignaciones.')
+
+        serializer = StudentPlanAssignmentQuoteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        student = serializer.validated_data['user']
+        plan = serializer.validated_data['plan']
+
+        if _is_gym_admin(user) and student.organization_id != user.organization_id:
+            raise PermissionDenied('No puedes cotizar alumnos de otra organización.')
+        if _is_gym_admin(user) and plan.organization_id != user.organization_id:
+            raise PermissionDenied('No puedes cotizar planes de otra organización.')
+        if plan.organization_id != student.organization_id:
+            raise PermissionDenied('No puedes cotizar un plan de otra organización.')
+
+        return Response(serializer.validated_data['quote'].payload())
+
     @action(detail=False, methods=['post'], url_path='assign')
     def assign(self, request):
         user = request.user
@@ -4320,6 +4366,7 @@ class MembershipPlanViewSet(ModelViewSet):
         student = validated['user']
         plan = validated['plan']
         payment = validated['payment']
+        quote = validated['assignment_quote']
 
         # Actor-de-pago: quien declara `manual` tiene que tener organización propia para
         # estamparla en el `ManualPayment`. El superadmin es rol de PLATAFORMA y no la tiene
@@ -4399,6 +4446,13 @@ class MembershipPlanViewSet(ModelViewSet):
                         '`payment.method: "free"` en vez de "manual".'
                     ),
                 })
+            if money(payment['amount']) != quote.total:
+                raise ValidationError({
+                    'payment': (
+                        'El monto cobrado debe coincidir con el total calculado '
+                        f'({quote.total}).'
+                    ),
+                })
 
         from core.services.plans import PlanOrganizationMismatch, activate_student_plan
         try:
@@ -4409,11 +4463,37 @@ class MembershipPlanViewSet(ModelViewSet):
             # mapearse a una respuesta HTTP: mapear adentro dejaría el `with` saliendo por una
             # ruta que no es una excepción sin resolver, y el rollback no ocurriría.
             with transaction.atomic():
+                student = User.objects.select_for_update().get(pk=student.pk)
+                today = timezone.localdate()
+                student_pays_enrollment_fee = getattr(student, 'pays_enrollment_fee', True)
+                valid_fee_membership = (
+                    current_valid_enrollment_fee_membership(
+                        student=student,
+                        organization=plan.organization,
+                        on_date=today,
+                    )
+                    if student_pays_enrollment_fee else None
+                )
+                if valid_fee_membership is not None:
+                    enrollment_fee = valid_fee_membership.enrollment_fee
+                    enrollment_fee_paid_at = valid_fee_membership.enrollment_fee_paid_at
+                    enrollment_fee_due_at = effective_enrollment_fee_due_at(valid_fee_membership)
+                elif quote.enrollment_fee_required:
+                    enrollment_fee = quote.enrollment_fee_amount
+                    enrollment_fee_paid_at = None
+                    enrollment_fee_due_at = None
+                else:
+                    enrollment_fee = 0
+                    enrollment_fee_paid_at = None
+                    enrollment_fee_due_at = None
                 assigned = activate_student_plan(
                     student=student,
                     plan=plan,
                     start_date=validated['start_date'],
                     discount_percentage=validated['discount_percentage'],
+                    enrollment_fee=enrollment_fee,
+                    enrollment_fee_paid_at=enrollment_fee_paid_at,
+                    enrollment_fee_due_at=enrollment_fee_due_at,
                 )
                 # Desglose de conceptos extra (#12). Solo llega con `manual` —el serializer
                 # rechaza `free` + conceptos—, así que a esta altura el actor ya pasó la
@@ -4437,6 +4517,8 @@ class MembershipPlanViewSet(ModelViewSet):
                     record_manual_payment(
                         student_plan=assigned,
                         amount=payment['amount'],
+                        plan_amount=quote.plan_amount,
+                        enrollment_fee_amount=quote.enrollment_fee_amount,
                         # `payment['manual_method']`, NUNCA `payment['method']`: ESE ya se
                         # comparó dos líneas arriba y significa la vía de venta
                         # (`free`/`manual`), no el instrumento del cobro. El serializer
@@ -4720,6 +4802,8 @@ class ManualPaymentCreateView(APIView):
             payment = record_manual_payment(
                 student_plan=membership,
                 amount=validated['amount'],
+                plan_amount=validated['plan_amount'],
+                enrollment_fee_amount=validated['enrollment_fee_amount'],
                 method=validated['method'],
                 reference=validated['reference'],
                 # NUNCA del payload: el actor y su organización, y nada más.

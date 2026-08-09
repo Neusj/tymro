@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { assignPlanToUser, getPlans, usersApi } from '../api/client'
+import { assignPlanToUser, getPlans, quotePlanAssignment, usersApi } from '../api/client'
 import DashboardHeader from '../components/DashboardHeader'
 import { useAuth } from '../auth/AuthContext'
-import { todayLocalISO } from '../utils/format'
+import { clp, todayLocalISO } from '../utils/format'
 import { studentSubjectRoleParam } from '../utils/roles'
 
 function firstApiError(detail, fallback) {
@@ -44,6 +44,13 @@ function toList(data) {
   return []
 }
 
+const MANUAL_METHOD_OPTIONS = [
+  { value: 'cash', label: 'Efectivo' },
+  { value: 'transfer', label: 'Transferencia' },
+  { value: 'card', label: 'Tarjeta' },
+  { value: 'check', label: 'Cheque' },
+]
+
 export default function AssignPlanPage() {
   const { user } = useAuth()
   // Solo el admin del gimnasio puede declarar un pago manual: el backend lo rechaza (400)
@@ -56,6 +63,8 @@ export default function AssignPlanPage() {
   const [working, setWorking] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [quote, setQuote] = useState(null)
+  const [quoteLoading, setQuoteLoading] = useState(false)
   // Vía por la que se declara el plan: "manual" es el caso comun de venta, por eso es el
   // default para gym_admin. Para superadmin la unica vía posible es "free".
   const [paymentMethod, setPaymentMethod] = useState(isSuperadmin ? 'free' : 'manual')
@@ -117,6 +126,25 @@ export default function AssignPlanPage() {
   // sin importar el % que haya quedado cargado en el input (que ademas queda oculto).
   const finalEstimate = paymentVia === 'free' ? 0 : Math.max(basePrice * (1 - discount / 100), 0)
 
+  const normalizedLineItems = () => {
+    const valid = []
+    let hasInvalid = false
+    lineItems.forEach((item) => {
+      const conceptTrimmed = item.concept.trim()
+      const itemAmountNumber = Number(item.amount)
+      const isItemAmountValid = item.amount !== '' && Number.isFinite(itemAmountNumber) && itemAmountNumber > 0
+      if (!conceptTrimmed && !isItemAmountValid) {
+        return
+      }
+      if (!conceptTrimmed || !isItemAmountValid) {
+        hasInvalid = true
+        return
+      }
+      valid.push({ concept: conceptTrimmed, amount: String(item.amount).trim() })
+    })
+    return { valid, hasInvalid }
+  }
+
   const loadData = async () => {
     setLoading(true)
     setError('')
@@ -146,6 +174,45 @@ export default function AssignPlanPage() {
     loadData()
   }, [searchParams.toString()])
 
+  useEffect(() => {
+    let active = true
+    const loadQuote = async () => {
+      if (!form.user || !form.plan) {
+        setQuote(null)
+        return
+      }
+      const { valid, hasInvalid } = normalizedLineItems()
+      if (hasInvalid) {
+        setQuote(null)
+        return
+      }
+      setQuoteLoading(true)
+      try {
+        const payload = {
+          user: Number(form.user),
+          plan: Number(form.plan),
+          start_date: form.start_date,
+          discount_percentage: paymentVia === 'free' ? 100 : discount,
+        }
+        if (paymentVia === 'manual' && valid.length > 0) {
+          payload.line_items = valid
+        }
+        const data = await quotePlanAssignment(payload)
+        if (!active) return
+        setQuote(data)
+      } catch {
+        if (active) setQuote(null)
+      } finally {
+        if (active) setQuoteLoading(false)
+      }
+    }
+    loadQuote()
+    return () => {
+      active = false
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.user, form.plan, form.start_date, form.discount_percentage, paymentVia, JSON.stringify(lineItems)])
+
   const submit = async (event) => {
     event.preventDefault()
     if (!form.user || !form.plan) {
@@ -164,22 +231,15 @@ export default function AssignPlanPage() {
       // Filas completamente vacías (ej. una fila agregada y no usada) se ignoran en
       // silencio; una fila con SOLO uno de los dos campos cargado es un dato a medio
       // llenar y bloquea el envío igual que el monto principal arriba.
-      let hasInvalidLineItem = false
-      lineItems.forEach((item) => {
-        const conceptTrimmed = item.concept.trim()
-        const itemAmountNumber = Number(item.amount)
-        const isItemAmountValid = item.amount !== '' && Number.isFinite(itemAmountNumber) && itemAmountNumber > 0
-        if (!conceptTrimmed && !isItemAmountValid) {
-          return
-        }
-        if (!conceptTrimmed || !isItemAmountValid) {
-          hasInvalidLineItem = true
-          return
-        }
-        validLineItems.push({ concept: conceptTrimmed, amount: String(item.amount).trim() })
-      })
+      const normalized = normalizedLineItems()
+      validLineItems = normalized.valid
+      const hasInvalidLineItem = normalized.hasInvalid
       if (hasInvalidLineItem) {
         setError('Cada concepto adicional necesita un texto y un monto mayor a $0.')
+        return
+      }
+      if (quote && Number(amount) !== Number(quote.total)) {
+        setError(`El monto cobrado debe coincidir con el total calculado (${clp(quote.total)}).`)
         return
       }
     }
@@ -361,8 +421,9 @@ export default function AssignPlanPage() {
                   onChange={(event) => setManualMethod(event.target.value)}
                   className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
                 >
-                  <option value="cash">Efectivo</option>
-                  <option value="transfer">Transferencia</option>
+                  {MANUAL_METHOD_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
                 </select>
               </label>
               <label className="space-y-1 text-sm md:col-span-2">
@@ -380,7 +441,7 @@ export default function AssignPlanPage() {
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="font-semibold text-brand-white">Conceptos adicionales</p>
-                    <p className="text-xs text-brand-muted">Cargos extra de esta venta (ej. pesas, toalla, matrícula manual).</p>
+                    <p className="text-xs text-brand-muted">Cargos extra de esta venta (ej. pesas, toalla).</p>
                   </div>
                   <button
                     type="button"
@@ -433,13 +494,36 @@ export default function AssignPlanPage() {
               </div>
             </>
           ) : null}
-          <div className="rounded-lg border border-brand-line bg-black/20 px-3 py-2 text-sm">
-            <p className="text-brand-muted">Precio final estimado</p>
-            <p className="text-lg font-semibold">${finalEstimate.toFixed(2)}</p>
-            <p className="text-xs text-brand-muted">Clases: {isUnlimited ? 'Ilimitado' : Number.isFinite(totalClasses) ? totalClasses : 0}</p>
+          <div className="rounded-lg border border-brand-line bg-black/20 px-3 py-2 text-sm md:col-span-2">
+            <p className="text-brand-muted">Detalle de cobro</p>
+            {quoteLoading ? (
+              <p className="mt-2 text-sm text-brand-muted">Calculando...</p>
+            ) : quote ? (
+              <div className="mt-2 grid gap-1 text-sm">
+                <div className="flex justify-between gap-3"><span>Plan</span><strong>{clp(quote.plan_amount)}</strong></div>
+                <div className="flex justify-between gap-3"><span>Matricula</span><strong>{clp(quote.enrollment_fee_amount)}</strong></div>
+                <div className="flex justify-between gap-3"><span>Conceptos adicionales</span><strong>{clp(quote.line_items_total)}</strong></div>
+                <div className="mt-1 flex justify-between gap-3 border-t border-brand-line pt-2 text-base">
+                  <span>Total</span><strong>{clp(quote.total)}</strong>
+                </div>
+                {quote.enrollment_fee_waived ? (
+                  <p className="text-xs text-brand-muted">Alumno exento de matricula anual.</p>
+                ) : Number(quote.enrollment_fee_amount || 0) > 0 ? (
+                  <p className="text-xs text-brand-orange">Corresponde cobrar matricula anual.</p>
+                ) : (
+                  <p className="text-xs text-brand-muted">No corresponde cobrar matricula en esta asignacion.</p>
+                )}
+              </div>
+            ) : (
+              <>
+                <p className="text-lg font-semibold">${finalEstimate.toFixed(2)}</p>
+                <p className="text-xs text-brand-muted">Selecciona alumno y plan para calcular el total.</p>
+              </>
+            )}
+            <p className="mt-1 text-xs text-brand-muted">Clases: {isUnlimited ? 'Ilimitado' : Number.isFinite(totalClasses) ? totalClasses : 0}</p>
           </div>
           <div className="md:col-span-2 flex justify-end">
-            <button type="submit" disabled={working || loading} className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white disabled:opacity-60">
+            <button type="submit" disabled={working || loading || quoteLoading} className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white disabled:opacity-60">
               {working ? 'Asignando...' : 'Asignar plan'}
             </button>
           </div>

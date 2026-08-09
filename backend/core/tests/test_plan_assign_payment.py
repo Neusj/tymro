@@ -254,7 +254,7 @@ def test_free_then_manual_assign_coexist_for_the_same_student(api_client, world)
 
     manual_resp = api_client.post(ASSIGN_URL, {
         'user': student.id, 'plan': plan.id, 'start_date': str(TODAY),
-        'payment': {'method': 'manual', 'amount': '15000.00', 'manual_method': 'cash'},
+        'payment': {'method': 'manual', 'amount': '20000.00', 'manual_method': 'cash'},
     }, format='json')
     assert manual_resp.status_code == 201, manual_resp.data
     second = StudentPlan.objects.get(id=manual_resp.data['id'])

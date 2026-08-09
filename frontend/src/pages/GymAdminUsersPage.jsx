@@ -24,6 +24,7 @@ const userInitialForm = {
   phone: '',
   profile_image: null,
   is_active_member: true,
+  pays_enrollment_fee: true,
   is_active: true,
 }
 
@@ -87,6 +88,7 @@ export default function GymAdminUsersPage() {
       phone: user.phone || '',
       profile_image: null,
       is_active_member: Boolean(user.is_active_member),
+      pays_enrollment_fee: user.pays_enrollment_fee !== false,
       is_active: Boolean(user.is_active),
     })
     setFormError('')
@@ -166,6 +168,12 @@ export default function GymAdminUsersPage() {
       { key: 'role', label: 'Rol', mobile: 'meta', render: (row) => <RoleBadge role={row.role} /> },
       { key: 'branch', label: 'Sucursal', mobile: 'secondary', render: (row) => row.branch_detail?.name || 'Sin sucursal' },
       { key: 'status', label: 'Estado', mobile: 'meta', render: (row) => <ValueBadge kind="user_status" value={row.is_active ? 'active' : 'inactive'} /> },
+      {
+        key: 'enrollment_fee',
+        label: 'Matricula',
+        mobile: 'secondary',
+        render: (row) => (row.pays_enrollment_fee === false ? 'Exento' : 'Se cobra'),
+      },
       {
         key: 'actions',
         label: 'Acciones',
@@ -339,6 +347,14 @@ export default function GymAdminUsersPage() {
               onChange={(event) => setForm((prev) => ({ ...prev, is_active_member: event.target.checked }))}
             />
             Miembro activo
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={form.pays_enrollment_fee}
+              onChange={(event) => setForm((prev) => ({ ...prev, pays_enrollment_fee: event.target.checked }))}
+            />
+            Cobra matricula anual
           </label>
           <div className="md:col-span-2 flex justify-end">
             <button type="submit" className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white">

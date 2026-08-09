@@ -16,6 +16,7 @@ sobre este mismo POST, no otro endpoint ni otra semántica.
 """
 from dataclasses import dataclass
 from datetime import date, timedelta
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
 
 from django.db import transaction
@@ -278,7 +279,16 @@ def _payment_status(student_plan):
         ):
             return PlanPaymentStatus.PAID
     for payment in student_plan.manual_payments.all():
-        if payment.organization_id == student_plan.organization_id:
+        if (
+            payment.organization_id == student_plan.organization_id
+            and (
+                (payment.plan_amount or 0) > 0
+                or (
+                    (payment.plan_amount or 0) == 0
+                    and (payment.enrollment_fee_amount or 0) == 0
+                )
+            )
+        ):
             return PlanPaymentStatus.PAID
     return PlanPaymentStatus.UNPAID
 
@@ -291,6 +301,8 @@ def _enrollment_fee_status(student_plan, on_date):
     el resto del estado, para que `describe_student_plan(sp, on_date)` no pueda contradecir
     a lo que pinta el serializer (la contradicción que este eje viene a matar).
     """
+    if not getattr(student_plan.user, 'pays_enrollment_fee', True):
+        return EnrollmentFeeStatus.WAIVED
     fee = student_plan.enrollment_fee or 0
     if fee <= 0:
         return EnrollmentFeeStatus.WAIVED
@@ -390,6 +402,114 @@ def describe_student_plan(student_plan: Optional[StudentPlan], on_date: date) ->
 
 class PlanOrganizationMismatch(Exception):
     """El plan que se intenta activar no es de la organización del alumno."""
+
+
+def money(value):
+    return Decimal(str(value or 0)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
+
+def enrollment_fee_due_from_paid_at(paid_at):
+    if paid_at is None:
+        return None
+    return (timezone.localtime(paid_at).date() + timedelta(days=365))
+
+
+def effective_enrollment_fee_due_at(student_plan):
+    if student_plan.enrollment_fee_due_at:
+        return student_plan.enrollment_fee_due_at
+    return enrollment_fee_due_from_paid_at(student_plan.enrollment_fee_paid_at)
+
+
+def enrollment_fee_is_valid(student_plan, on_date):
+    due_at = effective_enrollment_fee_due_at(student_plan)
+    return bool(student_plan.enrollment_fee_paid_at and due_at and due_at >= on_date)
+
+
+def current_valid_enrollment_fee_membership(*, student, organization, on_date):
+    candidates = (
+        StudentPlan.objects
+        .filter(
+            user=student,
+            organization=organization,
+            enrollment_fee__gt=0,
+            enrollment_fee_paid_at__isnull=False,
+        )
+        .order_by('-enrollment_fee_due_at', '-enrollment_fee_paid_at', '-id')
+    )
+    for candidate in candidates:
+        if enrollment_fee_is_valid(candidate, on_date):
+            return candidate
+    return None
+
+
+@dataclass(frozen=True)
+class AssignmentQuote:
+    plan_amount: Decimal
+    enrollment_fee_amount: Decimal
+    line_items_total: Decimal
+    total: Decimal
+    enrollment_fee_required: bool
+    enrollment_fee_waived: bool = False
+    enrollment_fee_paid_at: object = None
+    enrollment_fee_due_at: Optional[date] = None
+
+    def payload(self):
+        return {
+            'plan_amount': str(self.plan_amount),
+            'enrollment_fee_amount': str(self.enrollment_fee_amount),
+            'line_items_total': str(self.line_items_total),
+            'total': str(self.total),
+            'enrollment_fee_required': self.enrollment_fee_required,
+            'enrollment_fee_waived': self.enrollment_fee_waived,
+            'enrollment_fee_paid_at': (
+                self.enrollment_fee_paid_at.isoformat()
+                if self.enrollment_fee_paid_at else None
+            ),
+            'enrollment_fee_due_at': (
+                self.enrollment_fee_due_at.isoformat()
+                if self.enrollment_fee_due_at else None
+            ),
+        }
+
+
+def quote_student_plan_assignment(*, student, plan, discount_percentage=None,
+                                  line_items=None, on_date=None):
+    if plan.organization_id != student.organization_id:
+        raise PlanOrganizationMismatch(
+            'El plan no pertenece a la organización del alumno.'
+        )
+    on_date = on_date or timezone.localdate()
+    discount = discount_percentage if discount_percentage is not None else (plan.discount_percentage or 0)
+    plan_amount = money(money(plan.price) * (Decimal('1') - (money(discount) / Decimal('100'))))
+    if plan_amount < 0:
+        plan_amount = Decimal('0.00')
+    line_items_total = sum((money(item['amount']) for item in (line_items or [])), Decimal('0.00'))
+
+    student_pays_enrollment_fee = getattr(student, 'pays_enrollment_fee', True)
+    valid_fee_membership = (
+        current_valid_enrollment_fee_membership(
+            student=student, organization=plan.organization, on_date=on_date,
+        )
+        if student_pays_enrollment_fee else None
+    )
+    annual_fee = money(getattr(plan.organization, 'annual_enrollment_fee', 0))
+    enrollment_fee_amount = Decimal('0.00')
+    if student_pays_enrollment_fee and valid_fee_membership is None and annual_fee > 0:
+        enrollment_fee_amount = annual_fee
+
+    return AssignmentQuote(
+        plan_amount=plan_amount,
+        enrollment_fee_amount=enrollment_fee_amount,
+        line_items_total=line_items_total,
+        total=plan_amount + enrollment_fee_amount + line_items_total,
+        enrollment_fee_required=enrollment_fee_amount > 0,
+        enrollment_fee_waived=not student_pays_enrollment_fee,
+        enrollment_fee_paid_at=getattr(valid_fee_membership, 'enrollment_fee_paid_at', None),
+        enrollment_fee_due_at=(
+            effective_enrollment_fee_due_at(valid_fee_membership)
+            if valid_fee_membership is not None else None
+        ),
+    )
 
 
 def _repoint_recurring_series_to_renewed_membership(new_student_plan, *, on_date):
@@ -501,7 +621,9 @@ def _repoint_recurring_series_to_renewed_membership(new_student_plan, *, on_date
     )
 
 
-def activate_student_plan(*, student, plan, start_date, discount_percentage=None):
+def activate_student_plan(*, student, plan, start_date, discount_percentage=None,
+                          enrollment_fee=None, enrollment_fee_paid_at=None,
+                          enrollment_fee_due_at=None):
     # La membresía la vende `plan.organization` y solo la consume un alumno de esa misma
     # organización: `get_active_student_plan` y `my-memberships` filtran por ahí, así que
     # activar un plan ajeno crearía una fila que ningún endpoint muestra ni consume. Mejor
@@ -541,6 +663,9 @@ def activate_student_plan(*, student, plan, start_date, discount_percentage=None
             unlimited_classes=plan.unlimited_classes,
             discount_percentage=discount,
             final_price=final_price,
+            enrollment_fee=money(enrollment_fee) if enrollment_fee is not None else Decimal('0.00'),
+            enrollment_fee_paid_at=enrollment_fee_paid_at,
+            enrollment_fee_due_at=enrollment_fee_due_at,
             is_active=True,
         )
         # Reapunte de las series recurrentes del mismo linaje (follow-up de R1). Va ACÁ,
