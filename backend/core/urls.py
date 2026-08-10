@@ -20,7 +20,14 @@ from .views_reports import (
     RevenueReportView,
     TrialConversionReportView,
 )
-from .views_student_overview import StudentOverviewView
+from .views_student_overview import (
+    StudentAttendanceDetailView,
+    StudentConsumptionDetailView,
+    StudentMembershipsDetailView,
+    StudentOverviewView,
+    StudentRecurringReservationsDetailView,
+    StudentReservationsDetailView,
+)
 from .views import (
     AdvanceClassWindowsView,
     BranchViewSet,
@@ -159,5 +166,16 @@ urlpatterns = [
     # (anti-oráculo).
     path('students/<str:student_id>/overview/', StudentOverviewView.as_view(),
          name='student-overview'),
+    path('students/<str:student_id>/reservations/', StudentReservationsDetailView.as_view(),
+         name='student-reservations-detail'),
+    path('students/<str:student_id>/attendance/', StudentAttendanceDetailView.as_view(),
+         name='student-attendance-detail'),
+    path('students/<str:student_id>/consumption/', StudentConsumptionDetailView.as_view(),
+         name='student-consumption-detail'),
+    path('students/<str:student_id>/memberships/', StudentMembershipsDetailView.as_view(),
+         name='student-memberships-detail'),
+    path('students/<str:student_id>/recurring-reservations/',
+         StudentRecurringReservationsDetailView.as_view(),
+         name='student-recurring-reservations-detail'),
     path('', include(router.urls)),
 ]

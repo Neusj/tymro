@@ -4,28 +4,18 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('../api/client', () => ({
   getStudentOverview: vi.fn(),
+  studentOverviewDetailsApi: {
+    reservations: vi.fn(),
+    attendance: vi.fn(),
+    consumption: vi.fn(),
+    memberships: vi.fn(),
+    recurringReservations: vi.fn(),
+  },
   usersApi: { list: vi.fn() },
 }))
 
-import { getStudentOverview, usersApi } from '../api/client'
+import { getStudentOverview, studentOverviewDetailsApi, usersApi } from '../api/client'
 import GymAdminStudentOverviewPage from './GymAdminStudentOverviewPage'
-
-const EMPTY_SECTION = { items: [], limit: 20, has_more: false }
-
-function overview(overrides = {}) {
-  return {
-    student: {
-      id: 42, username: 'ana', name: 'Ana Perez', email: 'ana@test.local',
-      phone: '', role: 'student', is_active: true, branch_id: null, branch_name: 'Sede Centro',
-    },
-    memberships: [],
-    consumption: EMPTY_SECTION,
-    attendance: EMPTY_SECTION,
-    reservations: EMPTY_SECTION,
-    recurring_enrollments: [],
-    ...overrides,
-  }
-}
 
 function membership(overrides = {}) {
   return {
@@ -39,12 +29,68 @@ function membership(overrides = {}) {
     remaining_classes: 8,
     validity_status: 'active',
     validity_status_label: 'Vigente',
-    days_to_expiry: 20,
     expiry_alert_level: 'safe',
     expiry_alert_message: '20 dias vigentes',
     payment_status: 'paid',
     enrollment_fee_status: { status: 'waived' },
-    is_active: true,
+    ...overrides,
+  }
+}
+
+function summary(overrides = {}) {
+  return {
+    period: { key: '30d', label: 'Ultimos 30 dias', start_date: '2026-07-12', end_date: '2026-08-10' },
+    memberships: { active_count: 1, active_items: [membership()], historical_count: 2 },
+    reservations: {
+      future_active_total: 5,
+      by_discipline: [{ discipline_id: 1, discipline_name: 'Kickboxing', total: 4 }],
+      upcoming: [
+        {
+          id: 10,
+          status: 'active',
+          class: { id: 99, name: 'Kick 19h', start_datetime: '2026-08-10T19:00:00Z', discipline_name: 'Kickboxing' },
+        },
+      ],
+    },
+    consumption: { total: 18, by_discipline: [{ discipline_id: 1, discipline_name: 'Kickboxing', total: 8 }] },
+    attendance: {
+      present: 24,
+      absences: 3,
+      attendance_rate: 88.9,
+      denominator: 27,
+      formula: 'present / (present + absent + no_show)',
+      by_status: {},
+      by_discipline: [{ discipline_id: 1, discipline_name: 'Kickboxing', total: 24 }],
+    },
+    recurring_reservations: {
+      active_total: 2,
+      preview: [
+        { id: 7, class_template: { name: 'Kick semanal', weekday: 0, start_time: '19:00:00', discipline_name: 'Kickboxing' } },
+      ],
+    },
+    ...overrides,
+  }
+}
+
+function overview(overrides = {}) {
+  return {
+    student: {
+      id: 42,
+      username: 'ana',
+      name: 'Ana Perez',
+      email: 'ana@test.local',
+      phone: '999',
+      role: 'student',
+      is_active: true,
+      branch_id: null,
+      branch_name: 'Sede Centro',
+    },
+    summary: summary(),
+    memberships: [membership(), membership({ id: 2, plan_name: 'Plan viejo', validity_status: 'expired' })],
+    consumption: { items: [], limit: 20, has_more: false },
+    attendance: { items: [], limit: 20, has_more: false },
+    reservations: { items: [], limit: 20, has_more: false },
+    recurring_enrollments: [],
     ...overrides,
   }
 }
@@ -52,8 +98,9 @@ function membership(overrides = {}) {
 beforeEach(() => {
   vi.clearAllMocks()
   usersApi.list.mockResolvedValue([])
-  // KpiStrip usa `useMediaQuery`, que llama a `window.matchMedia` (no lo provee jsdom).
-  // Mismo mock que ya usa GymAdminPlanMembershipsPage.test.jsx.
+  Object.values(studentOverviewDetailsApi).forEach((fn) => {
+    fn.mockResolvedValue({ items: [], count: 0, page: 1, page_size: 20, has_next: false, has_previous: false })
+  })
   window.matchMedia = (query) => ({
     matches: query.includes('min-width'),
     addEventListener() {},
@@ -72,40 +119,30 @@ function renderPage(initialEntry = '/gym-admin/students/overview?student_id=42')
 }
 
 describe('GymAdminStudentOverviewPage', () => {
-  it('renderiza la membresía con su estado y estado de pago, tal cual los manda el backend', async () => {
-    getStudentOverview.mockResolvedValue(overview({ memberships: [membership()] }))
-
-    renderPage()
-
-    await waitFor(() => expect(screen.getByText('Ana Perez')).toBeInTheDocument())
-    expect(screen.getByText('Pack 10')).toBeInTheDocument()
-    expect(screen.getByText('Vigente')).toBeInTheDocument()
-    expect(screen.getByText('Pagado')).toBeInTheDocument()
-    // El endpoint se llamó con el id que traía la URL, no uno inventado por el front.
-    expect(getStudentOverview).toHaveBeenCalledWith('42', expect.any(Object))
-  })
-
-  it('respeta el vacío: cada sección sin filas muestra su EmptyState, sin reventar', async () => {
+  it('carga el summary inicial y renderiza un dashboard compacto', async () => {
     getStudentOverview.mockResolvedValue(overview())
 
     renderPage()
 
     await waitFor(() => expect(screen.getByText('Ana Perez')).toBeInTheDocument())
-    expect(screen.getByText('Sin membresías')).toBeInTheDocument()
-    expect(screen.getByText('Sin recurrencias')).toBeInTheDocument()
-    expect(screen.getByText('Sin consumo')).toBeInTheDocument()
-    expect(screen.getByText('Sin asistencia')).toBeInTheDocument()
-    expect(screen.getByText('Sin reservas')).toBeInTheDocument()
+    expect(screen.getByText('Pack 10')).toBeInTheDocument()
+    expect(screen.getByText('Pagado')).toBeInTheDocument()
+    expect(screen.getAllByText('5').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('18').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('88.9%').length).toBeGreaterThan(0)
+    expect(screen.queryByText('Plan viejo')).not.toBeInTheDocument()
+    expect(screen.getByText('2 membresias anteriores')).toBeInTheDocument()
+    expect(getStudentOverview).toHaveBeenCalledWith('42', { period: '30d' })
   })
 
-  it('sin alumno seleccionado no llama al endpoint y muestra el estado vacío inicial', async () => {
+  it('sin alumno seleccionado no llama al endpoint y muestra el estado inicial', async () => {
     renderPage('/gym-admin/students/overview')
 
     await waitFor(() => expect(screen.getByText('Sin alumno seleccionado')).toBeInTheDocument())
     expect(getStudentOverview).not.toHaveBeenCalled()
   })
 
-  it('muestra el error del backend si la carga falla, sin dejar la pantalla en blanco', async () => {
+  it('muestra el error del backend si la carga falla', async () => {
     getStudentOverview.mockRejectedValue({ response: { data: { detail: 'No encontrado.' } } })
 
     renderPage()
@@ -113,29 +150,58 @@ describe('GymAdminStudentOverviewPage', () => {
     await waitFor(() => expect(screen.getByText('No encontrado.')).toBeInTheDocument())
   })
 
-  it('el botón "Ver más" pide el siguiente lote de consumo con un límite mayor', async () => {
-    // `has_more=true` implica que YA vino el tope de filas (`_paged` en el backend nunca
-    // publica `has_more` sin `items` llenos hasta el límite) — un `items: []` con
-    // `has_more: true` es una combinación que el backend real no produce.
-    const consumptionItem = {
-      id: 1, consumed_at: '2026-07-01T10:00:00Z', branch_name: 'Sede', plan_name: 'Pack 10',
-      class: { id: 9, name: 'Clase', start_datetime: '2026-07-01T09:00:00Z', end_datetime: '2026-07-01T10:00:00Z', status: 'completed', discipline_name: null, teacher_name: null },
-    }
-    getStudentOverview.mockResolvedValue(
-      overview({ consumption: { items: [consumptionItem], limit: 1, has_more: true } }),
-    )
+  it('cambiar periodo recarga KPIs con parametros backend', async () => {
+    getStudentOverview.mockResolvedValue(overview())
 
     renderPage()
 
-    const button = await screen.findByRole('button', { name: 'Ver más' })
+    await waitFor(() => expect(screen.getByText('Ana Perez')).toBeInTheDocument())
+    fireEvent.change(screen.getByLabelText('Periodo'), { target: { value: '90d' } })
+
+    await waitFor(() => expect(getStudentOverview).toHaveBeenLastCalledWith('42', { period: '90d' }))
+  })
+
+  it('cambiar alumno limpia el detalle y carga el nuevo id', async () => {
+    usersApi.list.mockResolvedValue([{ id: 55, first_name: 'Beto', last_name: '', username: 'beto', email: 'b@test.local' }])
     getStudentOverview.mockResolvedValue(overview())
-    fireEvent.click(button)
+
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('Ana Perez')).toBeInTheDocument())
+    fireEvent.change(screen.getByLabelText('Alumno'), { target: { value: '55' } })
+
+    await waitFor(() => expect(getStudentOverview).toHaveBeenLastCalledWith('55', { period: '30d' }))
+  })
+
+  it('abre detalle de reservas bajo demanda sin recargar overview completo', async () => {
+    getStudentOverview.mockResolvedValue(overview())
+    studentOverviewDetailsApi.reservations.mockResolvedValue({
+      items: [
+        {
+          id: 10,
+          status: 'active',
+          class: { id: 99, name: 'Kick 19h', start_datetime: '2026-08-10T19:00:00Z', discipline_name: 'Kickboxing' },
+        },
+      ],
+      count: 1,
+      page: 1,
+      page_size: 20,
+      has_next: false,
+      has_previous: false,
+    })
+
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('Ana Perez')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Ver reservas' }))
 
     await waitFor(() =>
-      expect(getStudentOverview).toHaveBeenLastCalledWith(
+      expect(studentOverviewDetailsApi.reservations).toHaveBeenCalledWith(
         '42',
-        expect.objectContaining({ consumption_limit: 40 }),
+        expect.objectContaining({ page: 1, page_size: 20 }),
       ),
     )
+    expect(getStudentOverview).toHaveBeenCalledTimes(1)
+    expect(screen.getAllByText('Kick 19h').length).toBeGreaterThan(0)
   })
 })

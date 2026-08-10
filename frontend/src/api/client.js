@@ -764,6 +764,29 @@ export const getStudentOverview = async (studentId, params = {}) => {
   return data
 }
 
+export const studentOverviewDetailsApi = {
+  reservations: async (studentId, params = {}) => {
+    const { data } = await api.get(`/students/${encodeURIComponent(studentId)}/reservations/`, { params })
+    return data
+  },
+  attendance: async (studentId, params = {}) => {
+    const { data } = await api.get(`/students/${encodeURIComponent(studentId)}/attendance/`, { params })
+    return data
+  },
+  consumption: async (studentId, params = {}) => {
+    const { data } = await api.get(`/students/${encodeURIComponent(studentId)}/consumption/`, { params })
+    return data
+  },
+  memberships: async (studentId, params = {}) => {
+    const { data } = await api.get(`/students/${encodeURIComponent(studentId)}/memberships/`, { params })
+    return data
+  },
+  recurringReservations: async (studentId, params = {}) => {
+    const { data } = await api.get(`/students/${encodeURIComponent(studentId)}/recurring-reservations/`, { params })
+    return data
+  },
+}
+
 // Pagos con MercadoPago (Checkout Pro + OAuth por organización). Todo por la
 // instancia autenticada `api`: los cuatro endpoints exigen token (nunca publicApi).
 // La activación real del plan la confirma el webhook del backend, no estas llamadas.

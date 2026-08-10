@@ -61,8 +61,13 @@ tiene y es de fiar (`class_instance`/`gym_class`/`class_template`, todas CASCADE
 `Organization`), nunca confiando solo en `user_id`/`student_id`, que son FKs sobre el USUARIO y
 sobreviven si se lo mueve de organización.
 """
+from datetime import datetime, time, timedelta
+
 from django.contrib.auth import get_user_model
+from django.core.paginator import EmptyPage, Paginator
+from django.db.models import Count
 from django.http import Http404
+from django.utils import timezone
 from rest_framework import serializers
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.exceptions import ValidationError as DRFValidationError
@@ -88,12 +93,22 @@ User = get_user_model()
 # rango de bigint revienta con 500 en PostgreSQL (SQLite no lo reproduce). Cada módulo define
 # su propia copia en vez de importar la de otro — mismo patrón que ya sigue `views_reports.py`.
 _id_field = serializers.IntegerField(min_value=1, max_value=2 ** 63 - 1)
+_date_field = serializers.DateField()
 
 #: Filas por defecto de cada historial acotado (consumo/asistencia/reservas) y tope máximo
 #: duro. El tope no es una regla de negocio, es cordura de rendimiento: un `?xxx_limit=999999`
 #: nunca puede superarlo, sin importar lo que pida el cliente.
 DEFAULT_HISTORY_LIMIT = 20
 MAX_HISTORY_LIMIT = 100
+DEFAULT_DETAIL_PAGE_SIZE = 20
+MAX_DETAIL_PAGE_SIZE = 100
+SUMMARY_PREVIEW_LIMIT = 3
+PERIOD_PRESETS = {
+    '30d': ('Ultimos 30 dias', 30),
+    '90d': ('Ultimos 90 dias', 90),
+    '6m': ('Ultimos 6 meses', 183),
+    '1y': ('Ultimo ano', 365),
+}
 
 
 def _parse_student_id(raw_value):
@@ -130,6 +145,109 @@ def _paged(queryset, limit):
     rows = list(queryset[: limit + 1])
     has_more = len(rows) > limit
     return rows[:limit], has_more
+
+
+def _parse_date_param(name, raw_value):
+    if raw_value in (None, ''):
+        return None
+    try:
+        return _date_field.run_validation(raw_value)
+    except serializers.ValidationError as exc:
+        raise DRFValidationError({name: exc.detail})
+
+
+def _summary_period(query_params):
+    """Periodo historico para KPIs de consumo/asistencia.
+
+    Conservador: default 30 dias. `late`/`excused` se cuentan en `by_status`, pero el KPI
+    principal de asistencia usa solo present/absent/no_show; la formula queda visible en el
+    payload para evitar una regla implicita escondida en frontend.
+    """
+    today = timezone.localdate()
+    period_key = str(query_params.get('period') or '30d').strip().lower()
+    start_date = _parse_date_param('start_date', query_params.get('start_date'))
+    end_date = _parse_date_param('end_date', query_params.get('end_date'))
+
+    if start_date or end_date or period_key == 'custom':
+        start_date = start_date or (today - timedelta(days=29))
+        end_date = end_date or today
+        key = 'custom'
+        label = 'Rango personalizado'
+    else:
+        label, days = PERIOD_PRESETS.get(period_key, PERIOD_PRESETS['30d'])
+        key = period_key if period_key in PERIOD_PRESETS else '30d'
+        start_date = today - timedelta(days=days - 1)
+        end_date = today
+
+    if end_date < start_date:
+        raise DRFValidationError({'end_date': ['La fecha de termino no puede ser menor a la fecha de inicio.']})
+
+    tz = timezone.get_current_timezone()
+    start_at = timezone.make_aware(datetime.combine(start_date, time.min), tz)
+    end_exclusive = timezone.make_aware(
+        datetime.combine(end_date + timedelta(days=1), time.min),
+        tz,
+    )
+    return {
+        'key': key,
+        'label': label,
+        'start_date': start_date,
+        'end_date': end_date,
+        'start_at': start_at,
+        'end_exclusive': end_exclusive,
+    }
+
+
+def _period_payload(period):
+    return {
+        'key': period['key'],
+        'label': period['label'],
+        'start_date': period['start_date'],
+        'end_date': period['end_date'],
+    }
+
+
+def _detail_page(queryset, request):
+    try:
+        page = int(request.query_params.get('page') or 1)
+    except (TypeError, ValueError):
+        page = 1
+    if page < 1:
+        page = 1
+    page_size = _history_limit(request.query_params.get('page_size'))
+    if page_size == DEFAULT_HISTORY_LIMIT and request.query_params.get('page_size') in (None, ''):
+        page_size = DEFAULT_DETAIL_PAGE_SIZE
+    page_size = min(page_size, MAX_DETAIL_PAGE_SIZE)
+
+    paginator = Paginator(queryset, page_size)
+    try:
+        current = paginator.page(page)
+    except EmptyPage:
+        current = paginator.page(paginator.num_pages or 1)
+    return list(current.object_list), {
+        'count': paginator.count,
+        'page': current.number,
+        'page_size': page_size,
+        'has_next': current.has_next(),
+        'has_previous': current.has_previous(),
+    }
+
+
+def _discipline_breakdown(queryset, prefix):
+    discipline_id = f'{prefix}__discipline_id'
+    discipline_name = f'{prefix}__discipline__name'
+    return [
+        {
+            'discipline_id': row[discipline_id],
+            'discipline_name': row[discipline_name],
+            'total': row['total'],
+        }
+        for row in (
+            queryset.values(discipline_id, discipline_name)
+            .annotate(total=Count('id'))
+            .order_by('-total', discipline_name)
+        )
+    ]
 
 
 def _full_name(user):
@@ -230,6 +348,139 @@ def _recurring_row(recurring, org_id):
     }
 
 
+def _student_payload(student):
+    return {
+        'id': student.id,
+        'username': student.username,
+        'name': _full_name(student),
+        'email': student.email,
+        'phone': student.phone,
+        'role': student.role,
+        'is_active': student.is_active,
+        'branch_id': student.branch_id,
+        'branch_name': student.branch.name if student.branch_id else None,
+    }
+
+
+def _resolve_overview_student(request, student_id):
+    actor = request.user
+    if actor.role != CustomUser.Role.GYM_ADMIN or not actor.organization_id:
+        raise PermissionDenied(
+            'Solo un administrador del gimnasio puede ver la vista integral del alumno.'
+        )
+
+    parsed_id = _parse_student_id(student_id)
+    student = (
+        User.objects.filter(pk=parsed_id, organization_id=actor.organization_id)
+        .select_related('branch')
+        .first()
+    )
+    if student is None:
+        raise Http404
+    return student, actor.organization_id
+
+
+def _membership_summary(memberships):
+    active = [
+        {
+            'id': item.get('id'),
+            'plan_name': item.get('plan_name'),
+            'start_date': item.get('start_date'),
+            'end_date': item.get('end_date'),
+            'total_classes': item.get('total_classes'),
+            'unlimited_classes': item.get('unlimited_classes'),
+            'classes_used': item.get('classes_used'),
+            'remaining_classes': item.get('remaining_classes'),
+            'validity_status': item.get('validity_status'),
+            'validity_status_label': item.get('validity_status_label'),
+            'expiry_alert_level': item.get('expiry_alert_level'),
+            'expiry_alert_message': item.get('expiry_alert_message'),
+            'payment_status': item.get('payment_status'),
+            'enrollment_fee_status': item.get('enrollment_fee_status'),
+        }
+        for item in memberships
+        if item.get('validity_status') == 'active'
+    ]
+    return {
+        'active_count': len(active),
+        'active_items': active,
+        'historical_count': max(len(memberships) - len(active), 0),
+    }
+
+
+def _overview_summary(*, memberships, recurring_qs, student_id, org_id, period):
+    now = timezone.now()
+    future_reservations = (
+        Enrollment.objects
+        .filter(
+            student_id=student_id,
+            status='active',
+            gym_class__organization_id=org_id,
+            gym_class__start_datetime__gte=now,
+        )
+        .select_related('gym_class', 'gym_class__discipline', 'gym_class__teacher', 'student_plan__plan')
+        .order_by('gym_class__start_datetime', 'id')
+    )
+    upcoming = list(future_reservations[:SUMMARY_PREVIEW_LIMIT])
+
+    consumption_period = ConsumptionLog.objects.filter(
+        user_id=student_id,
+        class_instance__organization_id=org_id,
+        student_plan__organization_id=org_id,
+        consumed_at__gte=period['start_at'],
+        consumed_at__lt=period['end_exclusive'],
+    )
+
+    attendance_period = Attendance.objects.filter(
+        student_id=student_id,
+        gym_class__organization_id=org_id,
+        marked_at__gte=period['start_at'],
+        marked_at__lt=period['end_exclusive'],
+    )
+    by_status = {
+        row['status']: row['total']
+        for row in attendance_period.values('status').annotate(total=Count('id'))
+    }
+    present = by_status.get(Attendance.Status.PRESENT, 0)
+    absences = (
+        by_status.get(Attendance.Status.ABSENT, 0)
+        + by_status.get(Attendance.Status.NO_SHOW, 0)
+    )
+    attendance_denominator = present + absences
+    attendance_rate = (
+        round((present / attendance_denominator) * 100, 1)
+        if attendance_denominator else None
+    )
+
+    recurring_preview = list(recurring_qs[:SUMMARY_PREVIEW_LIMIT])
+    return {
+        'period': _period_payload(period),
+        'memberships': _membership_summary(memberships),
+        'reservations': {
+            'future_active_total': future_reservations.count(),
+            'by_discipline': _discipline_breakdown(future_reservations, 'gym_class'),
+            'upcoming': [_reservation_row(row, org_id) for row in upcoming],
+        },
+        'consumption': {
+            'total': consumption_period.count(),
+            'by_discipline': _discipline_breakdown(consumption_period, 'class_instance'),
+        },
+        'attendance': {
+            'present': present,
+            'absences': absences,
+            'attendance_rate': attendance_rate,
+            'denominator': attendance_denominator,
+            'formula': 'present / (present + absent + no_show)',
+            'by_status': by_status,
+            'by_discipline': _discipline_breakdown(attendance_period, 'gym_class'),
+        },
+        'recurring_reservations': {
+            'active_total': recurring_qs.count(),
+            'preview': [_recurring_row(row, org_id) for row in recurring_preview],
+        },
+    }
+
+
 class StudentOverviewView(APIView):
     """`GET /api/students/<student_id>/overview/` — ver docstring del módulo."""
 
@@ -262,6 +513,7 @@ class StudentOverviewView(APIView):
         consumption_limit = _history_limit(request.query_params.get('consumption_limit'))
         attendance_limit = _history_limit(request.query_params.get('attendance_limit'))
         reservations_limit = _history_limit(request.query_params.get('reservations_limit'))
+        period = _summary_period(request.query_params)
 
         memberships_qs = (
             # `user` va en el `select_related` aunque sea siempre el MISMO alumno:
@@ -337,6 +589,13 @@ class StudentOverviewView(APIView):
                 'branch_id': student.branch_id,
                 'branch_name': student.branch.name if student.branch_id else None,
             },
+            'summary': _overview_summary(
+                memberships=memberships,
+                recurring_qs=recurring_qs,
+                student_id=student.id,
+                org_id=org_id,
+                period=period,
+            ),
             'memberships': memberships,
             'consumption': {
                 'items': [_consumption_row(row, org_id) for row in consumption_rows],
@@ -355,3 +614,171 @@ class StudentOverviewView(APIView):
             },
             'recurring_enrollments': [_recurring_row(row, org_id) for row in recurring_qs],
         })
+
+
+class StudentOverviewDetailBase(APIView):
+    permission_classes = [ReportPermission]
+
+    def _student_scope(self, request, student_id):
+        return _resolve_overview_student(request, student_id)
+
+    def _paginated_response(self, rows, page_info):
+        return Response({
+            'items': rows,
+            **page_info,
+        })
+
+
+class StudentReservationsDetailView(StudentOverviewDetailBase):
+    def get(self, request, student_id):
+        student, org_id = self._student_scope(request, student_id)
+        queryset = (
+            Enrollment.objects
+            .filter(student_id=student.id, gym_class__organization_id=org_id)
+            .select_related(
+                'gym_class', 'gym_class__discipline', 'gym_class__teacher', 'student_plan__plan',
+            )
+        )
+        status_value = request.query_params.get('status')
+        discipline = request.query_params.get('discipline')
+        branch_id = request.query_params.get('branch_id')
+        reservation_kind = str(request.query_params.get('reservation_kind', '')).strip().lower()
+        date_from = _parse_date_param('date_from', request.query_params.get('date_from'))
+        date_to = _parse_date_param('date_to', request.query_params.get('date_to'))
+
+        if status_value:
+            queryset = queryset.filter(status=status_value)
+        if discipline:
+            queryset = queryset.filter(gym_class__discipline__name=discipline)
+        if branch_id:
+            queryset = queryset.filter(gym_class__branch_id=branch_id)
+        if reservation_kind == 'recurring':
+            queryset = queryset.filter(recurring_enrollment__isnull=False)
+        elif reservation_kind in {'single', 'individual'}:
+            queryset = queryset.filter(recurring_enrollment__isnull=True)
+        if date_from:
+            queryset = queryset.filter(gym_class__start_datetime__date__gte=date_from)
+        if date_to:
+            queryset = queryset.filter(gym_class__start_datetime__date__lte=date_to)
+
+        rows, page_info = _detail_page(queryset.order_by('-gym_class__start_datetime', '-id'), request)
+        return self._paginated_response([_reservation_row(row, org_id) for row in rows], page_info)
+
+
+class StudentAttendanceDetailView(StudentOverviewDetailBase):
+    def get(self, request, student_id):
+        student, org_id = self._student_scope(request, student_id)
+        queryset = (
+            Attendance.objects
+            .filter(student_id=student.id, gym_class__organization_id=org_id)
+            .select_related('gym_class', 'gym_class__discipline', 'gym_class__teacher', 'marked_by')
+        )
+        status_value = request.query_params.get('status')
+        discipline = request.query_params.get('discipline')
+        branch_id = request.query_params.get('branch_id')
+        date_from = _parse_date_param('date_from', request.query_params.get('date_from'))
+        date_to = _parse_date_param('date_to', request.query_params.get('date_to'))
+
+        if status_value:
+            queryset = queryset.filter(status=status_value)
+        if discipline:
+            queryset = queryset.filter(gym_class__discipline__name=discipline)
+        if branch_id:
+            queryset = queryset.filter(gym_class__branch_id=branch_id)
+        if date_from:
+            queryset = queryset.filter(marked_at__date__gte=date_from)
+        if date_to:
+            queryset = queryset.filter(marked_at__date__lte=date_to)
+
+        rows, page_info = _detail_page(queryset.order_by('-marked_at', '-id'), request)
+        return self._paginated_response([_attendance_row(row) for row in rows], page_info)
+
+
+class StudentConsumptionDetailView(StudentOverviewDetailBase):
+    def get(self, request, student_id):
+        student, org_id = self._student_scope(request, student_id)
+        queryset = (
+            ConsumptionLog.objects
+            .filter(
+                user_id=student.id,
+                class_instance__organization_id=org_id,
+                student_plan__organization_id=org_id,
+            )
+            .select_related(
+                'class_instance', 'class_instance__discipline', 'class_instance__teacher',
+                'branch', 'student_plan__plan',
+            )
+        )
+        discipline = request.query_params.get('discipline')
+        branch_id = request.query_params.get('branch_id')
+        date_from = _parse_date_param('date_from', request.query_params.get('date_from'))
+        date_to = _parse_date_param('date_to', request.query_params.get('date_to'))
+
+        if discipline:
+            queryset = queryset.filter(class_instance__discipline__name=discipline)
+        if branch_id:
+            queryset = queryset.filter(branch_id=branch_id)
+        if date_from:
+            queryset = queryset.filter(consumed_at__date__gte=date_from)
+        if date_to:
+            queryset = queryset.filter(consumed_at__date__lte=date_to)
+
+        rows, page_info = _detail_page(queryset.order_by('-consumed_at', '-id'), request)
+        return self._paginated_response([_consumption_row(row, org_id) for row in rows], page_info)
+
+
+class StudentMembershipsDetailView(StudentOverviewDetailBase):
+    def get(self, request, student_id):
+        student, org_id = self._student_scope(request, student_id)
+        queryset = (
+            StudentPlan.objects.select_related('plan', 'user')
+            .prefetch_related('origin_transactions', 'manual_payments', 'charge_line_items')
+            .filter(user_id=student.id, organization_id=org_id)
+            .order_by('-is_active', '-start_date', '-id')
+        )
+        status_value = str(request.query_params.get('status') or '').strip().lower()
+        serialized = list(StudentPlanSerializer(queryset, many=True).data)
+        if status_value == 'active':
+            serialized = [row for row in serialized if row.get('validity_status') == 'active']
+        elif status_value in {'history', 'historical'}:
+            serialized = [row for row in serialized if row.get('validity_status') != 'active']
+
+        rows, page_info = _detail_page(serialized, request)
+        return self._paginated_response(rows, page_info)
+
+
+class StudentRecurringReservationsDetailView(StudentOverviewDetailBase):
+    def get(self, request, student_id):
+        student, org_id = self._student_scope(request, student_id)
+        queryset = (
+            RecurringEnrollment.objects
+            .filter(student_id=student.id, class_template__organization_id=org_id)
+            .select_related(
+                'class_template', 'class_template__discipline', 'class_template__teacher',
+                'student_plan__plan',
+            )
+        )
+        is_active = str(request.query_params.get('is_active', '')).strip().lower()
+        discipline = request.query_params.get('discipline')
+        branch_id = request.query_params.get('branch_id')
+        date_from = _parse_date_param('date_from', request.query_params.get('date_from'))
+        date_to = _parse_date_param('date_to', request.query_params.get('date_to'))
+
+        if is_active in {'true', '1', 'yes'}:
+            queryset = queryset.filter(is_active=True)
+        elif is_active in {'false', '0', 'no'}:
+            queryset = queryset.filter(is_active=False)
+        if discipline:
+            queryset = queryset.filter(class_template__discipline__name=discipline)
+        if branch_id:
+            queryset = queryset.filter(class_template__branch_id=branch_id)
+        if date_from:
+            queryset = queryset.filter(start_date__gte=date_from)
+        if date_to:
+            queryset = queryset.filter(start_date__lte=date_to)
+
+        rows, page_info = _detail_page(
+            queryset.order_by('-is_active', 'class_template__weekday', 'class_template__start_time'),
+            request,
+        )
+        return self._paginated_response([_recurring_row(row, org_id) for row in rows], page_info)

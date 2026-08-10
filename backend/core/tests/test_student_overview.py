@@ -18,6 +18,7 @@ from core.models import (
     Branch,
     ClassTemplate,
     ConsumptionLog,
+    Discipline,
     Enrollment,
     GymClass,
     Plan,
@@ -69,6 +70,10 @@ def _gym_class(org, branch, **extra):
     )
     defaults.update(extra)
     return GymClass.objects.create(**defaults)
+
+
+def _discipline(org, name):
+    return Discipline.objects.create(organization=org, name=name)
 
 
 @pytest.fixture
@@ -401,3 +406,212 @@ def test_a_legacy_row_pointing_at_a_foreign_membership_does_not_leak_the_plan_na
     assert len(reservations) == 1
     assert reservations[0]['plan_name'] is None
     assert 'Pack secreto ajeno' not in resp.content.decode()
+
+
+# --------------------------------------------------------------------------------------
+# 8. Fase 4: summary operacional compacto, periodo y detalles paginados.
+# --------------------------------------------------------------------------------------
+
+def test_summary_handles_zero_activity_without_breaking_legacy_contract(api_client, setup):
+    api_client.force_authenticate(user=setup['admin'])
+
+    resp = api_client.get(_overview_url(setup['student'].id))
+
+    assert resp.status_code == 200, resp.content
+    data = resp.json()
+    assert 'summary' in data
+    assert 'memberships' in data
+    assert 'consumption' in data
+    assert 'attendance' in data
+    assert 'reservations' in data
+    assert 'recurring_enrollments' in data
+    assert data['summary']['period']['key'] == '30d'
+    assert data['summary']['consumption']['total'] == 0
+    assert data['summary']['attendance']['present'] == 0
+    assert data['summary']['attendance']['absences'] == 0
+    assert data['summary']['attendance']['attendance_rate'] is None
+
+
+def test_summary_lists_multiple_active_memberships_and_counts_history(api_client, setup):
+    student = setup['student']
+    org = setup['org']
+    today = timezone.localdate()
+    second_plan = _plan(org, name='Pack BJJ', total_classes=8)
+    old_plan = _plan(org, name='Pack viejo', total_classes=4)
+    second = _membership(student, second_plan, classes_used=4, total_classes=8)
+    _membership(
+        student, old_plan, is_active=False, start_date=today - timedelta(days=80),
+        end_date=today - timedelta(days=50), classes_used=4, total_classes=4,
+    )
+
+    api_client.force_authenticate(user=setup['admin'])
+    resp = api_client.get(_overview_url(student.id))
+
+    assert resp.status_code == 200, resp.content
+    summary = resp.json()['summary']['memberships']
+    ids = {item['id'] for item in summary['active_items']}
+    assert ids == {setup['membership'].id, second.id}
+    assert summary['active_count'] == 2
+    assert summary['historical_count'] == 1
+
+
+def test_summary_reservations_future_total_breakdown_and_upcoming(api_client, setup):
+    student = setup['student']
+    org = setup['org']
+    branch = setup['branch']
+    kick = _discipline(org, 'Kickboxing')
+    bjj = _discipline(org, 'BJJ')
+    now = timezone.now()
+    classes = [
+        _gym_class(org, branch, name='Kick 1', discipline=kick, start_datetime=now + timedelta(days=1), end_datetime=now + timedelta(days=1, hours=1), status=GymClass.Status.SCHEDULED),
+        _gym_class(org, branch, name='Kick 2', discipline=kick, start_datetime=now + timedelta(days=2), end_datetime=now + timedelta(days=2, hours=1), status=GymClass.Status.SCHEDULED),
+        _gym_class(org, branch, name='BJJ 1', discipline=bjj, start_datetime=now + timedelta(days=3), end_datetime=now + timedelta(days=3, hours=1), status=GymClass.Status.SCHEDULED),
+        _gym_class(org, branch, name='Past', discipline=kick, start_datetime=now - timedelta(days=3), end_datetime=now - timedelta(days=3, hours=-1), status=GymClass.Status.COMPLETED),
+    ]
+    for gym_class in classes:
+        Enrollment.objects.create(gym_class=gym_class, student=student, status='active')
+
+    api_client.force_authenticate(user=setup['admin'])
+    resp = api_client.get(_overview_url(student.id))
+
+    assert resp.status_code == 200, resp.content
+    reservations = resp.json()['summary']['reservations']
+    assert reservations['future_active_total'] == 3
+    assert [item['class']['name'] for item in reservations['upcoming']] == ['Kick 1', 'Kick 2', 'BJJ 1']
+    assert {row['discipline_name']: row['total'] for row in reservations['by_discipline']} == {
+        'Kickboxing': 2,
+        'BJJ': 1,
+    }
+
+
+def test_summary_consumption_uses_consumption_logs_period_and_not_classes_used(api_client, setup):
+    student = setup['student']
+    membership = setup['membership']
+    branch = setup['branch']
+    org = setup['org']
+    kick = _discipline(org, 'Kickboxing')
+    bjj = _discipline(org, 'BJJ')
+    now = timezone.now()
+    StudentPlan.objects.filter(pk=membership.pk).update(classes_used=9)
+    in_period_a = _gym_class(org, branch, discipline=kick)
+    in_period_b = _gym_class(org, branch, discipline=bjj)
+    out_period = _gym_class(org, branch, name='Antigua', discipline=kick)
+    log_a = ConsumptionLog.objects.create(user=student, student_plan=membership, class_instance=in_period_a, branch=branch)
+    log_b = ConsumptionLog.objects.create(user=student, student_plan=membership, class_instance=in_period_b, branch=branch)
+    old_log = ConsumptionLog.objects.create(user=student, student_plan=membership, class_instance=out_period, branch=branch)
+    ConsumptionLog.objects.filter(pk=log_a.pk).update(consumed_at=now - timedelta(days=2))
+    ConsumptionLog.objects.filter(pk=log_b.pk).update(consumed_at=now - timedelta(days=3))
+    ConsumptionLog.objects.filter(pk=old_log.pk).update(consumed_at=now - timedelta(days=45))
+
+    api_client.force_authenticate(user=setup['admin'])
+    resp = api_client.get(_overview_url(student.id), {'period': '30d'})
+
+    assert resp.status_code == 200, resp.content
+    consumption = resp.json()['summary']['consumption']
+    assert consumption['total'] == 2
+    assert {row['discipline_name']: row['total'] for row in consumption['by_discipline']} == {
+        'Kickboxing': 1,
+        'BJJ': 1,
+    }
+
+
+def test_summary_attendance_formula_and_period_filter(api_client, setup):
+    student = setup['student']
+    org = setup['org']
+    branch = setup['branch']
+    kick = _discipline(org, 'Kickboxing')
+    now = timezone.now()
+    statuses = [
+        Attendance.Status.PRESENT,
+        Attendance.Status.PRESENT,
+        Attendance.Status.ABSENT,
+        Attendance.Status.NO_SHOW,
+        Attendance.Status.LATE,
+        Attendance.Status.EXCUSED,
+    ]
+    for index, status_value in enumerate(statuses):
+        gym_class = _gym_class(
+            org, branch, name=f'Clase {index}', discipline=kick,
+            start_datetime=now - timedelta(days=index + 1),
+            end_datetime=now - timedelta(days=index + 1) + timedelta(hours=1),
+        )
+        Attendance.objects.create(
+            gym_class=gym_class, student=student, status=status_value,
+            source=Attendance.Source.MANUAL, marked_at=now - timedelta(days=index + 1),
+        )
+    old_class = _gym_class(org, branch, name='Fuera periodo', discipline=kick)
+    Attendance.objects.create(
+        gym_class=old_class, student=student, status=Attendance.Status.PRESENT,
+        source=Attendance.Source.MANUAL, marked_at=now - timedelta(days=50),
+    )
+
+    api_client.force_authenticate(user=setup['admin'])
+    resp = api_client.get(_overview_url(student.id), {'period': '30d'})
+
+    assert resp.status_code == 200, resp.content
+    attendance = resp.json()['summary']['attendance']
+    assert attendance['present'] == 2
+    assert attendance['absences'] == 2
+    assert attendance['denominator'] == 4
+    assert attendance['attendance_rate'] == 50.0
+    assert attendance['by_status']['late'] == 1
+    assert attendance['by_status']['excused'] == 1
+
+
+def test_summary_recurring_reservations_active_count_and_preview(api_client, setup):
+    student = setup['student']
+    org = setup['org']
+    branch = setup['branch']
+    kick = _discipline(org, 'Kickboxing')
+    template = ClassTemplate.objects.create(
+        organization=org, branch=branch, discipline=kick, name='Kick semanal',
+        weekday=0, start_time=time(19, 0), end_time=time(20, 0),
+        start_date=timezone.localdate() - timedelta(days=10),
+    )
+    inactive_template = ClassTemplate.objects.create(
+        organization=org, branch=branch, discipline=kick, name='Vieja',
+        weekday=1, start_time=time(18, 0), end_time=time(19, 0),
+        start_date=timezone.localdate() - timedelta(days=10),
+    )
+    RecurringEnrollment.objects.create(student=student, class_template=template, start_date=timezone.localdate(), is_active=True)
+    RecurringEnrollment.objects.create(student=student, class_template=inactive_template, start_date=timezone.localdate(), is_active=False)
+
+    api_client.force_authenticate(user=setup['admin'])
+    resp = api_client.get(_overview_url(student.id))
+
+    assert resp.status_code == 200, resp.content
+    recurring = resp.json()['summary']['recurring_reservations']
+    assert recurring['active_total'] == 1
+    assert recurring['preview'][0]['class_template']['name'] == 'Kick semanal'
+
+
+def test_detail_endpoint_is_paginated_filterable_and_org_scoped(
+    api_client, setup, make_organization, make_user,
+):
+    student = setup['student']
+    org = setup['org']
+    branch = setup['branch']
+    now = timezone.now()
+    active_a = _gym_class(org, branch, name='Activa A', start_datetime=now + timedelta(days=1), end_datetime=now + timedelta(days=1, hours=1))
+    active_b = _gym_class(org, branch, name='Activa B', start_datetime=now + timedelta(days=2), end_datetime=now + timedelta(days=2, hours=1))
+    cancelled = _gym_class(org, branch, name='Cancelada', start_datetime=now + timedelta(days=3), end_datetime=now + timedelta(days=3, hours=1))
+    Enrollment.objects.create(gym_class=active_a, student=student, status='active')
+    Enrollment.objects.create(gym_class=active_b, student=student, status='active')
+    Enrollment.objects.create(gym_class=cancelled, student=student, status='cancelled')
+
+    api_client.force_authenticate(user=setup['admin'])
+    resp = api_client.get(
+        f'/api/students/{student.id}/reservations/',
+        {'status': 'active', 'page_size': 1},
+    )
+    assert resp.status_code == 200, resp.content
+    data = resp.json()
+    assert data['count'] == 2
+    assert len(data['items']) == 1
+    assert data['has_next'] is True
+
+    other_org = make_organization()
+    other_admin = make_user('other-detail-admin', organization=other_org, role='gym_admin')
+    api_client.force_authenticate(user=other_admin)
+    forbidden = api_client.get(f'/api/students/{student.id}/reservations/')
+    assert forbidden.status_code == 404, forbidden.content
