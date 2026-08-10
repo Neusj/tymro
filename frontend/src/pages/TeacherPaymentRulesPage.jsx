@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { organizationsApi, teacherPaymentRulesApi } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
+import ConfirmDialog from '../components/ConfirmDialog'
 import DashboardHeader from '../components/DashboardHeader'
 import FormModal from '../components/FormModal'
 import DataTable from '../components/ui/DataTable'
@@ -86,6 +87,7 @@ export default function TeacherPaymentRulesPage() {
   const [assignmentsRule, setAssignmentsRule] = useState(null)
   const [assignmentItems, setAssignmentItems] = useState([])
   const [assignmentSelectedIds, setAssignmentSelectedIds] = useState([])
+  const [deletingRule, setDeletingRule] = useState(null)
 
   const clearForm = () => {
     setEditing(null)
@@ -230,19 +232,17 @@ export default function TeacherPaymentRulesPage() {
     }
   }
 
-  const handleDelete = async (row) => {
-    if (!row?.id) {
-      return
-    }
-    if (!window.confirm('Eliminar regla de pago?')) {
+  const handleDelete = async () => {
+    if (!deletingRule?.id) {
       return
     }
     setWorking(true)
     setError('')
     setNotice('')
     try {
-      await teacherPaymentRulesApi.remove(row.id)
+      await teacherPaymentRulesApi.remove(deletingRule.id)
       setNotice('Regla eliminada.')
+      setDeletingRule(null)
       await loadData()
     } catch (apiError) {
       setError(firstApiError(apiError?.response?.data, 'No se pudo eliminar la regla.'))
@@ -341,7 +341,7 @@ export default function TeacherPaymentRulesPage() {
               <button
                 type="button"
                 disabled={working}
-                onClick={() => handleDelete(row)}
+                onClick={() => setDeletingRule(row)}
                 className="rounded border border-brand-red/40 px-2 py-1 text-xs text-red-200 transition disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Eliminar
@@ -399,6 +399,7 @@ export default function TeacherPaymentRulesPage() {
       <FormModal
         open={formOpen}
         title={editing ? 'Editar regla de pago' : 'Nueva regla de pago'}
+        closeDisabled={working}
         onClose={() => {
           setFormOpen(false)
           clearForm()
@@ -525,6 +526,7 @@ export default function TeacherPaymentRulesPage() {
       <FormModal
         open={assignmentsOpen}
         title={assignmentsRule ? `Asignaciones - Regla #${assignmentsRule.id}` : 'Asignaciones'}
+        closeDisabled={working}
         onClose={() => {
           setAssignmentsOpen(false)
           setAssignmentsRule(null)
@@ -583,6 +585,20 @@ export default function TeacherPaymentRulesPage() {
           </div>
         </form>
       </FormModal>
+
+      <ConfirmDialog
+        open={Boolean(deletingRule)}
+        title="Eliminar regla de pago"
+        description="Eliminar regla de pago?"
+        confirmLabel="Eliminar"
+        loading={working}
+        onConfirm={handleDelete}
+        onCancel={() => {
+          if (!working) {
+            setDeletingRule(null)
+          }
+        }}
+      />
     </div>
   )
 }

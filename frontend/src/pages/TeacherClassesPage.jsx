@@ -2,6 +2,7 @@
 import { classesApi, enrollmentsApi } from '../api/client'
 import BulkActionModal from '../components/BulkActionModal'
 import ConfirmDialog from '../components/ConfirmDialog'
+import ConfirmWithReasonDialog from '../components/ConfirmWithReasonDialog'
 import DashboardHeader from '../components/DashboardHeader'
 import DaySelector, { todayIsoDate } from '../components/DaySelector'
 import FilterDropdown from '../components/FilterDropdown'
@@ -90,6 +91,9 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
   const [selectedIds, setSelectedIds] = useState([])
   const [bulkModalOpen, setBulkModalOpen] = useState(false)
   const [claimingClass, setClaimingClass] = useState(null)
+  const [classReasonAction, setClassReasonAction] = useState(null)
+  const [suspendingClass, setSuspendingClass] = useState(null)
+  const [reactivatingClass, setReactivatingClass] = useState(null)
 
   const [attendanceOpen, setAttendanceOpen] = useState(false)
   const [attendanceClass, setAttendanceClass] = useState(null)
@@ -286,7 +290,6 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
     const selectedStudents = enrollStudents.filter((student) => enrollSelectedIds.includes(student.id))
     const withoutBalance = selectedStudents.filter((student) => !student.has_available_classes)
     if (withoutBalance.length > 0) {
-      window.alert('Alumno sin clases disponibles')
       setError('Alumno sin clases disponibles')
       return
     }
@@ -343,12 +346,12 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
     }
   }
 
-  const closeClass = async (row, actionName) => {
-    const comment = window.prompt(actionName === 'cancel' ? 'Motivo de cancelacion' : 'Motivo de cierre anticipado')
-    if (!comment || !comment.trim()) {
+  const closeClass = async (comment) => {
+    if (!classReasonAction?.row || !comment?.trim()) {
       return
     }
 
+    const { row, actionName } = classReasonAction
     setWorking(true)
     setError('')
     try {
@@ -357,6 +360,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
       } else {
         await classesApi.completeEarly(row.id, comment.trim())
       }
+      setClassReasonAction(null)
       await loadData()
     } catch (apiError) {
       setError(firstApiError(apiError?.response?.data, 'No se pudo actualizar la clase.'))
@@ -367,16 +371,16 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
 
   // Suspende la clase (pausa reactivable): cambia el estado a 'suspended' y avisa
   // por email a los alumnos inscritos. NO es lo mismo que el cierre anticipado.
-  const suspendClass = async (row) => {
-    const reason = window.prompt('Motivo de suspension (opcional)')
-    if (reason === null) {
-      return // el usuario canceló el prompt
+  const suspendClass = async (reason) => {
+    if (!suspendingClass?.id) {
+      return
     }
 
     setWorking(true)
     setError('')
     try {
-      await classesApi.suspend(row.id, { suspend_reason: reason.trim() })
+      await classesApi.suspend(suspendingClass.id, { suspend_reason: reason.trim() })
+      setSuspendingClass(null)
       await loadData()
     } catch (apiError) {
       setError(firstApiError(apiError?.response?.data, 'No se pudo suspender la clase.'))
@@ -386,15 +390,16 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
   }
 
   // Reactiva una clase suspendida (vuelve a 'scheduled'/'in_progress' según la hora).
-  const reactivateClass = async (row) => {
-    if (!window.confirm('Reactivar esta clase suspendida?')) {
+  const reactivateClass = async () => {
+    if (!reactivatingClass?.id) {
       return
     }
 
     setWorking(true)
     setError('')
     try {
-      await classesApi.reactivate(row.id)
+      await classesApi.reactivate(reactivatingClass.id)
+      setReactivatingClass(null)
       await loadData()
     } catch (apiError) {
       setError(firstApiError(apiError?.response?.data, 'No se pudo reactivar la clase.'))
@@ -474,7 +479,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
                   <button
                     type="button"
                     disabled={working || isVirtual}
-                    onClick={() => reactivateClass(row)}
+                    onClick={() => setReactivatingClass(row)}
                     className="w-full rounded-lg border border-emerald-500/50 px-2.5 py-1.5 text-left text-xs text-emerald-200 transition hover:border-emerald-400 disabled:opacity-60"
                   >
                     Reactivar clase
@@ -482,7 +487,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
                   <button
                     type="button"
                     disabled={working || isVirtual}
-                    onClick={() => closeClass(row, 'cancel')}
+                    onClick={() => setClassReasonAction({ row, actionName: 'cancel' })}
                     className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 transition hover:bg-brand-red/10 disabled:opacity-60"
                   >
                     Cancelar clase
@@ -510,7 +515,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
                   <button
                     type="button"
                     disabled={!canOperate || working || isVirtual}
-                    onClick={() => suspendClass(row)}
+                    onClick={() => setSuspendingClass(row)}
                     className="w-full rounded-lg border border-brand-orange/50 px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-orange disabled:opacity-60"
                   >
                     Suspender clase
@@ -518,7 +523,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
                   <button
                     type="button"
                     disabled={!canOperate || working || isVirtual}
-                    onClick={() => closeClass(row, 'complete_early')}
+                    onClick={() => setClassReasonAction({ row, actionName: 'complete_early' })}
                     className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue disabled:opacity-60"
                   >
                     Finalizar (cierre anticipado)
@@ -526,7 +531,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
                   <button
                     type="button"
                     disabled={!canOperate || working || isVirtual}
-                    onClick={() => closeClass(row, 'cancel')}
+                    onClick={() => setClassReasonAction({ row, actionName: 'cancel' })}
                     className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 transition hover:bg-brand-red/10 disabled:opacity-60"
                   >
                     Cancelar clase
@@ -714,8 +719,57 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
         onConfirm={claimSubstitution}
       />
 
+      <ConfirmWithReasonDialog
+        open={Boolean(classReasonAction)}
+        title={classReasonAction?.actionName === 'cancel' ? 'Cancelar clase' : 'Finalizar anticipadamente'}
+        description={`Se actualizara ${classReasonAction?.row?.name || 'esta clase'} preservando trazabilidad.`}
+        reasonLabel={classReasonAction?.actionName === 'cancel' ? 'Motivo de cancelacion' : 'Motivo de cierre anticipado'}
+        confirmLabel={classReasonAction?.actionName === 'cancel' ? 'Cancelar clase' : 'Finalizar clase'}
+        variant={classReasonAction?.actionName === 'cancel' ? 'danger' : 'warning'}
+        loading={working}
+        onCancel={() => {
+          if (!working) {
+            setClassReasonAction(null)
+          }
+        }}
+        onConfirm={closeClass}
+      />
+
+      <ConfirmWithReasonDialog
+        open={Boolean(suspendingClass)}
+        title="Suspender clase"
+        description={`Se pausara ${suspendingClass?.name || 'esta clase'} y podra reactivarse despues.`}
+        reasonLabel="Motivo de suspension (opcional)"
+        reasonRequired={false}
+        confirmLabel="Suspender clase"
+        variant="warning"
+        loading={working}
+        onCancel={() => {
+          if (!working) {
+            setSuspendingClass(null)
+          }
+        }}
+        onConfirm={suspendClass}
+      />
+
+      <ConfirmDialog
+        open={Boolean(reactivatingClass)}
+        title="Reactivar clase"
+        description={`Se reactivara ${reactivatingClass?.name || 'esta clase suspendida'}.`}
+        confirmLabel="Reactivar clase"
+        variant="default"
+        loading={working}
+        onCancel={() => {
+          if (!working) {
+            setReactivatingClass(null)
+          }
+        }}
+        onConfirm={reactivateClass}
+      />
+
       <FormModal
         open={attendanceOpen}
+        closeDisabled={working}
         onClose={() => {
           setAttendanceOpen(false)
           setAttendanceClass(null)
@@ -790,6 +844,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
 
       <FormModal
         open={enrollOpen}
+        closeDisabled={working}
         onClose={() => {
           setEnrollOpen(false)
           setEnrollClass(null)
@@ -869,6 +924,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
 
       <FormModal
         open={enrolledOpen}
+        closeDisabled={working}
         onClose={() => {
           setEnrolledOpen(false)
           setEnrolledClass(null)

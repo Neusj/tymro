@@ -29,6 +29,9 @@ import {
 } from '../api/client'
 import GymAdminClassTemplatesPage from './GymAdminClassTemplatesPage'
 
+let originalScrollIntoView
+let scrollIntoViewMock
+
 function renderPage() {
   return render(
     <MemoryRouter>
@@ -40,6 +43,9 @@ function renderPage() {
 beforeEach(() => {
   vi.clearAllMocks()
   mockRole = 'gym_admin'
+  originalScrollIntoView = Element.prototype.scrollIntoView
+  scrollIntoViewMock = vi.fn()
+  Element.prototype.scrollIntoView = scrollIntoViewMock
   classTemplatesApi.list.mockResolvedValue([])
   branchesApi.list.mockResolvedValue([])
   usersApi.list.mockResolvedValue([])
@@ -58,6 +64,11 @@ beforeEach(() => {
 
 afterEach(() => {
   delete window.matchMedia
+  if (originalScrollIntoView) {
+    Element.prototype.scrollIntoView = originalScrollIntoView
+  } else {
+    delete Element.prototype.scrollIntoView
+  }
 })
 
 describe('GymAdminClassTemplatesPage — botón "Actualizar clases" (robot de ventana rodante)', () => {
@@ -351,6 +362,40 @@ describe('GymAdminClassTemplatesPage — formulario de creacion (multi-dia, sin 
     expect(payload).not.toHaveProperty('weekdays')
     expect(payload).not.toHaveProperty('start_date')
     expect(payload).not.toHaveProperty('end_date')
+  })
+
+  it('al editar hace scroll/foco al formulario y Cancelar edicion limpia el estado', async () => {
+    classTemplatesApi.list.mockResolvedValue([
+      {
+        id: 5,
+        name: 'Serie existente',
+        branch: 1,
+        teacher: 2,
+        class_type: 3,
+        discipline: 4,
+        weekday: 3,
+        start_time: '10:00:00',
+        end_time: '11:00:00',
+        capacity: 15,
+        is_active: true,
+        is_trial_eligible: false,
+      },
+    ])
+    renderPage()
+
+    const [menuTrigger] = await screen.findAllByRole('button', { name: /abrir acciones/i })
+    await userEvent.click(menuTrigger)
+    await userEvent.click(await screen.findByRole('button', { name: /^editar$/i }))
+
+    expect(await screen.findByText(/editando clase #5/i)).toBeInTheDocument()
+    await waitFor(() => expect(scrollIntoViewMock).toHaveBeenCalledWith({ behavior: 'smooth', block: 'start' }))
+    await waitFor(() => expect(screen.getByLabelText(/nombre visible/i)).toHaveFocus())
+
+    await userEvent.click(screen.getByRole('button', { name: /cancelar edicion/i }))
+
+    expect(screen.getByRole('heading', { name: /^crear clase$/i })).toBeInTheDocument()
+    expect(screen.queryByText(/editando clase #5/i)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /dias de la semana/i })).toBeInTheDocument()
   })
 })
 

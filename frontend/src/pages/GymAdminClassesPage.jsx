@@ -5,6 +5,7 @@ import { useAuth } from '../auth/AuthContext'
 import { canManageOperational } from '../utils/roles'
 import BulkActionModal from '../components/BulkActionModal'
 import ConfirmDialog from '../components/ConfirmDialog'
+import ConfirmWithReasonDialog from '../components/ConfirmWithReasonDialog'
 import DashboardHeader from '../components/DashboardHeader'
 import DaySelector, { todayIsoDate } from '../components/DaySelector'
 import FilterDropdown from '../components/FilterDropdown'
@@ -50,6 +51,7 @@ export default function GymAdminClassesPage() {
   const [disciplines, setDisciplines] = useState([])
   const [loading, setLoading] = useState(true)
   const [deleting, setDeleting] = useState(null)
+  const [singleAction, setSingleAction] = useState(null)
   const [selectedIds, setSelectedIds] = useState([])
   const [bulkModalOpen, setBulkModalOpen] = useState(false)
   const [working, setWorking] = useState(false)
@@ -144,16 +146,20 @@ export default function GymAdminClassesPage() {
     }
   }
 
-  const closeSingleClass = async (gymClass, actionName) => {
+  const requestCloseSingleClass = (gymClass, actionName) => {
     if (isVirtualClass(gymClass)) {
       setError('Las clases proyectadas se podran operar cuando exista la instancia.')
       return
     }
-    const comment = window.prompt(actionName === 'cancel' ? 'Motivo de cancelacion' : 'Motivo de cierre anticipado')
-    if (!comment || !comment.trim()) {
+    setSingleAction({ gymClass, actionName })
+  }
+
+  const closeSingleClass = async (comment) => {
+    if (!singleAction?.gymClass || !comment?.trim()) {
       return
     }
 
+    const { gymClass, actionName } = singleAction
     setError('')
     setWorking(true)
     try {
@@ -162,6 +168,7 @@ export default function GymAdminClassesPage() {
       } else {
         await classesApi.completeEarly(gymClass.id, comment.trim())
       }
+      setSingleAction(null)
       await loadData()
     } catch (apiError) {
       const detail = apiError?.response?.data
@@ -243,7 +250,7 @@ export default function GymAdminClassesPage() {
                   <button
                     type="button"
                     disabled={!canClose || working || isVirtual}
-                    onClick={() => closeSingleClass(row, 'complete_early')}
+                    onClick={() => requestCloseSingleClass(row, 'complete_early')}
                     className="w-full rounded-lg border border-brand-orange/50 px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-orange disabled:opacity-60"
                   >
                     Cerrar anticipadamente
@@ -251,7 +258,7 @@ export default function GymAdminClassesPage() {
                   <button
                     type="button"
                     disabled={!canClose || working || isVirtual}
-                    onClick={() => closeSingleClass(row, 'cancel')}
+                    onClick={() => requestCloseSingleClass(row, 'cancel')}
                     className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 transition hover:bg-brand-red/10 disabled:opacity-60"
                   >
                     Cancelar
@@ -388,6 +395,22 @@ export default function GymAdminClassesPage() {
         confirmLabel="Eliminar"
         onCancel={() => setDeleting(null)}
         onConfirm={removeClass}
+      />
+
+      <ConfirmWithReasonDialog
+        open={Boolean(singleAction)}
+        title={singleAction?.actionName === 'cancel' ? 'Cancelar clase' : 'Cerrar anticipadamente'}
+        description={`Se actualizara ${singleAction?.gymClass?.name || 'esta clase'} preservando trazabilidad.`}
+        reasonLabel={singleAction?.actionName === 'cancel' ? 'Motivo de cancelacion' : 'Motivo de cierre anticipado'}
+        confirmLabel={singleAction?.actionName === 'cancel' ? 'Cancelar clase' : 'Cerrar anticipadamente'}
+        variant={singleAction?.actionName === 'cancel' ? 'danger' : 'warning'}
+        loading={working}
+        onCancel={() => {
+          if (!working) {
+            setSingleAction(null)
+          }
+        }}
+        onConfirm={closeSingleClass}
       />
     </div>
   )

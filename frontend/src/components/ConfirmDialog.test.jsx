@@ -62,6 +62,7 @@ describe('ConfirmDialog', () => {
     fireEvent.keyDown(window, { key: 'Escape' })
 
     expect(onCancel).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Cancelar' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Procesando...' })).toBeDisabled()
   })
 

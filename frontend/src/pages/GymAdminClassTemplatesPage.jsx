@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { advanceClassWindowsApi, branchesApi, classTemplatesApi, classTypesApi, disciplinesApi, usersApi } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import BulkActionModal from '../components/BulkActionModal'
@@ -91,10 +91,13 @@ export default function GymAdminClassTemplatesPage() {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [confirmingAdvance, setConfirmingAdvance] = useState(false)
+  const [deletingTemplate, setDeletingTemplate] = useState(null)
   const [advancingWindows, setAdvancingWindows] = useState(false)
   // Marca en rojo el selector de dias tras un submit sin dias. El <select> nativo se autovalida
   // con "required"; un dropdown propio no, asi que el estado invalido es explicito.
   const [weekdaysInvalid, setWeekdaysInvalid] = useState(false)
+  const formSectionRef = useRef(null)
+  const firstFieldRef = useRef(null)
 
   const loadData = async () => {
     setLoading(true)
@@ -126,6 +129,13 @@ export default function GymAdminClassTemplatesPage() {
     setWeekdaysInvalid(false)
   }
 
+  const focusForm = () => {
+    window.setTimeout(() => {
+      formSectionRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
+      firstFieldRef.current?.focus?.({ preventScroll: true })
+    }, 0)
+  }
+
   const startEdit = (row) => {
     setError('')
     setNotice('')
@@ -150,6 +160,7 @@ export default function GymAdminClassTemplatesPage() {
       substitute_teacher: row.substitute_teacher ? String(row.substitute_teacher) : '',
       substitute_name: row.substitute_name || '',
     })
+    focusForm()
   }
 
   const submit = async (event) => {
@@ -254,18 +265,18 @@ export default function GymAdminClassTemplatesPage() {
     }
   }
 
-  const deleteTemplate = async (row) => {
-    const confirmed = window.confirm(`Eliminar clase ${row.name || `#${row.id}`}? Solo se permite si no tiene historial ni inscritos.`)
-    if (!confirmed) {
+  const deleteTemplate = async () => {
+    if (!deletingTemplate?.id) {
       return
     }
 
-    setWorkingId(row.id)
+    setWorkingId(deletingTemplate.id)
     setError('')
     setNotice('')
     try {
-      await classTemplatesApi.remove(row.id)
+      await classTemplatesApi.remove(deletingTemplate.id)
       setNotice('Clase eliminada correctamente.')
+      setDeletingTemplate(null)
       await loadData()
     } catch (apiError) {
       setError(firstApiError(apiError?.response?.data))
@@ -388,7 +399,7 @@ export default function GymAdminClassTemplatesPage() {
               <button
                 type="button"
                 disabled={workingId === row.id}
-                onClick={() => deleteTemplate(row)}
+                onClick={() => setDeletingTemplate(row)}
                 className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 disabled:opacity-60"
               >
                 Eliminar
@@ -421,12 +432,17 @@ export default function GymAdminClassTemplatesPage() {
         }
       />
 
-      <section className="card-surface p-5 space-y-3">
+      <section ref={formSectionRef} className="card-surface p-5 space-y-3">
         <h2 className="panel-title">{editingId ? 'Editar clase' : 'Crear clase'}</h2>
+        {editingId ? (
+          <p className="rounded-lg border border-brand-orange/40 bg-brand-orange/10 px-3 py-2 text-sm text-brand-white">
+            Editando clase #{editingId}. Guarda cambios o cancela la edicion para volver a crear.
+          </p>
+        ) : null}
         <form onSubmit={submit} className="grid gap-3 md:grid-cols-2">
           <label className="space-y-1 text-sm">
             <span>Nombre visible</span>
-            <input value={form.name} onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))} className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2" />
+            <input ref={firstFieldRef} value={form.name} onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))} className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2" />
           </label>
           {editingId ? (
             <label className="space-y-1 text-sm">
@@ -687,6 +703,20 @@ export default function GymAdminClassTemplatesPage() {
         loading={advancingWindows}
         onConfirm={runAdvanceClassWindows}
         onCancel={() => setConfirmingAdvance(false)}
+      />
+
+      <ConfirmDialog
+        open={Boolean(deletingTemplate)}
+        title="Eliminar clase"
+        description={`Eliminar clase ${deletingTemplate?.name || `#${deletingTemplate?.id || ''}`}? Solo se permite si no tiene historial ni inscritos.`}
+        confirmLabel="Eliminar"
+        loading={workingId === deletingTemplate?.id}
+        onConfirm={deleteTemplate}
+        onCancel={() => {
+          if (!workingId) {
+            setDeletingTemplate(null)
+          }
+        }}
       />
     </div>
   )

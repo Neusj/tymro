@@ -1,5 +1,10 @@
-﻿import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+
+const VIEWPORT_MARGIN = 8
+const MENU_GAP = 8
+const DEFAULT_MENU_WIDTH = 176
+const DEFAULT_MENU_HEIGHT = 160
 
 function GearIcon() {
   return (
@@ -12,35 +17,57 @@ function GearIcon() {
 
 export default function RowActionsDropdown({ children, align = 'right' }) {
   const [open, setOpen] = useState(false)
-  const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0, right: 'auto' })
+  const [menuPosition, setMenuPosition] = useState({
+    top: VIEWPORT_MARGIN,
+    left: VIEWPORT_MARGIN,
+    maxHeight: DEFAULT_MENU_HEIGHT,
+  })
   const containerRef = useRef(null)
   const buttonRef = useRef(null)
   const menuRef = useRef(null)
+
+  const updatePosition = () => {
+    const buttonRect = buttonRef.current?.getBoundingClientRect()
+    if (!buttonRect || typeof window === 'undefined') {
+      return
+    }
+
+    const menuRect = menuRef.current?.getBoundingClientRect()
+    const viewportWidth = window.innerWidth || document.documentElement.clientWidth
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight
+    const availableWidth = Math.max(0, viewportWidth - VIEWPORT_MARGIN * 2)
+    const menuWidth = Math.min(menuRect?.width || DEFAULT_MENU_WIDTH, availableWidth)
+    const menuHeight = menuRect?.height || DEFAULT_MENU_HEIGHT
+    const preferredLeft = align === 'left' ? buttonRect.left : buttonRect.right - menuWidth
+    const maxLeft = Math.max(VIEWPORT_MARGIN, viewportWidth - menuWidth - VIEWPORT_MARGIN)
+    const left = Math.min(Math.max(VIEWPORT_MARGIN, preferredLeft), maxLeft)
+
+    const spaceBelow = Math.max(0, viewportHeight - buttonRect.bottom - MENU_GAP - VIEWPORT_MARGIN)
+    const spaceAbove = Math.max(0, buttonRect.top - MENU_GAP - VIEWPORT_MARGIN)
+    const openUpward = spaceBelow < menuHeight && spaceAbove > spaceBelow
+    const maxHeight = Math.max(80, Math.min(menuHeight, openUpward ? spaceAbove : spaceBelow))
+    const top = openUpward
+      ? Math.max(VIEWPORT_MARGIN, buttonRect.top - MENU_GAP - maxHeight)
+      : Math.min(buttonRect.bottom + MENU_GAP, viewportHeight - maxHeight - VIEWPORT_MARGIN)
+
+    setMenuPosition({ top, left, maxHeight })
+  }
+
+  useLayoutEffect(() => {
+    if (open) {
+      updatePosition()
+    }
+  }, [align, open])
 
   useEffect(() => {
     if (!open) {
       return undefined
     }
 
-    const updatePosition = () => {
-      const buttonRect = buttonRef.current?.getBoundingClientRect()
-      if (!buttonRect) {
-        return
-      }
-
-      const top = buttonRect.bottom + 8
-      if (align === 'left') {
-        setMenuPosition({ top, left: buttonRect.left, right: 'auto' })
-        return
-      }
-
-      setMenuPosition({
-        top,
-        left: 'auto',
-        right: Math.max(8, window.innerWidth - buttonRect.right),
-      })
+    const updateAfterLayout = () => {
+      const schedule = window.requestAnimationFrame || window.setTimeout
+      schedule(updatePosition)
     }
-
     const handleOutsideClick = (event) => {
       const clickedInsideTrigger = containerRef.current?.contains(event.target)
       const clickedInsideMenu = menuRef.current?.contains(event.target)
@@ -55,17 +82,17 @@ export default function RowActionsDropdown({ children, align = 'right' }) {
       }
     }
 
-    updatePosition()
+    updateAfterLayout()
     document.addEventListener('mousedown', handleOutsideClick)
     document.addEventListener('keydown', handleEscape)
-    window.addEventListener('resize', updatePosition)
-    window.addEventListener('scroll', updatePosition, true)
+    window.addEventListener('resize', updateAfterLayout)
+    window.addEventListener('scroll', updateAfterLayout, true)
 
     return () => {
       document.removeEventListener('mousedown', handleOutsideClick)
       document.removeEventListener('keydown', handleEscape)
-      window.removeEventListener('resize', updatePosition)
-      window.removeEventListener('scroll', updatePosition, true)
+      window.removeEventListener('resize', updateAfterLayout)
+      window.removeEventListener('scroll', updateAfterLayout, true)
     }
   }, [align, open])
 
@@ -86,8 +113,8 @@ export default function RowActionsDropdown({ children, align = 'right' }) {
         ? createPortal(
             <div
               ref={menuRef}
-              className="fixed z-[1200] min-w-[11rem] rounded-lg border border-brand-line bg-brand-soft p-2 shadow-glow"
-              style={{ top: menuPosition.top, left: menuPosition.left, right: menuPosition.right }}
+              className="fixed z-[1200] min-w-[11rem] overflow-y-auto rounded-lg border border-brand-line bg-brand-soft p-2 shadow-glow"
+              style={{ top: menuPosition.top, left: menuPosition.left, maxHeight: menuPosition.maxHeight }}
               onClick={(event) => {
                 const interactive = event.target.closest('button, a')
                 if (interactive) {

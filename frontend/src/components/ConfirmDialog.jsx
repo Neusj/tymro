@@ -1,6 +1,7 @@
-import { useEffect, useId, useRef } from 'react'
+import { useId, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import useBodyScrollLock from '../hooks/useBodyScrollLock'
+import useModalFocus from '../hooks/useModalFocus'
 
 const VARIANT_STYLES = {
   default: {
@@ -12,19 +13,6 @@ const VARIANT_STYLES = {
   warning: {
     confirm: 'bg-brand-orange text-brand-black hover:brightness-110',
   },
-}
-
-const FOCUSABLE_SELECTOR = [
-  'a[href]',
-  'button:not([disabled])',
-  'textarea:not([disabled])',
-  'input:not([disabled])',
-  'select:not([disabled])',
-  '[tabindex]:not([tabindex="-1"])',
-].join(',')
-
-function getFocusable(container) {
-  return Array.from(container?.querySelectorAll(FOCUSABLE_SELECTOR) || []).filter((element) => !element.hasAttribute('disabled'))
 }
 
 export default function ConfirmDialog({
@@ -47,60 +35,22 @@ export default function ConfirmDialog({
   const dialogRef = useRef(null)
   const confirmButtonRef = useRef(null)
   const cancelButtonRef = useRef(null)
-  const previousFocusRef = useRef(null)
   const resolvedMessage = message ?? description
   const styles = VARIANT_STYLES[variant] || VARIANT_STYLES.default
 
-  useEffect(() => {
-    if (!open) {
-      return undefined
-    }
-    previousFocusRef.current = document.activeElement
-    window.setTimeout(() => {
+  useModalFocus({
+    open,
+    containerRef: dialogRef,
+    getInitialFocus: () => {
       const target = variant === 'danger' ? cancelButtonRef.current : confirmButtonRef.current
       if (target && !target.disabled) {
-        target.focus()
-        return
+        return target
       }
-      cancelButtonRef.current?.focus()
-    }, 0)
-    return () => {
-      previousFocusRef.current?.focus?.()
-    }
-  }, [open])
-
-  useEffect(() => {
-    if (!open) {
-      return undefined
-    }
-    const handleKeyDown = (event) => {
-      if (event.key === 'Escape' && !loading) {
-        onCancel?.()
-        return
-      }
-      if (event.key !== 'Tab') {
-        return
-      }
-      const focusable = getFocusable(dialogRef.current)
-      if (focusable.length === 0) {
-        event.preventDefault()
-        return
-      }
-      const first = focusable[0]
-      const last = focusable[focusable.length - 1]
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault()
-        last.focus()
-        return
-      }
-      if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault()
-        first.focus()
-      }
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [open, loading, onCancel])
+      return cancelButtonRef.current
+    },
+    onEscape: onCancel,
+    escapeDisabled: loading,
+  })
 
   if (!open || typeof document === 'undefined') {
     return null
@@ -117,6 +67,7 @@ export default function ConfirmDialog({
     >
       <div
         ref={dialogRef}
+        tabIndex={-1}
         className="flex max-h-[90vh] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-brand-line bg-brand-soft shadow-glow animate-scale-in"
         onClick={(event) => event.stopPropagation()}
       >
@@ -129,8 +80,9 @@ export default function ConfirmDialog({
           <button
             ref={cancelButtonRef}
             type="button"
+            disabled={loading}
             onClick={onCancel}
-            className="rounded-xl border border-brand-line px-4 py-2 text-sm text-brand-muted transition hover:border-brand-orange hover:text-brand-white"
+            className="rounded-xl border border-brand-line px-4 py-2 text-sm text-brand-muted transition hover:border-brand-orange hover:text-brand-white disabled:opacity-60"
           >
             {cancelLabel}
           </button>
