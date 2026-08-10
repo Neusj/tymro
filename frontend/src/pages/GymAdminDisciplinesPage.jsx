@@ -294,8 +294,9 @@ export default function GymAdminDisciplinesPage() {
       <ConfirmDialog
         open={Boolean(deleting)}
         title="Eliminar disciplina"
-        description={`Se eliminará ${deleting?.name || 'esta disciplina'}.`}
+        message={`Se eliminará ${deleting?.name || 'esta disciplina'}.`}
         confirmLabel="Eliminar"
+        variant="danger"
         onCancel={() => setDeleting(null)}
         onConfirm={removeItem}
       />

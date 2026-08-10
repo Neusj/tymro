@@ -1,17 +1,12 @@
-import { useEffect, useId, useRef } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import useBodyScrollLock from '../hooks/useBodyScrollLock'
+import FeedbackBanner from './FeedbackBanner'
 
 const VARIANT_STYLES = {
-  default: {
-    confirm: 'bg-brand-blue text-white hover:brightness-110',
-  },
-  danger: {
-    confirm: 'bg-brand-red text-white hover:brightness-110',
-  },
-  warning: {
-    confirm: 'bg-brand-orange text-brand-black hover:brightness-110',
-  },
+  default: 'bg-brand-blue text-white hover:brightness-110',
+  danger: 'bg-brand-red text-white hover:brightness-110',
+  warning: 'bg-brand-orange text-brand-black hover:brightness-110',
 }
 
 const FOCUSABLE_SELECTOR = [
@@ -27,43 +22,48 @@ function getFocusable(container) {
   return Array.from(container?.querySelectorAll(FOCUSABLE_SELECTOR) || []).filter((element) => !element.hasAttribute('disabled'))
 }
 
-export default function ConfirmDialog({
+export default function ConfirmWithReasonDialog({
   open,
   title,
   description,
   message,
+  reasonLabel = 'Motivo',
+  placeholder = '',
+  reasonRequired = true,
   confirmLabel = 'Confirmar',
   cancelLabel = 'Cancelar',
-  variant = 'danger',
+  variant = 'warning',
+  loading = false,
+  error,
   onConfirm,
   onCancel,
-  loading = false,
-  confirmDisabled = false,
-  children,
 }) {
   useBodyScrollLock(open)
   const titleId = useId()
   const descriptionId = useId()
+  const reasonId = useId()
   const dialogRef = useRef(null)
-  const confirmButtonRef = useRef(null)
-  const cancelButtonRef = useRef(null)
+  const reasonRef = useRef(null)
   const previousFocusRef = useRef(null)
+  const [reason, setReason] = useState('')
+  const [localError, setLocalError] = useState('')
   const resolvedMessage = message ?? description
-  const styles = VARIANT_STYLES[variant] || VARIANT_STYLES.default
+  const confirmClass = VARIANT_STYLES[variant] || VARIANT_STYLES.default
+
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+    setReason('')
+    setLocalError('')
+  }, [open])
 
   useEffect(() => {
     if (!open) {
       return undefined
     }
     previousFocusRef.current = document.activeElement
-    window.setTimeout(() => {
-      const target = variant === 'danger' ? cancelButtonRef.current : confirmButtonRef.current
-      if (target && !target.disabled) {
-        target.focus()
-        return
-      }
-      cancelButtonRef.current?.focus()
-    }, 0)
+    window.setTimeout(() => reasonRef.current?.focus(), 0)
     return () => {
       previousFocusRef.current?.focus?.()
     }
@@ -98,12 +98,24 @@ export default function ConfirmDialog({
         first.focus()
       }
     }
+
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [open, loading, onCancel])
 
   if (!open || typeof document === 'undefined') {
     return null
+  }
+
+  const submit = (event) => {
+    event.preventDefault()
+    const trimmed = reason.trim()
+    if (reasonRequired && !trimmed) {
+      setLocalError('Ingresa un motivo para continuar.')
+      return
+    }
+    setLocalError('')
+    onConfirm?.(trimmed)
   }
 
   return createPortal(
@@ -115,19 +127,42 @@ export default function ConfirmDialog({
       aria-labelledby={titleId}
       aria-describedby={resolvedMessage ? descriptionId : undefined}
     >
-      <div
+      <form
         ref={dialogRef}
+        onSubmit={submit}
         className="flex max-h-[90vh] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-brand-line bg-brand-soft shadow-glow animate-scale-in"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="overflow-y-auto p-5">
-          <h3 id={titleId} className="text-lg font-semibold">{title}</h3>
-          {resolvedMessage ? <p id={descriptionId} className="mt-2 text-sm text-brand-muted">{resolvedMessage}</p> : null}
-          {children}
+        <div className="space-y-4 overflow-y-auto p-5">
+          <div>
+            <h3 id={titleId} className="text-lg font-semibold">{title}</h3>
+            {resolvedMessage ? <p id={descriptionId} className="mt-2 text-sm text-brand-muted">{resolvedMessage}</p> : null}
+          </div>
+
+          <label htmlFor={reasonId} className="block space-y-1 text-sm">
+            <span>{reasonLabel}{reasonRequired ? <span className="text-brand-red"> *</span> : null}</span>
+            <textarea
+              ref={reasonRef}
+              id={reasonId}
+              rows={4}
+              value={reason}
+              onChange={(event) => {
+                setReason(event.target.value)
+                if (localError) {
+                  setLocalError('')
+                }
+              }}
+              placeholder={placeholder}
+              disabled={loading}
+              className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2 text-sm text-brand-white placeholder:text-brand-dim disabled:opacity-60"
+            />
+          </label>
+
+          <FeedbackBanner type="error" message={error || localError} />
         </div>
+
         <div className="flex justify-end gap-2 border-t border-brand-line px-5 py-4">
           <button
-            ref={cancelButtonRef}
             type="button"
             onClick={onCancel}
             className="rounded-xl border border-brand-line px-4 py-2 text-sm text-brand-muted transition hover:border-brand-orange hover:text-brand-white"
@@ -135,16 +170,14 @@ export default function ConfirmDialog({
             {cancelLabel}
           </button>
           <button
-            ref={confirmButtonRef}
-            type="button"
-            disabled={loading || confirmDisabled}
-            onClick={onConfirm}
-            className={`rounded-xl px-4 py-2 text-sm font-semibold transition disabled:opacity-60 ${styles.confirm}`}
+            type="submit"
+            disabled={loading}
+            className={`rounded-xl px-4 py-2 text-sm font-semibold transition disabled:opacity-60 ${confirmClass}`}
           >
             {loading ? 'Procesando...' : confirmLabel}
           </button>
         </div>
-      </div>
+      </form>
     </div>,
     document.body,
   )

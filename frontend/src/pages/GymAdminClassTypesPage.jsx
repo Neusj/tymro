@@ -294,8 +294,9 @@ export default function GymAdminClassTypesPage() {
       <ConfirmDialog
         open={Boolean(deleting)}
         title="Eliminar tipo"
-        description={`Se eliminará ${deleting?.name || 'este tipo de clase'}.`}
+        message={`Se eliminará ${deleting?.name || 'este tipo de clase'}.`}
         confirmLabel="Eliminar"
+        variant="danger"
         onCancel={() => setDeleting(null)}
         onConfirm={removeType}
       />
