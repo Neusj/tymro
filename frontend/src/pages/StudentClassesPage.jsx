@@ -152,6 +152,7 @@ export default function StudentClassesPage({ mode = 'available' }) {
   // Suscripción nueva a una serie semanal (R1b): con 2+ planes usables, mismo diálogo
   // compartido antes de disparar el recurring-enroll. La reactivación no pasa por acá.
   const [pendingRecurringReserve, setPendingRecurringReserve] = useState(null)
+  const [pendingSuggestionRequest, setPendingSuggestionRequest] = useState(null)
   // Plan elegido en el selector del diálogo de confirmación (#9 T4). Se resetea al
   // abrir/cerrar cualquiera de los tres flujos de reserva.
   const [selectedPlanId, setSelectedPlanId] = useState('')
@@ -265,6 +266,15 @@ export default function StudentClassesPage({ mode = 'available' }) {
   // mandar student_plan_id (el alumno elige); con exactamente 1, se omite (lo resuelve
   // el backend); con 0 el bloqueo de siempre (hasPlanBalance) sigue vigente.
   const requiresPlanChoice = usableMemberships.length >= 2
+  const reservationLimitForPlan = (studentPlanId) => {
+    const membership = requiresPlanChoice
+      ? usableMemberships.find((item) => String(item.id) === String(studentPlanId))
+      : usableMemberships[0]
+    if (!membership) {
+      return 0
+    }
+    return membership.remaining_classes === null ? 24 : membership.remaining_classes
+  }
   const resetPlanSelection = () => setSelectedPlanId('')
 
   useEffect(() => {
@@ -351,7 +361,7 @@ export default function StudentClassesPage({ mode = 'available' }) {
       }
       await loadData()
     } catch (apiError) {
-      setError(firstApiError(apiError?.response?.data, 'No se pudo gestionar la reserva semanal automatica.'))
+      setError(firstApiError(apiError?.response?.data, 'No se pudo gestionar la reserva recurrente.'))
     } finally {
       setWorkingKey('')
     }
@@ -381,6 +391,59 @@ export default function StudentClassesPage({ mode = 'available' }) {
     resetPlanSelection()
   }
 
+  const openSuggestedReservations = async (gymClass, mode, studentPlanId) => {
+    if (!gymClass?.class_template) {
+      return
+    }
+    if (!hasPlanBalance) {
+      setError('Sin clases disponibles')
+      return
+    }
+    const limit = reservationLimitForPlan(studentPlanId)
+    if (!limit) {
+      setError('Sin clases disponibles')
+      return
+    }
+    setWorkingKey(`suggest-${mode}-${gymClass.id}`)
+    setError('')
+    setNotice('')
+    try {
+      const payload = { mode, limit }
+      if (requiresPlanChoice) {
+        payload.student_plan_id = Number(studentPlanId)
+      }
+      const response = await classTemplatesApi.reservationCandidates(gymClass.class_template, payload)
+      const candidates = Array.isArray(response?.candidates) ? response.candidates : []
+      if (!candidates.length) {
+        setError('No hay proximas clases disponibles para reservar con este plan.')
+        return
+      }
+      setPendingBulkReserve(candidates)
+    } catch (apiError) {
+      setError(firstApiError(apiError?.response?.data, 'No se pudieron buscar proximas clases.'))
+    } finally {
+      setWorkingKey('')
+    }
+  }
+
+  const handleSuggestedReservationsClick = (gymClass, mode) => {
+    if (requiresPlanChoice) {
+      resetPlanSelection()
+      setPendingSuggestionRequest({ gymClass, mode })
+      return
+    }
+    openSuggestedReservations(gymClass, mode)
+  }
+
+  const confirmPendingSuggestionRequest = async () => {
+    if (!pendingSuggestionRequest) {
+      return
+    }
+    const request = pendingSuggestionRequest
+    await openSuggestedReservations(request.gymClass, request.mode, selectedPlanId)
+    setPendingSuggestionRequest(null)
+  }
+
   const toggleRecurring = async (recurringEnrollment, nextState) => {
     setWorkingKey(`toggle-recurring-${recurringEnrollment.id}`)
     setError('')
@@ -388,7 +451,7 @@ export default function StudentClassesPage({ mode = 'available' }) {
       await recurringEnrollmentsApi.update(recurringEnrollment.id, { is_active: nextState })
       await loadData()
     } catch (apiError) {
-      setError(firstApiError(apiError?.response?.data, 'No se pudo actualizar la reserva semanal automatica.'))
+      setError(firstApiError(apiError?.response?.data, 'No se pudo actualizar la reserva recurrente.'))
     } finally {
       setWorkingKey('')
     }
@@ -605,6 +668,7 @@ export default function StudentClassesPage({ mode = 'available' }) {
           const canReserveSingle = row.status === 'scheduled' && !classStarted && !isPausedSeries
           const canReserveWithPlan = canReserveSingle && hasPlanBalance && row.reservable !== false
           const canManageRecurringHere = Boolean(row.class_template && row.status === 'scheduled' && !classStarted)
+          const canSuggestReservations = canManageRecurringHere && hasPlanBalance && row.reservable !== false
           const isRebook = existingReservation?.status === 'cancelled'
           const blockedMessage = reservationBlockedMessage(row)
 
@@ -647,35 +711,45 @@ export default function StudentClassesPage({ mode = 'available' }) {
               {row.class_template ? (
                 <div className="space-y-1 border-t border-brand-line pt-2">
                   {recurringForTemplate?.is_active ? <ValueBadge kind="reservation_kind" value="recurring" /> : null}
-                  <button
-                    type="button"
-                    disabled={
-                      !canManageRecurringHere ||
-                      (recurringForTemplate && !recurringForTemplate.can_manage_now) ||
-                      workingKey === `toggle-recurring-${recurringForTemplate?.id}` ||
-                      workingKey === `recurring-${row.id}`
-                    }
-                    onClick={() => {
-                      if (recurringForTemplate?.is_active) {
-                        toggleRecurring(recurringForTemplate, false)
-                        return
+                  {recurringForTemplate ? (
+                    <button
+                      type="button"
+                      disabled={
+                        !canManageRecurringHere ||
+                        !recurringForTemplate.can_manage_now ||
+                        workingKey === `toggle-recurring-${recurringForTemplate.id}`
                       }
-                      handleSubscribeOrReactivateClick(row)
-                    }}
-                    className="w-full rounded-lg border border-brand-orange/50 px-2.5 py-1.5 text-left text-xs text-brand-white disabled:opacity-60"
-                  >
-                    {recurringForTemplate?.is_active
-                      ? workingKey === `toggle-recurring-${recurringForTemplate.id}`
-                        ? 'Pausando...'
-                        : 'Pausar reserva semanal automatica'
-                      : workingKey === `recurring-${row.id}`
-                        ? 'Guardando...'
-                        : recurringForTemplate
-                          ? 'Reactivar reserva semanal automatica'
-                          : 'Activar reserva semanal automatica'}
-                  </button>
+                      onClick={() => toggleRecurring(recurringForTemplate, !recurringForTemplate.is_active)}
+                      className="w-full rounded-lg border border-brand-orange/50 px-2.5 py-1.5 text-left text-xs text-brand-white disabled:opacity-60"
+                    >
+                      {workingKey === `toggle-recurring-${recurringForTemplate.id}`
+                        ? 'Actualizando...'
+                        : recurringForTemplate.is_active
+                          ? 'Pausar reserva recurrente'
+                          : 'Reactivar reserva recurrente'}
+                    </button>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        disabled={!canSuggestReservations || workingKey === `suggest-same_template-${row.id}`}
+                        onClick={() => handleSuggestedReservationsClick(row, 'same_template')}
+                        className="w-full rounded-lg border border-brand-orange/50 px-2.5 py-1.5 text-left text-xs text-brand-white disabled:opacity-60"
+                      >
+                        {workingKey === `suggest-same_template-${row.id}` ? 'Buscando...' : 'Reservar proximas semanas'}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!canSuggestReservations || workingKey === `suggest-program-${row.id}`}
+                        onClick={() => handleSuggestedReservationsClick(row, 'program')}
+                        className="w-full rounded-lg border border-brand-orange/50 px-2.5 py-1.5 text-left text-xs text-brand-white disabled:opacity-60"
+                      >
+                        {workingKey === `suggest-program-${row.id}` ? 'Buscando...' : 'Reservar proximas del programa'}
+                      </button>
+                    </>
+                  )}
                   <div className="flex justify-end gap-1">
-                    {!recurringForTemplate ? <TouchTooltip text="Reserva automaticamente cada semana esta misma serie." /> : null}
+                    {!recurringForTemplate ? <TouchTooltip text="Busca clases futuras concretas hasta tu saldo disponible y las confirma por lote." /> : null}
                     {!canManageRecurringHere ? <TouchTooltip text="Solo se puede gestionar desde una clase programada y futura." /> : null}
                   </div>
                   {recurringForTemplate && !recurringForTemplate.can_manage_now && recurringForTemplate.manage_block_reason ? (
@@ -783,8 +857,8 @@ export default function StudentClassesPage({ mode = 'available' }) {
                     {workingKey === `toggle-recurring-${recurringItem.id}`
                       ? 'Actualizando...'
                       : recurringItem.is_active
-                        ? 'Pausar reserva semanal automatica'
-                        : 'Reactivar reserva semanal automatica'}
+                        ? 'Pausar reserva recurrente'
+                        : 'Reactivar reserva recurrente'}
                   </button>
                   {!recurringItem.can_manage_now && recurringItem.manage_block_reason ? (
                     <p className="text-[11px] text-brand-muted">{recurringItem.manage_block_reason}</p>
@@ -883,7 +957,7 @@ export default function StudentClassesPage({ mode = 'available' }) {
     () => ({
       available: {
         title: 'Clases disponibles',
-        subtitle: 'Reserva una clase, selecciona varias concretas o activa una reserva semanal automatica.',
+        subtitle: 'Reserva una clase, selecciona varias o busca proximas clases concretas.',
         columns: availableColumns,
         data: filteredAvailableForBooking,
         defaultSort: { key: 'start_datetime', direction: 'asc' },
@@ -923,7 +997,9 @@ export default function StudentClassesPage({ mode = 'available' }) {
         ? 'bulk'
         : pendingRecurringReserve
           ? 'recurring'
-          : null
+          : pendingSuggestionRequest
+            ? 'suggestion'
+            : null
   const showPlanSelector = pendingReserveKind !== null && requiresPlanChoice
   const confirmDialogOpen = pendingReserveKind !== null
   const confirmDialogLoading =
@@ -935,22 +1011,28 @@ export default function StudentClassesPage({ mode = 'available' }) {
           ? workingKey === 'reserve-bulk'
           : pendingReserveKind === 'recurring'
             ? workingKey === `recurring-${pendingRecurringReserve?.id}`
-            : false
+            : pendingReserveKind === 'suggestion'
+              ? workingKey === `suggest-${pendingSuggestionRequest?.mode}-${pendingSuggestionRequest?.gymClass?.id}`
+              : false
   const pendingBulkPreview = (pendingBulkReserve || []).slice(0, 6)
   const pendingBulkHiddenCount = Math.max((pendingBulkReserve?.length || 0) - pendingBulkPreview.length, 0)
   const confirmDialogTitle =
     pendingReserveKind === 'bulk'
       ? 'Confirmar reservas seleccionadas'
       : pendingReserveKind === 'recurring'
-        ? 'Reserva semanal automatica'
-        : 'Confirmar reserva'
+        ? 'Reserva recurrente'
+        : pendingReserveKind === 'suggestion'
+          ? 'Buscar proximas clases'
+          : 'Confirmar reserva'
   const confirmDialogDescription =
     pendingReserveKind === 'bulk'
       ? `Vas a reservar ${pendingBulkReserve?.length || 0} clases concretas seleccionadas.`
       : pendingReserveKind === 'recurring'
-        ? 'Vas a activar reservas automaticas futuras para esta misma serie semanal.'
-        : 'Seguro que quieres reservar esta clase? Se descontara una clase de tu plan.'
-  const confirmDialogLabel = pendingReserveKind === 'bulk' ? 'Confirmar reservas' : pendingReserveKind === 'recurring' ? 'Activar reserva semanal' : 'Reservar'
+        ? 'Vas a activar reservas recurrentes futuras para esta misma serie.'
+        : pendingReserveKind === 'suggestion'
+          ? 'Elige el plan para calcular cuantas proximas clases puedes reservar.'
+          : 'Seguro que quieres reservar esta clase? Se descontara una clase de tu plan.'
+  const confirmDialogLabel = pendingReserveKind === 'bulk' ? 'Confirmar reservas' : pendingReserveKind === 'suggestion' ? 'Buscar clases' : pendingReserveKind === 'recurring' ? 'Activar recurrencia' : 'Reservar'
   const confirmDialogDisabled = showPlanSelector && !selectedPlanId
   const handleConfirmDialogConfirm = () => {
     if (pendingReserveKind === 'single') {
@@ -965,6 +1047,9 @@ export default function StudentClassesPage({ mode = 'available' }) {
     if (pendingReserveKind === 'recurring') {
       return confirmPendingRecurringReserve()
     }
+    if (pendingReserveKind === 'suggestion') {
+      return confirmPendingSuggestionRequest()
+    }
     return undefined
   }
   const handleConfirmDialogCancel = () => {
@@ -972,12 +1057,13 @@ export default function StudentClassesPage({ mode = 'available' }) {
     setPendingRebook(null)
     setPendingBulkReserve(null)
     setPendingRecurringReserve(null)
+    setPendingSuggestionRequest(null)
     resetPlanSelection()
   }
 
   return (
     <div className="space-y-6">
-      <DashboardHeader title="Student · Mis clases" subtitle="Agenda clara para reservas individuales, multiples y semanales automaticas." />
+      <DashboardHeader title="Student · Mis clases" subtitle="Agenda clara para reservas individuales, multiples y proximas clases." />
 
       <MembershipExpiryBanner memberships={memberships} />
 

@@ -5,6 +5,7 @@ from django.utils import timezone
 
 from core.models import (
     Branch,
+    ClassType,
     ClassTemplate,
     Discipline,
     Enrollment,
@@ -26,8 +27,9 @@ RECURRING_URL = '/api/recurring-enrollments/'
 @pytest.fixture
 def world(make_organization, make_user):
     org = make_organization('Org Batch')
-    org.max_reservation_window_days = 30
-    org.save(update_fields=['max_reservation_window_days'])
+    org.max_reservation_window_days = 60
+    org.class_generation_window_days = 60
+    org.save(update_fields=['max_reservation_window_days', 'class_generation_window_days'])
     teacher = make_user('teacher-batch', organization=org, role='teacher')
     student = make_user('student-batch', organization=org, role='student')
     admin = make_user('admin-batch', organization=org, role='gym_admin')
@@ -94,6 +96,22 @@ def _template(world, gym_class):
         end_time=end_time,
         capacity=gym_class.capacity,
         start_date=timezone.localdate() - timedelta(days=1),
+    )
+
+
+def _program_template(world, *, weekday, name='Programa', start_hour=10, discipline=None, class_type=None):
+    return ClassTemplate.objects.create(
+        organization=world['org'],
+        branch=world['branch'],
+        teacher=world['teacher'],
+        discipline=discipline,
+        class_type=class_type,
+        name=name,
+        weekday=weekday,
+        start_time=time(start_hour, 0),
+        end_time=time(start_hour + 1, 0),
+        capacity=10,
+        start_date=timezone.localdate(),
     )
 
 
@@ -169,6 +187,76 @@ def test_batch_is_all_or_nothing_when_balance_runs_out(api_client, world):
     assert Enrollment.objects.filter(student=world['student']).count() == 0
     membership.refresh_from_db()
     assert membership.classes_used == 0
+
+
+def test_same_template_candidates_reserve_next_weeks_up_to_balance(api_client, world):
+    next_weekday = (timezone.localdate().weekday() + 1) % 7
+    template = _program_template(world, weekday=next_weekday, name='Kickboxing semanal')
+    membership = _plan(world, total_classes=4)
+    api_client.force_authenticate(world['student'])
+
+    candidates = api_client.post(
+        f'/api/class-templates/{template.id}/reservation-candidates/',
+        {'mode': 'same_template', 'limit': 4},
+        format='json',
+    )
+
+    assert candidates.status_code == 200, candidates.content
+    rows = candidates.json()['candidates']
+    assert len(rows) == 4
+    assert {row['class_template'] for row in rows} == {template.id}
+
+    response = api_client.post(
+        BATCH_URL,
+        {'classes': [{'gym_class': row['id']} for row in rows]},
+        format='json',
+    )
+
+    assert response.status_code == 201, response.content
+    assert response.json()['created_count'] == 4
+    membership.refresh_from_db()
+    assert membership.classes_used == 4
+
+
+def test_program_candidates_include_sibling_weekday_templates(api_client, world):
+    today_weekday = timezone.localdate().weekday()
+    weekdays = [(today_weekday + offset) % 7 for offset in (1, 3, 5)]
+    discipline = Discipline.objects.create(organization=world['org'], name='BJJ Programa')
+    class_type = ClassType.objects.create(organization=world['org'], name='Adultos')
+    templates = [
+        _program_template(
+            world,
+            weekday=weekday,
+            name='BJJ LMW',
+            discipline=discipline,
+            class_type=class_type,
+        )
+        for weekday in weekdays
+    ]
+    membership = _plan(world, total_classes=6)
+    api_client.force_authenticate(world['student'])
+
+    candidates = api_client.post(
+        f'/api/class-templates/{templates[0].id}/reservation-candidates/',
+        {'mode': 'program', 'limit': 6},
+        format='json',
+    )
+
+    assert candidates.status_code == 200, candidates.content
+    rows = candidates.json()['candidates']
+    assert len(rows) == 6
+    assert len({row['class_template'] for row in rows}) >= 2
+
+    response = api_client.post(
+        BATCH_URL,
+        {'classes': [{'gym_class': row['id']} for row in rows]},
+        format='json',
+    )
+
+    assert response.status_code == 201, response.content
+    assert response.json()['created_count'] == 6
+    membership.refresh_from_db()
+    assert membership.classes_used == 6
 
 
 def test_manual_cancellation_of_recurring_instance_is_not_reactivated(api_client, world):

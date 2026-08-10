@@ -137,6 +137,7 @@ from .services.reservations import (
     revert_consumption_for_enrollment,
     rollback_consumption_for_enrollment,
     should_refund_consumption,
+    validate_reservation_candidate_for_student,
     validate_reservation_window_for_date,
 )
 # El robot de la ventana rodante, el mismo que corre el cron diario: `AdvanceClassWindowsView` lo
@@ -3574,6 +3575,130 @@ class ClassTemplateViewSet(ModelViewSet):
         except ValueError:
             return Response({'detail': 'from_date/until_date deben usar formato YYYY-MM-DD.'}, status=status.HTTP_400_BAD_REQUEST)
         return Response(summary)
+
+    def _student_program_templates(self, template, mode):
+        if mode == 'same_template':
+            return ClassTemplate.objects.filter(pk=template.pk)
+        if mode != 'program':
+            raise ValidationError({'mode': 'Modo invalido.'})
+        return ClassTemplate.objects.filter(
+            organization_id=template.organization_id,
+            branch_id=template.branch_id,
+            teacher_id=template.teacher_id,
+            class_type_id=template.class_type_id,
+            discipline_id=template.discipline_id,
+            name=template.name,
+            start_time=template.start_time,
+            end_time=template.end_time,
+            is_active=True,
+        )
+
+    def _reservation_candidate_payload(self, gym_class):
+        return {
+            'id': gym_class.id,
+            'name': gym_class.name,
+            'class_template': gym_class.class_template_id,
+            'class_template_name': getattr(gym_class.class_template, 'name', ''),
+            'branch_name': getattr(gym_class.branch, 'name', ''),
+            'teacher_name': _user_display_name(getattr(gym_class, 'teacher', None)),
+            'discipline_name': getattr(gym_class.discipline, 'name', ''),
+            'class_type_name': getattr(gym_class.class_type, 'name', ''),
+            'start_datetime': gym_class.start_datetime,
+            'end_datetime': gym_class.end_datetime,
+            'capacity': gym_class.capacity,
+            'enrollments_count': gym_class.enrollments.filter(status='active').count(),
+            'status': gym_class.status,
+        }
+
+    @action(detail=True, methods=['post'], url_path='reservation-candidates')
+    def reservation_candidates(self, request, pk=None):
+        template = self.get_object()
+        user = request.user
+        if not _acts_as_student(user):
+            raise PermissionDenied('Este endpoint es solo para alumnos.')
+        if user.organization_id != template.organization_id:
+            raise PermissionDenied('No puedes reservar clases de otra organización.')
+
+        mode = str(request.data.get('mode') or 'same_template').strip()
+        student_plan_id = request.data.get('student_plan_id')
+        if student_plan_id in ('', None):
+            student_plan_id = None
+        try:
+            requested_limit = int(request.data.get('limit') or 0)
+        except (TypeError, ValueError):
+            requested_limit = 0
+        hard_limit = min(max(requested_limit, 1), 24) if requested_limit else 24
+
+        today = timezone.localdate()
+        window_state = reservation_window_state_for_date(template.organization, today)
+        horizon = parse_date(window_state['reservation_window_last_date'])
+        templates = list(self._student_program_templates(template, mode).order_by('weekday', 'start_time', 'id'))
+
+        for candidate_template in templates:
+            generate_instances_for_template_range(
+                template=candidate_template,
+                from_date=max(today, candidate_template.start_date),
+                until_date=horizon,
+                created_by=candidate_template.created_by,
+                skip_holidays=True,
+            )
+
+        queryset = (
+            GymClass.objects
+            .filter(
+                class_template__in=templates,
+                start_datetime__date__gte=today,
+                start_datetime__date__lte=horizon,
+            )
+            .exclude(status__in=[GymClass.Status.CANCELLED, GymClass.Status.COMPLETED, GymClass.Status.COMPLETED_EARLY])
+            .select_related('class_template', 'branch', 'teacher', 'discipline', 'class_type')
+            .order_by('start_datetime', 'id')
+        )
+
+        selected = []
+        skipped = []
+        forecast_usage = {}
+        selected_windows = []
+        for gym_class in queryset:
+            if len(selected) >= hard_limit:
+                break
+            try:
+                student_plan = validate_reservation_candidate_for_student(
+                    student=user,
+                    gym_class=gym_class,
+                    student_plan_id=student_plan_id,
+                )
+            except ReservationRuleError as exc:
+                skipped.append({'class_id': gym_class.id, 'reason': exc.code, 'detail': exc.message})
+                continue
+
+            overlaps_selected = any(
+                gym_class.start_datetime < end and gym_class.end_datetime > start
+                for start, end in selected_windows
+            )
+            if overlaps_selected:
+                skipped.append({'class_id': gym_class.id, 'reason': 'selected_time_conflict'})
+                continue
+
+            plan_state = describe_student_plan(student_plan, timezone.localtime(gym_class.start_datetime).date())
+            used = forecast_usage.get(student_plan.id, 0)
+            if plan_state.remaining_classes is not None and used >= plan_state.remaining_classes:
+                skipped.append({'class_id': gym_class.id, 'reason': 'plan_balance_limit'})
+                continue
+
+            forecast_usage[student_plan.id] = used + 1
+            selected_windows.append((gym_class.start_datetime, gym_class.end_datetime))
+            selected.append(self._reservation_candidate_payload(gym_class))
+
+        return Response({
+            'mode': mode,
+            'created_count': 0,
+            'candidates': selected,
+            'candidate_count': len(selected),
+            'skipped': skipped[:20],
+            'limit': hard_limit,
+            'reservation_window_last_date': window_state['reservation_window_last_date'],
+        })
 
     @action(detail=True, methods=['post'], url_path='recurring-enroll')
     def recurring_enroll(self, request, pk=None):

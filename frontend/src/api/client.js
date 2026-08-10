@@ -421,6 +421,10 @@ export const classTemplatesApi = {
     const { data } = await api.post(`/class-templates/${id}/recurring-enroll/`, payload)
     return data
   },
+  reservationCandidates: async (id, payload = {}) => {
+    const { data } = await api.post(`/class-templates/${id}/reservation-candidates/`, payload)
+    return data
+  },
 }
 
 // Botón "actualizar clases" del gym_admin (panel de series recurrentes): dispara a

@@ -701,6 +701,18 @@ def _validate_reservation_rules(*, student, gym_class, existing=None, require_pl
     )
 
 
+def validate_reservation_candidate_for_student(*, student, gym_class, student_plan_id=None):
+    """Valida una reserva futura sin escribirla y devuelve el plan que la pagaria."""
+    existing = Enrollment.objects.filter(gym_class=gym_class, student=student).first()
+    return _validate_reservation_rules(
+        student=student,
+        gym_class=gym_class,
+        existing=existing,
+        require_plan=True,
+        student_plan_id=student_plan_id,
+    )
+
+
 @transaction.atomic
 def reserve_student_in_class(*, student, gym_class, recurring_enrollment=None, require_plan=True, is_trial=False, student_plan_id=None):
     gym_class = GymClass.objects.select_related(
