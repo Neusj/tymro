@@ -424,7 +424,7 @@ export default function GymAdminClassTemplatesPage() {
               type="button"
               disabled={advancingWindows}
               onClick={() => setConfirmingAdvance(true)}
-              className="rounded-xl bg-brand-orange px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+              className="btn-accent"
             >
               {advancingWindows ? 'Actualizando...' : 'Actualizar clases'}
             </button>
@@ -442,12 +442,12 @@ export default function GymAdminClassTemplatesPage() {
         <form onSubmit={submit} className="grid gap-3 md:grid-cols-2">
           <label className="space-y-1 text-sm">
             <span>Nombre visible</span>
-            <input ref={firstFieldRef} value={form.name} onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))} className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2" />
+            <input ref={firstFieldRef} value={form.name} onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))} className="field" />
           </label>
           {editingId ? (
             <label className="space-y-1 text-sm">
               <span>Dia semana</span>
-              <select value={form.weekday} onChange={(event) => setForm((prev) => ({ ...prev, weekday: event.target.value }))} className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2">
+              <select value={form.weekday} onChange={(event) => setForm((prev) => ({ ...prev, weekday: event.target.value }))} className="field">
                 {weekdayLabels.map((label, index) => (
                   <option key={label} value={index}>
                     {label}
@@ -473,7 +473,7 @@ export default function GymAdminClassTemplatesPage() {
           )}
           <label className="space-y-1 text-sm">
             <span>Sucursal</span>
-            <select required value={form.branch} onChange={(event) => setForm((prev) => ({ ...prev, branch: event.target.value }))} className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2">
+            <select required value={form.branch} onChange={(event) => setForm((prev) => ({ ...prev, branch: event.target.value }))} className="field">
               <option value="">Seleccionar</option>
               {branches.map((branch) => (
                 <option key={branch.id} value={branch.id}>
@@ -484,7 +484,7 @@ export default function GymAdminClassTemplatesPage() {
           </label>
           <label className="space-y-1 text-sm">
             <span>Profesor</span>
-            <select required value={form.teacher} onChange={(event) => setForm((prev) => ({ ...prev, teacher: event.target.value }))} className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2">
+            <select required value={form.teacher} onChange={(event) => setForm((prev) => ({ ...prev, teacher: event.target.value }))} className="field">
               <option value="">Seleccionar</option>
               {teachers.map((teacher) => (
                 <option key={teacher.id} value={teacher.id}>
@@ -495,7 +495,7 @@ export default function GymAdminClassTemplatesPage() {
           </label>
           <label className="space-y-1 text-sm">
             <span>Tipo</span>
-            <select required value={form.class_type} onChange={(event) => setForm((prev) => ({ ...prev, class_type: event.target.value }))} className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2">
+            <select required value={form.class_type} onChange={(event) => setForm((prev) => ({ ...prev, class_type: event.target.value }))} className="field">
               <option value="">Seleccionar</option>
               {classTypes.map((classType) => (
                 <option key={classType.id} value={classType.id}>
@@ -506,7 +506,7 @@ export default function GymAdminClassTemplatesPage() {
           </label>
           <label className="space-y-1 text-sm">
             <span>Disciplina</span>
-            <select required value={form.discipline} onChange={(event) => setForm((prev) => ({ ...prev, discipline: event.target.value }))} className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2">
+            <select required value={form.discipline} onChange={(event) => setForm((prev) => ({ ...prev, discipline: event.target.value }))} className="field">
               <option value="">Seleccionar</option>
               {disciplines.map((discipline) => (
                 <option key={discipline.id} value={discipline.id}>
@@ -517,15 +517,15 @@ export default function GymAdminClassTemplatesPage() {
           </label>
           <label className="space-y-1 text-sm">
             <span>Hora inicio</span>
-            <input required type="time" value={form.start_time} onChange={(event) => setForm((prev) => ({ ...prev, start_time: event.target.value }))} className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2" />
+            <input required type="time" value={form.start_time} onChange={(event) => setForm((prev) => ({ ...prev, start_time: event.target.value }))} className="field" />
           </label>
           <label className="space-y-1 text-sm">
             <span>Hora termino</span>
-            <input required type="time" value={form.end_time} onChange={(event) => setForm((prev) => ({ ...prev, end_time: event.target.value }))} className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2" />
+            <input required type="time" value={form.end_time} onChange={(event) => setForm((prev) => ({ ...prev, end_time: event.target.value }))} className="field" />
           </label>
           <label className="space-y-1 text-sm">
             <span>Capacidad</span>
-            <input required min={1} type="number" value={form.capacity} onChange={(event) => setForm((prev) => ({ ...prev, capacity: event.target.value }))} className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2" />
+            <input required min={1} type="number" value={form.capacity} onChange={(event) => setForm((prev) => ({ ...prev, capacity: event.target.value }))} className="field" />
           </label>
           {editingId ? null : (
             <p className="md:col-span-2 text-xs text-brand-muted">
@@ -534,7 +534,7 @@ export default function GymAdminClassTemplatesPage() {
           )}
           <label className="space-y-1 text-sm md:col-span-2">
             <span>Descripcion (opcional)</span>
-            <textarea value={form.description} onChange={(event) => setForm((prev) => ({ ...prev, description: event.target.value }))} className="min-h-[80px] w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2" />
+            <textarea value={form.description} onChange={(event) => setForm((prev) => ({ ...prev, description: event.target.value }))} className="field min-h-[80px]" />
           </label>
           <label className="md:col-span-2 flex items-start gap-3 rounded-lg border border-brand-line bg-black/20 px-3 py-3 text-sm">
             <input
@@ -608,7 +608,7 @@ export default function GymAdminClassTemplatesPage() {
                       required
                       value={form.substitute_teacher}
                       onChange={(event) => setForm((prev) => ({ ...prev, substitute_teacher: event.target.value }))}
-                      className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
+                      className="field"
                     >
                       <option value="">Seleccionar</option>
                       {teachers
@@ -628,7 +628,7 @@ export default function GymAdminClassTemplatesPage() {
                       value={form.substitute_name}
                       onChange={(event) => setForm((prev) => ({ ...prev, substitute_name: event.target.value }))}
                       placeholder="Nombre y apellido"
-                      className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
+                      className="field"
                     />
                   </label>
                 )}
@@ -637,11 +637,11 @@ export default function GymAdminClassTemplatesPage() {
           </div>
           <div className="md:col-span-2 flex justify-end gap-2">
             {editingId ? (
-              <button type="button" onClick={resetForm} className="rounded-xl border border-brand-line px-4 py-2 text-sm font-semibold text-brand-white">
+              <button type="button" onClick={resetForm} className="btn-ghost">
                 Cancelar edicion
               </button>
             ) : null}
-            <button type="submit" disabled={saving} className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white disabled:opacity-60">
+            <button type="submit" disabled={saving} className="btn-primary">
               {saving ? 'Guardando...' : editingId ? 'Guardar cambios' : 'Guardar y generar clases'}
             </button>
           </div>
@@ -650,14 +650,14 @@ export default function GymAdminClassTemplatesPage() {
         {notice ? <p className="rounded-lg border border-brand-blue/40 bg-brand-blue/10 px-3 py-2 text-sm text-brand-white">{notice}</p> : null}
       </section>
 
-      <section className="card-surface p-5">
-        <div className="mb-4 flex items-center justify-between gap-3">
+      <section className="space-y-3">
+        <div className="flex items-center justify-between gap-3">
           <h2 className="panel-title">Clases programadas</h2>
           <button
             type="button"
             disabled={!selectedIds.length}
             onClick={() => setBulkModalOpen(true)}
-            className="rounded-lg border border-brand-orange px-3 py-2 text-xs font-semibold text-brand-white disabled:opacity-50"
+            className="btn-ghost text-xs"
           >
             Acciones masivas ({selectedIds.length})
           </button>

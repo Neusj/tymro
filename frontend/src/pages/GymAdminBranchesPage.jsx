@@ -170,7 +170,7 @@ function BranchPaymentAccountItem({ branch }) {
                 type="button"
                 onClick={() => setConfirmingDisconnect(true)}
                 disabled={disconnecting}
-                className="rounded-xl border border-brand-red/50 bg-transparent px-4 py-2 text-sm font-semibold text-red-200 transition hover:border-brand-red hover:bg-brand-red/10 disabled:cursor-not-allowed disabled:opacity-60"
+                className="btn-danger"
               >
                 Desconectar
               </button>
@@ -328,14 +328,14 @@ export default function GymAdminBranchesPage() {
         subtitle="CRUD de sucursales dentro de tu organización."
         extra={
           canManage ? (
-            <button type="button" onClick={openCreate} className="rounded-xl bg-brand-orange px-4 py-2 text-sm font-semibold text-white">
+            <button type="button" onClick={openCreate} className="btn-accent">
               Nueva sucursal
             </button>
           ) : null
         }
       />
 
-      <section className="card-surface p-5">
+      <section>
         <DataTable columns={columns} data={branches} />
       </section>
 
@@ -364,19 +364,19 @@ export default function GymAdminBranchesPage() {
               required
               value={form.name}
               onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
-              className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
+              className="field"
             />
           </label>
           <label className="space-y-1 text-sm">
             <span>Código</span>
-            <input value={form.code} onChange={(event) => setForm((prev) => ({ ...prev, code: event.target.value }))} className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2" />
+            <input value={form.code} onChange={(event) => setForm((prev) => ({ ...prev, code: event.target.value }))} className="field" />
           </label>
           <label className="space-y-1 text-sm">
             <span>Dirección</span>
             <input
               value={form.address}
               onChange={(event) => setForm((prev) => ({ ...prev, address: event.target.value }))}
-              className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
+              className="field"
             />
           </label>
           <label className="space-y-1 text-sm">
@@ -385,7 +385,7 @@ export default function GymAdminBranchesPage() {
               placeholder="#dc2626"
               value={form.primary_color}
               onChange={(event) => setForm((prev) => ({ ...prev, primary_color: event.target.value }))}
-              className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
+              className="field"
             />
           </label>
           <label className="space-y-1 text-sm">
@@ -394,7 +394,7 @@ export default function GymAdminBranchesPage() {
               placeholder="#2563eb"
               value={form.secondary_color}
               onChange={(event) => setForm((prev) => ({ ...prev, secondary_color: event.target.value }))}
-              className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
+              className="field"
             />
           </label>
           <label className="space-y-1 text-sm">
@@ -403,11 +403,11 @@ export default function GymAdminBranchesPage() {
               type="file"
               accept="image/*"
               onChange={(event) => setForm((prev) => ({ ...prev, logo: event.target.files?.[0] || null }))}
-              className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
+              className="field"
             />
           </label>
           <div className="flex justify-end">
-            <button type="submit" className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white">
+            <button type="submit" className="btn-primary">
               Guardar
             </button>
           </div>

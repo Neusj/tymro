@@ -645,15 +645,15 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
         </FilterPanel>
       </section>
 
-      <section className="card-surface p-5">
-        <div className="mb-4 flex items-center justify-between gap-3">
+      <section className="space-y-3">
+        <div className="flex items-center justify-between gap-3">
           <h2 className="panel-title">{mode === 'history' ? 'Detalle de clases realizadas (filtrado)' : 'Detalle de proximas clases (filtrado)'}</h2>
           {mode === 'upcoming' ? (
             <button
               type="button"
               disabled={!selectedIds.length}
               onClick={() => setBulkModalOpen(true)}
-              className="rounded-lg border border-brand-orange px-3 py-2 text-xs font-semibold text-brand-white disabled:opacity-50"
+              className="btn-ghost text-xs"
             >
               Finalizar/Cancelar ({selectedIds.length})
             </button>
@@ -673,8 +673,8 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
       </section>
 
       {mode === 'upcoming' ? (
-        <section className="card-surface p-5">
-          <div className="mb-4 flex items-center justify-between gap-3">
+        <section className="space-y-3">
+          <div className="flex items-center justify-between gap-3">
             <h2 className="panel-title">Clases disponibles para cubrir</h2>
           </div>
           <DataTable
@@ -831,7 +831,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
                 type="button"
                 disabled={working || attendanceStudents.length === 0}
                 onClick={saveAttendance}
-                className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                className="btn-primary"
               >
                 {working ? 'Guardando...' : 'Guardar asistencia'}
               </button>
@@ -861,7 +861,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
               value={enrollSearch}
               onChange={(event) => setEnrollSearch(event.target.value)}
               placeholder="Nombre, username o email"
-              className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
+              className="field"
             />
           </label>
 
@@ -898,7 +898,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
               type="button"
               disabled={working || enrollSelectedIds.length === 0}
               onClick={submitEnrollments}
-              className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+              className="btn-primary"
             >
               {working ? 'Inscribiendo...' : 'Inscribir seleccionados'}
             </button>
@@ -914,7 +914,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
                 setEnrolledSelectedIds([])
                 setEnrolledSearch('')
               }}
-              className="rounded-xl border border-brand-line px-4 py-2 text-sm font-semibold text-brand-white disabled:opacity-60"
+              className="btn-ghost"
             >
               Ver inscritos
             </button>
@@ -941,7 +941,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
               value={enrolledSearch}
               onChange={(event) => setEnrolledSearch(event.target.value)}
               placeholder="Nombre, username o email"
-              className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
+              className="field"
             />
           </label>
 
@@ -980,7 +980,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
                 setEnrollSelectedIds([])
                 setEnrollSearch('')
               }}
-              className="rounded-xl border border-brand-line px-4 py-2 text-sm font-semibold text-brand-white disabled:opacity-60"
+              className="btn-ghost"
             >
               Inscribir alumnos
             </button>
@@ -988,7 +988,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
               type="button"
               disabled={working || enrolledSelectedIds.length === 0}
               onClick={removeSelectedEnrollments}
-              className="rounded-xl bg-brand-red px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+              className="btn-danger"
             >
               {working ? 'Quitando...' : 'Quitar seleccionados'}
             </button>

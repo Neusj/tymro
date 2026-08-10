@@ -1096,7 +1096,7 @@ export default function StudentClassesPage({ mode = 'available' }) {
                 type="button"
                 disabled={selectedAvailable.length === 0 || workingKey === 'reserve-bulk' || !hasPlanBalance}
                 onClick={reserveSelectedAvailable}
-                className="rounded-lg border border-brand-blue px-2.5 py-1.5 text-brand-white disabled:opacity-60"
+                className="btn-primary text-xs"
                 title={!hasPlanBalance ? 'Sin clases disponibles' : ''}
               >
                 {workingKey === 'reserve-bulk' ? 'Reservando seleccion...' : 'Reservar seleccionadas'}
@@ -1122,7 +1122,7 @@ export default function StudentClassesPage({ mode = 'available' }) {
                 type="button"
                 disabled={cancellableSelectedCount === 0 || workingKey === 'cancel-bulk'}
                 onClick={cancelSelectedReservations}
-                className="rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-red-200 disabled:opacity-60"
+                className="btn-danger text-xs"
               >
                 {workingKey === 'cancel-bulk' ? 'Cancelando seleccion...' : 'Cancelar seleccionadas'}
               </button>
@@ -1133,9 +1133,9 @@ export default function StudentClassesPage({ mode = 'available' }) {
         {mode === 'history' ? renderClassFilters(historyFilters, setHistoryFilters, historyFilterOptions) : null}
       </section>
 
-      <section className="card-surface p-5">
+      <section className="space-y-3">
         <h2 className="panel-title mb-1">{activeView.title}</h2>
-        <p className="mb-4 text-xs text-brand-muted">{activeView.subtitle}</p>
+        <p className="text-xs text-brand-muted">{activeView.subtitle}</p>
         <DataTable
           columns={activeView.columns}
           data={activeView.data}
@@ -1181,7 +1181,7 @@ export default function StudentClassesPage({ mode = 'available' }) {
               id="reserve-plan-select"
               value={selectedPlanId}
               onChange={(event) => setSelectedPlanId(event.target.value)}
-              className="w-full rounded-lg border border-brand-line bg-black/20 px-3 py-2 text-sm text-brand-white"
+              className="field bg-black/20"
             >
               <option value="">Selecciona un plan</option>
               {usableMemberships.map((membership) => (

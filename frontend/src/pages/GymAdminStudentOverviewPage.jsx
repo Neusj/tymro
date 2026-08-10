@@ -463,7 +463,7 @@ export default function GymAdminStudentOverviewPage() {
                 disabled={studentsLoading}
                 value={studentId}
                 onChange={(event) => selectStudent(event.target.value)}
-                className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
+                className="field"
               >
                 <option value="">Seleccionar alumno</option>
                 {students.map((item) => (
@@ -477,7 +477,7 @@ export default function GymAdminStudentOverviewPage() {
               <select
                 value={period}
                 onChange={(event) => setPeriod(event.target.value)}
-                className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
+                className="field"
               >
                 {PERIOD_OPTIONS.map((option) => (
                   <option key={option.value} value={option.value}>{option.label}</option>
@@ -495,7 +495,7 @@ export default function GymAdminStudentOverviewPage() {
                 type="date"
                 value={customStart}
                 onChange={(event) => setCustomStart(event.target.value)}
-                className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
+                className="field"
               />
             </label>
             <label className="block space-y-1 text-sm">
@@ -504,7 +504,7 @@ export default function GymAdminStudentOverviewPage() {
                 type="date"
                 value={customEnd}
                 onChange={(event) => setCustomEnd(event.target.value)}
-                className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
+                className="field"
               />
             </label>
           </div>

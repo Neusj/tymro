@@ -303,7 +303,7 @@ export default function GymAdminClassesPage() {
             // recurrentes (/gym-admin/class-templates), que es la unica que soporta multi-dia. La
             // pantalla puntual (/gym-admin/classes/create) queda inerte pero viva: se decide en el
             // rediseno si se elimina o se fusiona con la de series.
-            <Link to="/gym-admin/class-templates" className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white">
+            <Link to="/gym-admin/class-templates" className="btn-primary">
               Crear clase
             </Link>
           ) : null
@@ -338,21 +338,21 @@ export default function GymAdminClassesPage() {
         </FilterPanel>
       </section>
 
-      <section className="card-surface p-5">
-        <div className="mb-4 flex items-center justify-between gap-3">
+      <section className="space-y-3">
+        <div className="flex items-center justify-between gap-3">
           <h2 className="panel-title">Detalle de clases (filtrado)</h2>
           {canManage ? (
             <button
               type="button"
               disabled={!selectedIds.length}
               onClick={() => setBulkModalOpen(true)}
-              className="rounded-lg border border-brand-orange px-3 py-2 text-xs font-semibold text-brand-white disabled:opacity-50"
+              className="btn-ghost text-xs"
             >
               Acciones masivas ({selectedIds.length})
             </button>
           ) : null}
         </div>
-        {error ? <p className="mb-3 rounded-lg border border-brand-red/50 bg-brand-red/10 px-3 py-2 text-sm text-red-200">{error}</p> : null}
+        {error ? <p className="rounded-lg border border-brand-red/50 bg-brand-red/10 px-3 py-2 text-sm text-red-200">{error}</p> : null}
         <DataTable
           columns={columns}
           data={classes}

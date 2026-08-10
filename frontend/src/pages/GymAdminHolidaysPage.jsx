@@ -171,15 +171,15 @@ export default function GymAdminHolidaysPage() {
           <form onSubmit={submit} className="grid gap-3 md:grid-cols-2">
             <label className="space-y-1 text-sm">
               <span>Fecha</span>
-              <input ref={firstFieldRef} required type="date" value={form.date} onChange={(event) => setForm((prev) => ({ ...prev, date: event.target.value }))} className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2" />
+              <input ref={firstFieldRef} required type="date" value={form.date} onChange={(event) => setForm((prev) => ({ ...prev, date: event.target.value }))} className="field" />
             </label>
             <label className="space-y-1 text-sm">
               <span>Nombre</span>
-              <input required value={form.name} onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))} className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2" />
+              <input required value={form.name} onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))} className="field" />
             </label>
             <label className="space-y-1 text-sm">
               <span>Ambito</span>
-              <select value={form.scope} onChange={(event) => setForm((prev) => ({ ...prev, scope: event.target.value, branch: '' }))} className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2">
+              <select value={form.scope} onChange={(event) => setForm((prev) => ({ ...prev, scope: event.target.value, branch: '' }))} className="field">
                 <option value="organization">Organizacion</option>
                 <option value="branch">Sucursal</option>
               </select>
@@ -190,7 +190,7 @@ export default function GymAdminHolidaysPage() {
             {form.scope === 'branch' ? (
               <label className="space-y-1 text-sm">
                 <span>Sucursal</span>
-                <select required value={form.branch} onChange={(event) => setForm((prev) => ({ ...prev, branch: event.target.value }))} className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2">
+                <select required value={form.branch} onChange={(event) => setForm((prev) => ({ ...prev, branch: event.target.value }))} className="field">
                   <option value="">Seleccionar</option>
                   {branches.map((branch) => (
                     <option key={branch.id} value={branch.id}>
@@ -202,11 +202,11 @@ export default function GymAdminHolidaysPage() {
             ) : null}
             <div className="md:col-span-2 flex justify-end gap-2">
               {editingId ? (
-                <button type="button" onClick={resetForm} className="rounded-xl border border-brand-line px-4 py-2 text-sm font-semibold text-brand-white">
+                <button type="button" onClick={resetForm} className="btn-ghost">
                   Cancelar
                 </button>
               ) : null}
-              <button type="submit" disabled={saving} className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white disabled:opacity-60">
+              <button type="submit" disabled={saving} className="btn-primary">
                 {saving ? 'Guardando...' : editingId ? 'Guardar cambios' : 'Crear festivo'}
               </button>
             </div>
