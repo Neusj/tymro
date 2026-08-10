@@ -43,7 +43,7 @@ from .models import (
     TrialFollowupConfiguration,
 )
 from .services.plans import money, quote_student_plan_assignment, describe_student_plan
-from .services.recurrence import create_enrollments_for_recurring_subscription
+from .services.recurrence import create_enrollments_for_recurring_subscription, recurring_skip_reason_for_instance
 from .services.reservations import (
     REASON_PLAN_NOT_FOUND,
     ReservationRuleError,
@@ -1566,6 +1566,7 @@ class RecurringEnrollmentSerializer(serializers.ModelSerializer):
     template_end_time = serializers.TimeField(source='class_template.end_time', read_only=True)
     last_sync = serializers.SerializerMethodField()
     next_class_start = serializers.SerializerMethodField()
+    recent_skips = serializers.SerializerMethodField()
     can_manage_now = serializers.SerializerMethodField()
     manage_block_reason = serializers.SerializerMethodField()
     manage_policy_message = serializers.SerializerMethodField()
@@ -1607,6 +1608,7 @@ class RecurringEnrollmentSerializer(serializers.ModelSerializer):
             'updated_at',
             'last_sync',
             'next_class_start',
+            'recent_skips',
             'can_manage_now',
             'manage_block_reason',
             'manage_policy_message',
@@ -1663,6 +1665,23 @@ class RecurringEnrollmentSerializer(serializers.ModelSerializer):
     def get_next_class_start(self, obj):
         next_class = self._next_applicable_class(obj)
         return next_class.start_datetime if next_class else None
+
+    def get_recent_skips(self, obj):
+        now = timezone.now()
+        queryset = obj.class_template.instances.filter(start_datetime__gt=now).exclude(status__in=TERMINAL_CLASS_STATUSES)
+        queryset = queryset.filter(start_datetime__date__gte=obj.start_date)
+        if obj.end_date:
+            queryset = queryset.filter(start_datetime__date__lte=obj.end_date)
+        result = []
+        for gym_class in queryset.order_by('start_datetime')[:5]:
+            reason = recurring_skip_reason_for_instance(obj, gym_class)
+            if reason:
+                result.append({
+                    'class_id': gym_class.id,
+                    'class_start': gym_class.start_datetime,
+                    'code': reason,
+                })
+        return result
 
     def get_can_manage_now(self, obj):
         return self._manage_state(obj)[0]

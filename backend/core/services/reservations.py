@@ -34,6 +34,10 @@ def reservation_error_payload(exc):
     return payload
 
 
+def reservation_date_for_class(gym_class):
+    return timezone.localtime(gym_class.start_datetime).date()
+
+
 def max_reservation_window_days(organization):
     days = getattr(organization, 'max_reservation_window_days', None)
     if days is None:
@@ -61,7 +65,7 @@ def reservation_window_state_for_date(organization, target_date, today=None):
 
 
 def reservation_window_state_for_class(gym_class, today=None):
-    target_date = timezone.localtime(gym_class.start_datetime).date()
+    target_date = reservation_date_for_class(gym_class)
     return reservation_window_state_for_date(gym_class.organization, target_date, today=today)
 
 
@@ -103,6 +107,11 @@ REASON_PLAN_CHOICE_REQUIRED = 'plan_choice_required'
 # `resolve_student_plan_for_recurring_enrollment`): no es "el plan no sirve", es "ese id no
 # existe en esta organización".
 REASON_PLAN_NOT_FOUND = 'plan_not_found'
+PLAN_RETRYABLE_CODES = {
+    REASON_CHOSEN_PLAN_UNAVAILABLE,
+    REASON_PLAN_UNAVAILABLE,
+    'plan_branch_mismatch',
+}
 
 CHOSEN_PLAN_UNAVAILABLE_MESSAGE = 'El plan elegido no está disponible.'
 PLAN_CHOICE_REQUIRED_MESSAGE = 'Tienes más de un plan vigente. Elige con cuál reservar.'
@@ -346,6 +355,37 @@ def validate_plan_branch_for_class(student_plan, gym_class):
             f'Tu plan es exclusivo de {plan.branch.name} y no cubre las clases de esta sucursal.',
             code='plan_branch_mismatch',
         )
+
+
+def validate_plan_compatibility_for_class(student_plan, gym_class):
+    """Punto único para futuras reglas plan-disciplina/tipo.
+
+    TYMRO todavía no modela compatibilidad de planes por disciplina o tipo de clase. La
+    reserva pasa por este helper para que esa regla pueda entrar luego sin hardcodear
+    supuestos en cada flujo.
+    """
+    return None
+
+
+def validate_student_plan_for_class(student_plan, gym_class):
+    state = describe_student_plan(student_plan, reservation_date_for_class(gym_class))
+    if not state.is_usable:
+        raise ReservationRuleError(
+            CHOSEN_PLAN_UNAVAILABLE_MESSAGE,
+            code=REASON_CHOSEN_PLAN_UNAVAILABLE,
+        )
+    validate_plan_branch_for_class(student_plan, gym_class)
+    validate_plan_compatibility_for_class(student_plan, gym_class)
+    return student_plan
+
+
+def resolve_student_plan_for_class(student, *, gym_class, student_plan_id=None):
+    student_plan = resolve_student_plan_for_reservation(
+        student,
+        student_plan_id=student_plan_id,
+        on_date=reservation_date_for_class(gym_class),
+    )
+    return validate_student_plan_for_class(student_plan, gym_class)
 
 
 def get_enrollment_student_plan(enrollment):
@@ -654,14 +694,34 @@ def _validate_reservation_rules(*, student, gym_class, existing=None, require_pl
     if not require_plan:
         return None
 
-    student_plan = resolve_student_plan_for_reservation(student, student_plan_id=student_plan_id)
-    validate_plan_branch_for_class(student_plan, gym_class)
-    return student_plan
+    return resolve_student_plan_for_class(
+        student,
+        gym_class=gym_class,
+        student_plan_id=student_plan_id,
+    )
 
 
 @transaction.atomic
 def reserve_student_in_class(*, student, gym_class, recurring_enrollment=None, require_plan=True, is_trial=False, student_plan_id=None):
-    existing = Enrollment.objects.filter(gym_class=gym_class, student=student).first()
+    gym_class = GymClass.objects.select_related(
+        'organization', 'branch', 'class_template', 'discipline', 'class_type'
+    ).select_for_update(of=('self',)).get(pk=gym_class.pk)
+    existing = (
+        Enrollment.objects
+        .select_for_update()
+        .filter(gym_class=gym_class, student=student)
+        .first()
+    )
+    if (
+        recurring_enrollment is not None
+        and existing is not None
+        and existing.status == 'cancelled'
+        and existing.recurring_resync_blocked
+    ):
+        raise ReservationRuleError(
+            'Esta instancia fue cancelada manualmente.',
+            code='manual_recurring_cancellation',
+        )
     student_plan = _validate_reservation_rules(
         student=student,
         gym_class=gym_class,
@@ -669,11 +729,20 @@ def reserve_student_in_class(*, student, gym_class, recurring_enrollment=None, r
         require_plan=require_plan,
         student_plan_id=student_plan_id,
     )
+    if student_plan is not None:
+        student_plan = (
+            StudentPlan.objects
+            .select_for_update()
+            .select_related('plan', 'user')
+            .get(pk=student_plan.pk)
+        )
+        validate_student_plan_for_class(student_plan, gym_class)
 
     if existing:
         existing.status = 'active'
         existing.recurring_enrollment = recurring_enrollment or existing.recurring_enrollment
-        update_fields = ['status', 'recurring_enrollment', 'updated_at']
+        existing.recurring_resync_blocked = False
+        update_fields = ['status', 'recurring_enrollment', 'recurring_resync_blocked', 'updated_at']
         if is_trial and not existing.is_trial:
             existing.is_trial = True
             update_fields.append('is_trial')
@@ -702,10 +771,14 @@ def reserve_student_in_class(*, student, gym_class, recurring_enrollment=None, r
 
 
 @transaction.atomic
-def cancel_enrollment_with_refund(enrollment):
+def cancel_enrollment_with_refund(enrollment, *, block_recurring_resync=False):
     rollback_consumption_for_enrollment(enrollment)
     enrollment.status = 'cancelled'
-    enrollment.save(update_fields=['status', 'updated_at'])
+    update_fields = ['status', 'updated_at']
+    if block_recurring_resync and enrollment.recurring_enrollment_id:
+        enrollment.recurring_resync_blocked = True
+        update_fields.append('recurring_resync_blocked')
+    enrollment.save(update_fields=update_fields)
     return enrollment
 
 

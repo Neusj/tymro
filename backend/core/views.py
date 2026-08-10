@@ -3957,11 +3957,16 @@ class RecurringEnrollmentViewSet(ModelViewSet):
 
     def perform_destroy(self, instance):
         user = self.request.user
-        if _is_superadmin(user):
+
+        def _cancel_and_delete():
+            cancel_future_recurring_enrollments(instance)
             instance.delete()
+
+        if _is_superadmin(user):
+            _cancel_and_delete()
             return
         if roles.is_org_admin(user) and instance.class_template.organization_id == user.organization_id:
-            instance.delete()
+            _cancel_and_delete()
             return
         if _is_student(user) and (
             instance.student_id == user.id
@@ -3972,8 +3977,7 @@ class RecurringEnrollmentViewSet(ModelViewSet):
             if not can_modify:
                 raise PermissionDenied(reason)
 
-            cancel_future_recurring_enrollments(instance)
-            instance.delete()
+            _cancel_and_delete()
             return
         raise PermissionDenied('No tienes permisos para eliminar esta recurrencia.')
 
@@ -4097,8 +4101,116 @@ class EnrollmentViewSet(ModelViewSet):
             if enrollment.status != 'active':
                 return Response({'detail': 'La reserva ya esta cancelada.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        cancel_enrollment_with_refund(enrollment)
+        cancel_enrollment_with_refund(enrollment, block_recurring_resync=True)
         return Response(self.get_serializer(enrollment).data)
+
+    class BatchReservationError(Exception):
+        def __init__(self, errors):
+            self.errors = errors
+
+    def _batch_reservation_reference(self, raw_item, index):
+        if not isinstance(raw_item, dict):
+            raise ValidationError({'classes': f'La referencia #{index + 1} debe ser un objeto.'})
+        if self._request_has_real_gym_class(raw_item):
+            gym_class_id = raw_item.get('gym_class')
+            try:
+                gym_class_id = int(gym_class_id)
+            except (TypeError, ValueError):
+                raise NotFound('Clase no encontrada.')
+            gym_class = _org_scoped(GymClass.objects.all(), self.request.user).filter(pk=gym_class_id).first()
+            if gym_class is None:
+                raise NotFound('Clase no encontrada.')
+            return gym_class
+        if self._request_has_virtual_class_reference(raw_item):
+            return self._materialize_virtual_class_for_reservation(
+                class_template_id=raw_item.get('class_template_id'),
+                raw_date=raw_item.get('date'),
+            )
+        raise ValidationError({'classes': f'La referencia #{index + 1} debe incluir gym_class o class_template_id/date.'})
+
+    @action(detail=False, methods=['post'], url_path='batch')
+    def batch(self, request):
+        if not _acts_as_student(request.user):
+            raise PermissionDenied('Este endpoint es solo para alumnos.')
+        raw_classes = request.data.get('classes')
+        if not isinstance(raw_classes, list) or not raw_classes:
+            raise ValidationError({'classes': 'Debes enviar una lista de clases.'})
+        student_plan_id = request.data.get('student_plan_id')
+        if student_plan_id in ('', None):
+            student_plan_id = None
+
+        try:
+            with transaction.atomic():
+                items = []
+                for index, raw_item in enumerate(raw_classes):
+                    try:
+                        gym_class = self._batch_reservation_reference(raw_item, index)
+                    except NotFound:
+                        raise
+                    except ValidationError:
+                        raise
+                    items.append({'index': index, 'raw': raw_item, 'gym_class': gym_class})
+
+                errors = []
+                seen_class_ids = set()
+                for item in items:
+                    class_id = item['gym_class'].id
+                    if class_id in seen_class_ids:
+                        raw_item = item['raw']
+                        errors.append({
+                            'index': item['index'],
+                            'class_id': class_id,
+                            'class_template_id': raw_item.get('class_template_id'),
+                            'date': raw_item.get('date'),
+                            'code': 'duplicate_selection',
+                            'detail': 'La clase esta repetida en la seleccion.',
+                        })
+                    seen_class_ids.add(class_id)
+                if errors:
+                    raise self.BatchReservationError(errors)
+
+                enrollments = []
+                for item in sorted(items, key=lambda entry: entry['gym_class'].id):
+                    try:
+                        enrollment = reserve_student_in_class(
+                            student=request.user,
+                            gym_class=item['gym_class'],
+                            require_plan=True,
+                            student_plan_id=student_plan_id,
+                        )
+                    except ReservationRuleError as exc:
+                        raw_item = item['raw']
+                        errors.append({
+                            'index': item['index'],
+                            'class_id': item['gym_class'].id,
+                            'class_template_id': raw_item.get('class_template_id'),
+                            'date': raw_item.get('date'),
+                            'code': exc.code,
+                            'detail': exc.message,
+                        })
+                        continue
+                    enrollments.append(enrollment)
+
+                if errors:
+                    raise self.BatchReservationError(errors)
+
+                serializer = self.get_serializer(enrollments, many=True)
+                return Response(
+                    {
+                        'created_count': len(enrollments),
+                        'enrollments': serializer.data,
+                    },
+                    status=status.HTTP_201_CREATED,
+                )
+        except self.BatchReservationError as exc:
+            return Response(
+                {
+                    'code': 'batch_reservation_failed',
+                    'detail': 'No se pudo completar la reserva múltiple.',
+                    'errors': exc.errors,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
     @staticmethod
     def _request_has_real_gym_class(data):
@@ -4328,7 +4440,7 @@ class EnrollmentViewSet(ModelViewSet):
                     raise ValidationError(reservation_error_payload(exc))
                 return
             if new_status == 'cancelled':
-                serializer.instance = cancel_enrollment_with_refund(enrollment)
+                serializer.instance = cancel_enrollment_with_refund(enrollment, block_recurring_resync=True)
                 return
 
         serializer.save()

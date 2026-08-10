@@ -527,6 +527,13 @@ class Enrollment(TimestampedModel):
         default=False,
         help_text='Esta inscripción se generó mediante una clase de prueba.',
     )
+    recurring_resync_blocked = models.BooleanField(
+        default=False,
+        help_text=(
+            'Bloquea que una recurrencia reactive esta instancia concreta tras una '
+            'cancelación individual.'
+        ),
+    )
     # De dónde se descontó esta reserva (#9): registro HISTÓRICO de imputación, no la
     # fuente del reverso del consumo —eso lo sigue resolviendo `ConsumptionLog` vía
     # `get_enrollment_student_plan`, que no cambia—. NULL significa fila anterior al

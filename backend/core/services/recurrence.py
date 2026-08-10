@@ -5,8 +5,11 @@ from django.utils import timezone
 
 from ..models import ClassTemplate, Enrollment, GymClass, Holiday, Organization, RecurringEnrollment
 from .reservations import (
+    PLAN_RETRYABLE_CODES,
     ReservationRuleError,
     cancel_enrollment_with_refund,
+    reservation_window_state_for_class,
+    resolve_student_plan_for_class,
     reserve_student_in_class,
     revert_consumption_for_class,
 )
@@ -30,6 +33,48 @@ TERMINAL_STATUSES = {
     GymClass.Status.COMPLETED,
     GymClass.Status.COMPLETED_EARLY,
 }
+
+
+def recurring_skip_reason_for_instance(recurring_enrollment, gym_class):
+    existing = Enrollment.objects.filter(
+        gym_class=gym_class,
+        student=recurring_enrollment.student,
+    ).first()
+    if existing and existing.status == 'active':
+        return None
+    if existing and existing.recurring_resync_blocked:
+        return 'manual_recurring_cancellation'
+    if gym_class.status == GymClass.Status.CANCELLED:
+        return 'class_cancelled'
+    if gym_class.status == GymClass.Status.SUSPENDED:
+        return 'class_suspended'
+    if gym_class.status in TERMINAL_STATUSES:
+        return 'class_closed'
+    if gym_class.start_datetime <= timezone.now():
+        return 'class_started'
+    if not reservation_window_state_for_class(gym_class)['within_window']:
+        return 'outside_window'
+    if gym_class.enrollments.filter(status='active').count() >= gym_class.capacity:
+        return 'class_full'
+    try:
+        resolve_student_plan_for_class(
+            recurring_enrollment.student,
+            gym_class=gym_class,
+            student_plan_id=recurring_enrollment.student_plan_id,
+        )
+    except ReservationRuleError as exc:
+        if recurring_enrollment.student_plan_id and exc.code in PLAN_RETRYABLE_CODES:
+            try:
+                resolve_student_plan_for_class(
+                    recurring_enrollment.student,
+                    gym_class=gym_class,
+                    student_plan_id=None,
+                )
+            except ReservationRuleError as fallback_exc:
+                return fallback_exc.code
+            return None
+        return exc.code
+    return None
 
 
 def _combine_local_datetime(value_date, value_time):
@@ -119,16 +164,27 @@ def _create_enrollment_if_possible(*, recurring_enrollment, gym_class):
     correr el reapunte después. El loop en sí sigue sin adivinar nada: nunca elige, solo
     consume de la FK que ya viene resuelta.
     """
-    try:
-        reserve_student_in_class(
+    def _reserve(student_plan_id):
+        return reserve_student_in_class(
             student=recurring_enrollment.student,
             gym_class=gym_class,
             recurring_enrollment=recurring_enrollment,
             require_plan=True,
-            student_plan_id=recurring_enrollment.student_plan_id,
+            student_plan_id=student_plan_id,
         )
+
+    try:
+        enrollment = _reserve(recurring_enrollment.student_plan_id)
     except ReservationRuleError as exc:
-        # TODO RW-R2: surface skip al alumno
+        if recurring_enrollment.student_plan_id and exc.code in PLAN_RETRYABLE_CODES:
+            try:
+                enrollment = _reserve(None)
+            except ReservationRuleError as fallback_exc:
+                return False, fallback_exc.code
+            if enrollment.student_plan_id and enrollment.student_plan_id != recurring_enrollment.student_plan_id:
+                recurring_enrollment.student_plan_id = enrollment.student_plan_id
+                recurring_enrollment.save(update_fields=['student_plan', 'updated_at'])
+            return True, None
         return False, exc.code
     return True, None
 

@@ -87,6 +87,16 @@ function firstApiError(detail, fallback) {
   return fallback
 }
 
+function batchApiErrorMessage(detail, fallback) {
+  if (detail?.code === 'batch_reservation_failed' && Array.isArray(detail.errors)) {
+    const firstError = detail.errors[0]
+    const count = detail.errors.length
+    const suffix = firstError?.detail ? ` Primer problema: ${firstError.detail}` : ''
+    return `${detail.detail || fallback} ${count} clase(s) con problema.${suffix}`
+  }
+  return firstApiError(detail, fallback)
+}
+
 function isVirtualClass(row) {
   return String(row?.id || '').startsWith('virtual:')
 }
@@ -341,7 +351,7 @@ export default function StudentClassesPage({ mode = 'available' }) {
       }
       await loadData()
     } catch (apiError) {
-      setError(firstApiError(apiError?.response?.data, 'No se pudo gestionar la recurrencia semanal.'))
+      setError(firstApiError(apiError?.response?.data, 'No se pudo gestionar la reserva semanal automatica.'))
     } finally {
       setWorkingKey('')
     }
@@ -378,7 +388,7 @@ export default function StudentClassesPage({ mode = 'available' }) {
       await recurringEnrollmentsApi.update(recurringEnrollment.id, { is_active: nextState })
       await loadData()
     } catch (apiError) {
-      setError(firstApiError(apiError?.response?.data, 'No se pudo actualizar la recurrencia.'))
+      setError(firstApiError(apiError?.response?.data, 'No se pudo actualizar la reserva semanal automatica.'))
     } finally {
       setWorkingKey('')
     }
@@ -477,26 +487,19 @@ export default function StudentClassesPage({ mode = 'available' }) {
     setError('')
     setNotice('')
     try {
-      const results = await Promise.allSettled(
-        reservables.map((item) => {
-          const payload = reservationPayloadForClass(item)
-          if (requiresPlanChoice) {
-            payload.student_plan_id = Number(studentPlanId)
-          }
-          return enrollmentsApi.create(payload)
-        }),
-      )
-      const successCount = results.filter((item) => item.status === 'fulfilled').length
-      const failedCount = results.length - successCount
+      const payload = {
+        classes: reservables.map((item) => reservationPayloadForClass(item)),
+      }
+      if (requiresPlanChoice) {
+        payload.student_plan_id = Number(studentPlanId)
+      }
+      const response = await enrollmentsApi.batch(payload)
+      const successCount = response?.created_count ?? reservables.length
       await loadData()
       setSelectedAvailableIds([])
-      if (failedCount > 0) {
-        setError(`Se reservaron ${successCount} clases y ${failedCount} fallaron.`)
-      } else {
-        setNotice(`Se reservaron ${successCount} clases correctamente.`)
-      }
+      setNotice(`Se reservaron ${successCount} clases correctamente.`)
     } catch (apiError) {
-      setError(firstApiError(apiError?.response?.data, 'No se pudieron reservar las clases seleccionadas.'))
+      setError(batchApiErrorMessage(apiError?.response?.data, 'No se pudieron reservar las clases seleccionadas.'))
     } finally {
       setWorkingKey('')
     }
@@ -664,15 +667,15 @@ export default function StudentClassesPage({ mode = 'available' }) {
                     {recurringForTemplate?.is_active
                       ? workingKey === `toggle-recurring-${recurringForTemplate.id}`
                         ? 'Pausando...'
-                        : 'Pausar recurrencia semanal'
+                        : 'Pausar reserva semanal automatica'
                       : workingKey === `recurring-${row.id}`
                         ? 'Guardando...'
                         : recurringForTemplate
-                          ? 'Reactivar recurrencia semanal'
-                          : 'Inscribirme a esta serie semanal'}
+                          ? 'Reactivar reserva semanal automatica'
+                          : 'Activar reserva semanal automatica'}
                   </button>
                   <div className="flex justify-end gap-1">
-                    {!recurringForTemplate ? <TouchTooltip text="Activa reservas automaticas para futuras clases de esta serie." /> : null}
+                    {!recurringForTemplate ? <TouchTooltip text="Reserva automaticamente cada semana esta misma serie." /> : null}
                     {!canManageRecurringHere ? <TouchTooltip text="Solo se puede gestionar desde una clase programada y futura." /> : null}
                   </div>
                   {recurringForTemplate && !recurringForTemplate.can_manage_now && recurringForTemplate.manage_block_reason ? (
@@ -780,8 +783,8 @@ export default function StudentClassesPage({ mode = 'available' }) {
                     {workingKey === `toggle-recurring-${recurringItem.id}`
                       ? 'Actualizando...'
                       : recurringItem.is_active
-                        ? 'Pausar recurrencia semanal'
-                        : 'Reactivar recurrencia semanal'}
+                        ? 'Pausar reserva semanal automatica'
+                        : 'Reactivar reserva semanal automatica'}
                   </button>
                   {!recurringItem.can_manage_now && recurringItem.manage_block_reason ? (
                     <p className="text-[11px] text-brand-muted">{recurringItem.manage_block_reason}</p>
@@ -880,7 +883,7 @@ export default function StudentClassesPage({ mode = 'available' }) {
     () => ({
       available: {
         title: 'Clases disponibles',
-        subtitle: 'Reserva puntual o suscríbete a una serie semanal según corresponda.',
+        subtitle: 'Reserva una clase, selecciona varias concretas o activa una reserva semanal automatica.',
         columns: availableColumns,
         data: filteredAvailableForBooking,
         defaultSort: { key: 'start_datetime', direction: 'asc' },
@@ -933,14 +936,21 @@ export default function StudentClassesPage({ mode = 'available' }) {
           : pendingReserveKind === 'recurring'
             ? workingKey === `recurring-${pendingRecurringReserve?.id}`
             : false
-  const confirmDialogTitle = pendingReserveKind === 'bulk' || pendingReserveKind === 'recurring' ? 'Elige tu plan' : 'Confirmar reserva'
+  const pendingBulkPreview = (pendingBulkReserve || []).slice(0, 6)
+  const pendingBulkHiddenCount = Math.max((pendingBulkReserve?.length || 0) - pendingBulkPreview.length, 0)
+  const confirmDialogTitle =
+    pendingReserveKind === 'bulk'
+      ? 'Confirmar reservas seleccionadas'
+      : pendingReserveKind === 'recurring'
+        ? 'Reserva semanal automatica'
+        : 'Confirmar reserva'
   const confirmDialogDescription =
     pendingReserveKind === 'bulk'
-      ? `Vas a reservar ${pendingBulkReserve?.length || 0} clases. Elige con qué plan.`
+      ? `Vas a reservar ${pendingBulkReserve?.length || 0} clases concretas seleccionadas.`
       : pendingReserveKind === 'recurring'
-        ? 'Vas a inscribirte a esta serie semanal. Elige con qué plan reservar tus próximas clases.'
-        : '¿Seguro que quieres reservar esta clase? Se descontará una clase de tu plan.'
-  const confirmDialogLabel = pendingReserveKind === 'bulk' ? 'Reservar seleccionadas' : pendingReserveKind === 'recurring' ? 'Inscribirme' : 'Reservar'
+        ? 'Vas a activar reservas automaticas futuras para esta misma serie semanal.'
+        : 'Seguro que quieres reservar esta clase? Se descontara una clase de tu plan.'
+  const confirmDialogLabel = pendingReserveKind === 'bulk' ? 'Confirmar reservas' : pendingReserveKind === 'recurring' ? 'Activar reserva semanal' : 'Reservar'
   const confirmDialogDisabled = showPlanSelector && !selectedPlanId
   const handleConfirmDialogConfirm = () => {
     if (pendingReserveKind === 'single') {
@@ -967,7 +977,7 @@ export default function StudentClassesPage({ mode = 'available' }) {
 
   return (
     <div className="space-y-6">
-      <DashboardHeader title="Student · Mis clases" subtitle="Agenda clara para reserva individual y recurrencia semanal." />
+      <DashboardHeader title="Student · Mis clases" subtitle="Agenda clara para reservas individuales, multiples y semanales automaticas." />
 
       <MembershipExpiryBanner memberships={memberships} />
 
@@ -1062,6 +1072,20 @@ export default function StudentClassesPage({ mode = 'available' }) {
         onConfirm={handleConfirmDialogConfirm}
         onCancel={handleConfirmDialogCancel}
       >
+        {pendingReserveKind === 'bulk' && pendingBulkPreview.length ? (
+          <div className="mt-3 space-y-2 rounded-lg border border-brand-line bg-black/20 p-3 text-left text-xs text-brand-muted">
+            <p className="font-semibold text-brand-white">Clases seleccionadas</p>
+            <ul className="space-y-1">
+              {pendingBulkPreview.map((gymClass) => (
+                <li key={gymClass.id}>
+                  {formatDateTime(gymClass.start_datetime)} - {gymClass.discipline_name || gymClass.name}
+                </li>
+              ))}
+            </ul>
+            {pendingBulkHiddenCount > 0 ? <p>Y {pendingBulkHiddenCount} mas.</p> : null}
+            <p>Se consumira una clase por cada reserva confirmada.</p>
+          </div>
+        ) : null}
         {showPlanSelector ? (
           <div className="mt-3 space-y-1 text-left">
             <label className="text-xs text-brand-muted" htmlFor="reserve-plan-select">

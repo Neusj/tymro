@@ -546,6 +546,10 @@ export const enrollmentsApi = {
     const { data } = await api.post('/enrollments/', payload)
     return data
   },
+  batch: async (payload) => {
+    const { data } = await api.post('/enrollments/batch/', payload)
+    return data
+  },
   update: async (id, payload) => {
     const { data } = await api.patch(`/enrollments/${id}/`, payload)
     return data
