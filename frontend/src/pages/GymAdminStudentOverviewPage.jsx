@@ -1,15 +1,16 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { getStudentOverview, studentOverviewDetailsApi, usersApi } from '../api/client'
 import DashboardHeader from '../components/DashboardHeader'
 import EmptyState from '../components/EmptyState'
+import DataTable from '../components/ui/DataTable'
 import PlanAlertBadge from '../components/ui/PlanAlertBadge'
 import ValueBadge from '../components/ui/ValueBadge'
 import { extractApiErrorMessage } from '../utils/apiErrors'
 import { formatDate, todayLocalISO } from '../utils/format'
 import { studentSubjectRoleParam } from '../utils/roles'
 
-const PAGE_SIZE = 20
+const PAGE_SIZE = 100
 const PERIOD_OPTIONS = [
   { value: '30d', label: '30 dias' },
   { value: '90d', label: '90 dias' },
@@ -160,6 +161,131 @@ function RecurringPreview({ item }) {
   )
 }
 
+function normalizeDetailRows(type, rows = []) {
+  return rows.map((item) => {
+    if (type === 'memberships') {
+      return {
+        id: item.id,
+        plan: item.plan_name || 'Plan',
+        vigencia: `${formatDate(item.start_date)} - ${formatDate(item.end_date)}`,
+        disponibles: item.unlimited_classes ? 'Ilimitadas' : item.remaining_classes ?? 0,
+        estado: item.validity_status_label || item.validity_status || '-',
+        pago: PAYMENT_STATUS_LABELS[item.payment_status] || item.payment_status || '-',
+        matricula: ENROLLMENT_FEE_LABELS[item.enrollment_fee_status?.status] || item.enrollment_fee_status?.status || '-',
+        raw: item,
+      }
+    }
+    if (type === 'attendance') {
+      return {
+        id: item.id,
+        clase: item.class?.name || 'Clase',
+        fecha: formatDateTime(item.marked_at),
+        disciplina: item.class?.discipline_name || 'Sin disciplina',
+        estado: item.status,
+        fuente: item.source || '-',
+        marcado_por: item.marked_by_name || '-',
+        raw: item,
+      }
+    }
+    if (type === 'consumption') {
+      return {
+        id: item.id,
+        clase: item.class?.name || 'Clase',
+        fecha: formatDateTime(item.consumed_at),
+        disciplina: item.class?.discipline_name || 'Sin disciplina',
+        plan: item.plan_name || 'Sin plan',
+        sede: item.branch_name || 'Sin sucursal',
+        raw: item,
+      }
+    }
+    if (type === 'recurringReservations') {
+      const template = item.class_template || {}
+      return {
+        id: item.id,
+        reserva: template.name || 'Reserva semanal',
+        disciplina: template.discipline_name || 'Sin disciplina',
+        dia: WEEKDAY_LABELS[template.weekday] || 'Dia',
+        hora: `${formatTime(template.start_time)} - ${formatTime(template.end_time)}`,
+        vigencia: `${formatDate(item.start_date)} - ${item.end_date ? formatDate(item.end_date) : 'Sin termino'}`,
+        plan: item.plan_name || 'Sin plan fijado',
+        raw: item,
+      }
+    }
+    return {
+      id: item.id,
+      clase: item.class?.name || 'Clase',
+      fecha: formatDateTime(item.class?.start_datetime),
+      disciplina: item.class?.discipline_name || 'Sin disciplina',
+      estado: item.status,
+      tipo: item.is_trial ? 'Clase de prueba' : 'Reserva',
+      plan: item.plan_name || 'Sin plan',
+      raw: item,
+    }
+  })
+}
+
+function detailColumns(type) {
+  if (type === 'memberships') {
+    return [
+      { key: 'plan', label: 'Plan', mobile: 'title' },
+      { key: 'estado', label: 'Estado', mobile: 'meta' },
+      { key: 'vigencia', label: 'Vigencia', mobile: 'secondary' },
+      { key: 'disponibles', label: 'Disponibles', mobile: 'secondary' },
+      { key: 'pago', label: 'Pago' },
+      { key: 'matricula', label: 'Matricula' },
+    ]
+  }
+  if (type === 'attendance') {
+    return [
+      { key: 'clase', label: 'Clase', mobile: 'title' },
+      {
+        key: 'estado',
+        label: 'Estado',
+        mobile: 'meta',
+        render: (row) => <ValueBadge kind="attendance_status" value={row.estado} />,
+        sortAccessor: (row) => row.estado,
+      },
+      { key: 'fecha', label: 'Fecha', mobile: 'secondary' },
+      { key: 'disciplina', label: 'Disciplina', mobile: 'secondary' },
+      { key: 'fuente', label: 'Fuente' },
+      { key: 'marcado_por', label: 'Marcado por' },
+    ]
+  }
+  if (type === 'consumption') {
+    return [
+      { key: 'clase', label: 'Clase', mobile: 'title' },
+      { key: 'fecha', label: 'Fecha', mobile: 'secondary' },
+      { key: 'disciplina', label: 'Disciplina', mobile: 'secondary' },
+      { key: 'plan', label: 'Plan' },
+      { key: 'sede', label: 'Sede' },
+    ]
+  }
+  if (type === 'recurringReservations') {
+    return [
+      { key: 'reserva', label: 'Reserva semanal', mobile: 'title' },
+      { key: 'disciplina', label: 'Disciplina', mobile: 'secondary' },
+      { key: 'dia', label: 'Dia', mobile: 'secondary' },
+      { key: 'hora', label: 'Hora' },
+      { key: 'vigencia', label: 'Vigencia' },
+      { key: 'plan', label: 'Plan' },
+    ]
+  }
+  return [
+    { key: 'clase', label: 'Clase', mobile: 'title' },
+    {
+      key: 'estado',
+      label: 'Estado',
+      mobile: 'meta',
+      render: (row) => <ValueBadge kind="enrollment_status" value={row.estado} />,
+      sortAccessor: (row) => row.estado,
+    },
+    { key: 'fecha', label: 'Fecha', mobile: 'secondary' },
+    { key: 'disciplina', label: 'Disciplina', mobile: 'secondary' },
+    { key: 'tipo', label: 'Tipo' },
+    { key: 'plan', label: 'Plan' },
+  ]
+}
+
 function buildFallbackSummary(data) {
   const memberships = data?.memberships || []
   const activeItems = memberships.filter((item) => item.validity_status === 'active')
@@ -192,48 +318,6 @@ function buildFallbackSummary(data) {
   }
 }
 
-function DetailRows({ type, rows }) {
-  if (!rows.length) {
-    return <EmptyState title="Sin detalle" description="No hay registros para los filtros actuales." />
-  }
-  return (
-    <div className="grid gap-3 sm:grid-cols-2">
-      {rows.map((item) => {
-        if (type === 'memberships') {
-          return <MembershipSummaryCard key={item.id} membership={item} />
-        }
-        if (type === 'recurringReservations') {
-          return <RecurringPreview key={item.id} item={item} />
-        }
-        if (type === 'attendance') {
-          return (
-            <article key={item.id} className="rounded-lg border border-brand-line bg-black/20 p-3">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold text-brand-white">{item.class?.name || 'Clase'}</p>
-                  <p className="text-xs text-brand-muted">{formatDateTime(item.marked_at)}</p>
-                  <p className="text-xs text-brand-dim">{item.class?.discipline_name || 'Sin disciplina'}</p>
-                </div>
-                <ValueBadge kind="attendance_status" value={item.status} />
-              </div>
-            </article>
-          )
-        }
-        if (type === 'consumption') {
-          return (
-            <article key={item.id} className="rounded-lg border border-brand-line bg-black/20 p-3">
-              <p className="truncate text-sm font-semibold text-brand-white">{item.class?.name || 'Clase'}</p>
-              <p className="text-xs text-brand-muted">{formatDateTime(item.consumed_at)}</p>
-              <p className="text-xs text-brand-dim">{item.class?.discipline_name || 'Sin disciplina'} - {item.plan_name || 'Sin plan'}</p>
-            </article>
-          )
-        }
-        return <ClassPreview key={item.id} item={item} />
-      })}
-    </div>
-  )
-}
-
 const DETAIL_TITLES = {
   reservations: 'Reservas',
   attendance: 'Asistencia',
@@ -255,6 +339,7 @@ export default function GymAdminStudentOverviewPage() {
   const [customStart, setCustomStart] = useState('')
   const [customEnd, setCustomEnd] = useState(todayLocalISO())
   const [detail, setDetail] = useState({ type: '', loading: false, error: '', data: EMPTY_SECTION })
+  const detailPanelRef = useRef(null)
 
   useEffect(() => {
     usersApi
@@ -303,6 +388,16 @@ export default function GymAdminStudentOverviewPage() {
   }
 
   const currentSummary = data?.summary || buildFallbackSummary(data)
+  useEffect(() => {
+    if (!detail.type || !detailPanelRef.current) return
+    window.setTimeout(() => {
+      if (typeof detailPanelRef.current?.scrollIntoView === 'function') {
+        detailPanelRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      }
+      detailPanelRef.current?.focus({ preventScroll: true })
+    }, 0)
+  }, [detail.type])
+
   const loadDetail = async (type, page = 1) => {
     if (!studentId) return
     const params = { page, page_size: PAGE_SIZE }
@@ -551,7 +646,11 @@ export default function GymAdminStudentOverviewPage() {
       </main>
 
       {detail.type ? (
-        <section className="card-surface p-4 sm:p-5">
+        <section
+          ref={detailPanelRef}
+          tabIndex={-1}
+          className="card-surface scroll-mt-4 p-4 outline-none ring-brand-blue/40 focus-visible:ring-2 sm:p-5"
+        >
           <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h2 className="text-base font-semibold text-brand-white">{DETAIL_TITLES[detail.type]}</h2>
@@ -568,7 +667,12 @@ export default function GymAdminStudentOverviewPage() {
           ) : detail.error ? (
             <p className="rounded-xl border border-brand-red/50 bg-brand-red/10 px-4 py-3 text-sm text-red-200">{detail.error}</p>
           ) : (
-            <DetailRows type={detail.type} rows={detail.data.items || []} />
+            <DataTable
+              columns={detailColumns(detail.type)}
+              data={normalizeDetailRows(detail.type, detail.data.items || [])}
+              maxBodyHeight="520px"
+              defaultSort={{ key: detail.type === 'memberships' ? 'vigencia' : 'fecha', direction: 'desc' }}
+            />
           )}
         </section>
       ) : null}

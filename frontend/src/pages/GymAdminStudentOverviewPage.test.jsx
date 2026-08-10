@@ -198,7 +198,7 @@ describe('GymAdminStudentOverviewPage', () => {
     await waitFor(() =>
       expect(studentOverviewDetailsApi.reservations).toHaveBeenCalledWith(
         '42',
-        expect.objectContaining({ page: 1, page_size: 20 }),
+        expect.objectContaining({ page: 1, page_size: 100 }),
       ),
     )
     expect(getStudentOverview).toHaveBeenCalledTimes(1)
