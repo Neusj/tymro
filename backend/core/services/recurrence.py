@@ -278,6 +278,10 @@ def generate_instances_for_template_range(template, from_date=None, until_date=N
                     # tratamiento que el resto de los campos de plantilla en este `create`.
                     has_substitute=template.has_substitute,
                     substitute_name=template.substitute_name,
+                    substitute_teacher=template.substitute_teacher,
+                    substitution_source=template.substitution_source,
+                    substitution_assigned_at=template.substitution_assigned_at,
+                    substitution_assigned_by=template.substitution_assigned_by,
                 )
         except IntegrityError:
             summary['skipped'].append({'date': occurrence_date.isoformat(), 'reason': 'duplicate_instance'})
@@ -336,6 +340,10 @@ def apply_template_updates_to_future_instances(template, now=None):
         # suplente en las instancias futuras sin inscritos activos.
         gym_class.has_substitute = template.has_substitute
         gym_class.substitute_name = template.substitute_name
+        gym_class.substitute_teacher = template.substitute_teacher
+        gym_class.substitution_source = template.substitution_source
+        gym_class.substitution_assigned_at = template.substitution_assigned_at
+        gym_class.substitution_assigned_by = template.substitution_assigned_by
 
         # Tarea 11.A: el solape de profesor ya no protege la instancia de la
         # actualización (el producto decidió permitirlo). Acá vivía el chequeo
@@ -354,6 +362,10 @@ def apply_template_updates_to_future_instances(template, now=None):
                 'end_datetime',
                 'has_substitute',
                 'substitute_name',
+                'substitute_teacher',
+                'substitution_source',
+                'substitution_assigned_at',
+                'substitution_assigned_by',
                 'updated_at',
             ]
         )

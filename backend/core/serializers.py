@@ -59,6 +59,101 @@ TERMINAL_CLASS_STATUSES = {
     GymClass.Status.COMPLETED_EARLY,
 }
 
+SUBSTITUTION_INPUT_FIELDS = {'has_substitute', 'substitute_name', 'substitute_teacher'}
+
+
+def _user_display_name(user):
+    if not user:
+        return ''
+    full_name = f'{user.first_name} {user.last_name}'.strip()
+    return full_name or user.username
+
+
+def _substitute_display_name(obj):
+    if getattr(obj, 'substitute_teacher_id', None):
+        return _user_display_name(obj.substitute_teacher)
+    return getattr(obj, 'substitute_name', '') or ''
+
+
+def _substitute_kind(obj):
+    if not getattr(obj, 'has_substitute', False):
+        return ''
+    if getattr(obj, 'substitute_teacher_id', None):
+        return 'registered'
+    if getattr(obj, 'substitute_name', ''):
+        return 'external'
+    return ''
+
+
+def _substitution_source(obj):
+    source = getattr(obj, 'substitution_source', '') or ''
+    if source:
+        return source
+    if getattr(obj, 'has_substitute', False) and getattr(obj, 'substitute_name', ''):
+        return GymClass.SubstitutionSource.EXTERNAL_ADMIN
+    return ''
+
+
+def _validate_substitute_teacher(substitute_teacher, *, organization, titular_teacher):
+    if substitute_teacher is None:
+        return
+    if substitute_teacher.organization_id != organization.id:
+        raise serializers.ValidationError({
+            'substitute_teacher': 'El suplente debe pertenecer a la misma organización.'
+        })
+    if substitute_teacher.role not in TEACHER_ELIGIBLE_ROLES:
+        raise serializers.ValidationError({'substitute_teacher': 'El suplente seleccionado no es profesor.'})
+    if not substitute_teacher.is_active:
+        raise serializers.ValidationError({'substitute_teacher': 'El profesor suplente debe estar activo.'})
+    if titular_teacher and substitute_teacher.id == titular_teacher.id:
+        raise serializers.ValidationError({'substitute_teacher': 'El suplente no puede ser el profesor titular.'})
+
+
+def _normalize_substitution_attrs(attrs, *, instance, organization, titular_teacher, actor, source_for_registered):
+    touched = bool(SUBSTITUTION_INPUT_FIELDS.intersection(attrs.keys()))
+    resultant_has_substitute = attrs.get('has_substitute', getattr(instance, 'has_substitute', False))
+    resultant_substitute_teacher = attrs.get(
+        'substitute_teacher',
+        getattr(instance, 'substitute_teacher', None),
+    )
+
+    if not resultant_has_substitute:
+        if touched:
+            attrs['has_substitute'] = False
+            attrs['substitute_name'] = ''
+            attrs['substitute_teacher'] = None
+            attrs['substitution_source'] = ''
+            attrs['substitution_assigned_at'] = None
+            attrs['substitution_assigned_by'] = None
+        return attrs
+
+    if resultant_substitute_teacher is not None:
+        _validate_substitute_teacher(
+            resultant_substitute_teacher,
+            organization=organization,
+            titular_teacher=titular_teacher,
+        )
+        if touched:
+            attrs['has_substitute'] = True
+            attrs['substitute_name'] = ''
+            attrs['substitution_source'] = source_for_registered
+            attrs['substitution_assigned_at'] = timezone.now()
+            attrs['substitution_assigned_by'] = actor if getattr(actor, 'is_authenticated', False) else None
+        return attrs
+
+    resultant_substitute_name = attrs.get('substitute_name', getattr(instance, 'substitute_name', ''))
+    normalized_name = str(resultant_substitute_name or '').strip()
+    if not normalized_name:
+        raise serializers.ValidationError({'substitute_name': 'Ingresa el nombre del suplente.'})
+    if touched:
+        attrs['has_substitute'] = True
+        attrs['substitute_name'] = normalized_name
+        attrs['substitute_teacher'] = None
+        attrs['substitution_source'] = GymClass.SubstitutionSource.EXTERNAL_ADMIN
+        attrs['substitution_assigned_at'] = timezone.now()
+        attrs['substitution_assigned_by'] = actor if getattr(actor, 'is_authenticated', False) else None
+    return attrs
+
 
 def _safe_int_setting(name, default=0):
     raw = getattr(settings, name, default)
@@ -997,6 +1092,12 @@ class GymClassSerializer(serializers.ModelSerializer):
     class_template_name = serializers.CharField(source='class_template.name', read_only=True)
     branch_name = serializers.CharField(source='branch.name', read_only=True)
     teacher_name = serializers.SerializerMethodField()
+    substitute_teacher_name = serializers.SerializerMethodField()
+    substitute_display_name = serializers.SerializerMethodField()
+    substitute_kind = serializers.SerializerMethodField()
+    effective_substitution_source = serializers.SerializerMethodField()
+    substitution_assigned_by_name = serializers.SerializerMethodField()
+    can_claim_substitution = serializers.SerializerMethodField()
     class_type_name = serializers.CharField(source='class_type.name', read_only=True)
     discipline_name = serializers.CharField(source='discipline.name', read_only=True)
     enrollments_count = serializers.SerializerMethodField()
@@ -1041,6 +1142,16 @@ class GymClassSerializer(serializers.ModelSerializer):
             'is_active',
             'has_substitute',
             'substitute_name',
+            'substitute_teacher',
+            'substitute_teacher_name',
+            'substitute_display_name',
+            'substitute_kind',
+            'substitution_source',
+            'effective_substitution_source',
+            'substitution_assigned_at',
+            'substitution_assigned_by',
+            'substitution_assigned_by_name',
+            'can_claim_substitution',
             'enrollments_count',
             'attendances_count',
             'present_attendances_count',
@@ -1055,13 +1166,44 @@ class GymClassSerializer(serializers.ModelSerializer):
             'suspend_reason': {'read_only': True},
             'suspended_by': {'read_only': True},
             'reactivation_expected_date': {'read_only': True},
+            'substitution_source': {'read_only': True},
+            'substitution_assigned_at': {'read_only': True},
+            'substitution_assigned_by': {'read_only': True},
         }
 
     def get_teacher_name(self, obj):
-        if not obj.teacher:
-            return ''
-        full_name = f'{obj.teacher.first_name} {obj.teacher.last_name}'.strip()
-        return full_name or obj.teacher.username
+        return _user_display_name(obj.teacher)
+
+    def get_substitute_teacher_name(self, obj):
+        return _user_display_name(getattr(obj, 'substitute_teacher', None))
+
+    def get_substitute_display_name(self, obj):
+        return _substitute_display_name(obj)
+
+    def get_substitute_kind(self, obj):
+        return _substitute_kind(obj)
+
+    def get_effective_substitution_source(self, obj):
+        return _substitution_source(obj)
+
+    def get_substitution_assigned_by_name(self, obj):
+        return _user_display_name(getattr(obj, 'substitution_assigned_by', None))
+
+    def get_can_claim_substitution(self, obj):
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        return bool(
+            user
+            and getattr(user, 'is_authenticated', False)
+            and user.role == User.Role.TEACHER
+            and user.is_active
+            and user.organization_id
+            and obj.organization_id == user.organization_id
+            and obj.teacher_id != user.id
+            and not obj.has_substitute
+            and obj.start_datetime > timezone.now()
+            and obj.status in {GymClass.Status.SCHEDULED, GymClass.Status.IN_PROGRESS}
+        )
 
     def get_enrollments_count(self, obj):
         return obj.enrollments.filter(status='active').count()
@@ -1155,18 +1297,14 @@ class GymClassSerializer(serializers.ModelSerializer):
         if incoming_status == GymClass.Status.SUSPENDED:
             raise serializers.ValidationError({'status': 'Usa la acción de suspender para suspender una clase.'})
 
-        # P4 #A (clase con suplente): normalización determinista sobre el estado RESULTANTE,
-        # no sobre lo que llegó en `attrs` — esto es un PATCH parcial, así que un campo ausente
-        # se resuelve con el valor actual de la instancia (o el default en creación).
-        # `has_substitute=False` fuerza `substitute_name=''` (nunca dejar un nombre huérfano de
-        # un check apagado); `has_substitute=True` exige un nombre no vacío.
-        resultant_has_substitute = attrs.get('has_substitute', getattr(instance, 'has_substitute', False))
-        if resultant_has_substitute:
-            resultant_substitute_name = attrs.get('substitute_name', getattr(instance, 'substitute_name', ''))
-            if not str(resultant_substitute_name or '').strip():
-                raise serializers.ValidationError({'substitute_name': 'Ingresa el nombre del suplente.'})
-        else:
-            attrs['substitute_name'] = ''
+        _normalize_substitution_attrs(
+            attrs,
+            instance=instance,
+            organization=organization,
+            titular_teacher=teacher,
+            actor=user,
+            source_for_registered=GymClass.SubstitutionSource.ADMIN_ASSIGNED,
+        )
 
         return attrs
 
@@ -1255,6 +1393,11 @@ class ClassTemplateSerializer(serializers.ModelSerializer):
     organization_name = serializers.CharField(source='organization.name', read_only=True)
     branch_name = serializers.CharField(source='branch.name', read_only=True)
     teacher_name = serializers.SerializerMethodField()
+    substitute_teacher_name = serializers.SerializerMethodField()
+    substitute_display_name = serializers.SerializerMethodField()
+    substitute_kind = serializers.SerializerMethodField()
+    effective_substitution_source = serializers.SerializerMethodField()
+    substitution_assigned_by_name = serializers.SerializerMethodField()
     class_type_name = serializers.CharField(source='class_type.name', read_only=True)
     discipline_name = serializers.CharField(source='discipline.name', read_only=True)
     generated_instances_count = serializers.SerializerMethodField()
@@ -1286,23 +1429,51 @@ class ClassTemplateSerializer(serializers.ModelSerializer):
             'is_active',
             'has_substitute',
             'substitute_name',
+            'substitute_teacher',
+            'substitute_teacher_name',
+            'substitute_display_name',
+            'substitute_kind',
+            'substitution_source',
+            'effective_substitution_source',
+            'substitution_assigned_at',
+            'substitution_assigned_by',
+            'substitution_assigned_by_name',
             'generated_instances_count',
             'has_active_enrollments',
             'created_by',
             'created_at',
             'updated_at',
         ]
-        read_only_fields = ['created_by', 'created_at', 'updated_at']
+        read_only_fields = [
+            'created_by',
+            'created_at',
+            'updated_at',
+            'substitution_source',
+            'substitution_assigned_at',
+            'substitution_assigned_by',
+        ]
         extra_kwargs = {
             'organization': {'required': False},
             'start_date': {'required': False, 'allow_null': True},
         }
 
     def get_teacher_name(self, obj):
-        if not obj.teacher:
-            return ''
-        full_name = f'{obj.teacher.first_name} {obj.teacher.last_name}'.strip()
-        return full_name or obj.teacher.username
+        return _user_display_name(obj.teacher)
+
+    def get_substitute_teacher_name(self, obj):
+        return _user_display_name(getattr(obj, 'substitute_teacher', None))
+
+    def get_substitute_display_name(self, obj):
+        return _substitute_display_name(obj)
+
+    def get_substitute_kind(self, obj):
+        return _substitute_kind(obj)
+
+    def get_effective_substitution_source(self, obj):
+        return _substitution_source(obj)
+
+    def get_substitution_assigned_by_name(self, obj):
+        return _user_display_name(getattr(obj, 'substitution_assigned_by', None))
 
     def get_generated_instances_count(self, obj):
         return obj.instances.count()
@@ -1372,16 +1543,14 @@ class ClassTemplateSerializer(serializers.ModelSerializer):
         except DjangoValidationError as exc:
             raise serializers.ValidationError(exc.message_dict or {'detail': exc.messages})
 
-        # P4 #A (clase con suplente): misma normalización determinista que
-        # `GymClassSerializer.validate` — estado RESULTANTE (payload si vino, instancia si no),
-        # no solo lo que llegó en `attrs`, porque esto también es un PATCH parcial.
-        resultant_has_substitute = attrs.get('has_substitute', getattr(instance, 'has_substitute', False))
-        if resultant_has_substitute:
-            resultant_substitute_name = attrs.get('substitute_name', getattr(instance, 'substitute_name', ''))
-            if not str(resultant_substitute_name or '').strip():
-                raise serializers.ValidationError({'substitute_name': 'Ingresa el nombre del suplente.'})
-        else:
-            attrs['substitute_name'] = ''
+        _normalize_substitution_attrs(
+            attrs,
+            instance=instance,
+            organization=organization,
+            titular_teacher=teacher,
+            actor=user,
+            source_for_registered=GymClass.SubstitutionSource.ADMIN_ASSIGNED,
+        )
 
         return attrs
 

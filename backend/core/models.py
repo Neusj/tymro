@@ -295,6 +295,11 @@ class GymClass(TimestampedModel):
         COMPLETED_EARLY = 'completed_early', 'Completada anticipadamente'
         SUSPENDED = 'suspended', 'Suspendida'
 
+    class SubstitutionSource(models.TextChoices):
+        EXTERNAL_ADMIN = 'external_admin', 'Externo asignado por admin'
+        ADMIN_ASSIGNED = 'admin_assigned', 'Profesor asignado por admin'
+        TEACHER_CLAIMED = 'teacher_claimed', 'Tomada por profesor'
+
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='classes')
     class_template = models.ForeignKey(
         'ClassTemplate',
@@ -351,6 +356,27 @@ class GymClass(TimestampedModel):
     # huérfanos de un check apagado) y `has_substitute=True` exige nombre no vacío.
     has_substitute = models.BooleanField(default=False)
     substitute_name = models.CharField(max_length=150, blank=True, default='')
+    substitute_teacher = models.ForeignKey(
+        'accounts.CustomUser',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='substituted_classes',
+    )
+    substitution_source = models.CharField(
+        max_length=30,
+        choices=SubstitutionSource.choices,
+        blank=True,
+        default='',
+    )
+    substitution_assigned_at = models.DateTimeField(null=True, blank=True)
+    substitution_assigned_by = models.ForeignKey(
+        'accounts.CustomUser',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='assigned_class_substitutions',
+    )
 
     class Meta:
         ordering = ['-start_datetime']
@@ -1498,6 +1524,27 @@ class ClassTemplate(TimestampedModel):
     # activos (esas quedan protegidas). Una instancia ya cerrada o con inscritos no se toca.
     has_substitute = models.BooleanField(default=False)
     substitute_name = models.CharField(max_length=150, blank=True, default='')
+    substitute_teacher = models.ForeignKey(
+        'accounts.CustomUser',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='substitute_class_templates',
+    )
+    substitution_source = models.CharField(
+        max_length=30,
+        choices=GymClass.SubstitutionSource.choices,
+        blank=True,
+        default='',
+    )
+    substitution_assigned_at = models.DateTimeField(null=True, blank=True)
+    substitution_assigned_by = models.ForeignKey(
+        'accounts.CustomUser',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='assigned_template_substitutions',
+    )
 
     class Meta:
         ordering = ['weekday', 'start_time', 'id']

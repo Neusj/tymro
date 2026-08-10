@@ -316,6 +316,10 @@ export const classesApi = {
     const { data } = await api.get('/classes/by-date/', { params: { ...params, date } })
     return data
   },
+  coverable: async (date, params = {}) => {
+    const { data } = await api.get('/classes/coverable/', { params: { ...params, date } })
+    return data
+  },
   retrieve: async (id) => {
     const { data } = await api.get(`/classes/${id}/`)
     return data
@@ -326,6 +330,10 @@ export const classesApi = {
   },
   update: async (id, payload) => {
     const { data } = await api.patch(`/classes/${id}/`, payload)
+    return data
+  },
+  claimSubstitution: async (id) => {
+    const { data } = await api.post(`/classes/${id}/claim-substitution/`)
     return data
   },
   remove: async (id) => {

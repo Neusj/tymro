@@ -1,6 +1,7 @@
 ﻿import { useEffect, useMemo, useState } from 'react'
 import { classesApi, enrollmentsApi } from '../api/client'
 import BulkActionModal from '../components/BulkActionModal'
+import ConfirmDialog from '../components/ConfirmDialog'
 import DashboardHeader from '../components/DashboardHeader'
 import DaySelector, { todayIsoDate } from '../components/DaySelector'
 import FilterDropdown from '../components/FilterDropdown'
@@ -79,6 +80,7 @@ function PlanStatusBadge({ student }) {
 
 export default function TeacherClassesPage({ mode = 'upcoming' }) {
   const [classes, setClasses] = useState([])
+  const [coverableClasses, setCoverableClasses] = useState([])
   const [selectedDate, setSelectedDate] = useState(todayIsoDate())
   const [loading, setLoading] = useState(true)
   const [working, setWorking] = useState(false)
@@ -87,6 +89,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
   const [filters, setFilters] = useState(initialFilters)
   const [selectedIds, setSelectedIds] = useState([])
   const [bulkModalOpen, setBulkModalOpen] = useState(false)
+  const [claimingClass, setClaimingClass] = useState(null)
 
   const [attendanceOpen, setAttendanceOpen] = useState(false)
   const [attendanceClass, setAttendanceClass] = useState(null)
@@ -120,12 +123,33 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
   const loadData = async () => {
     setLoading(true)
     try {
-      const list = await classesApi.byDate(selectedDate, listParams)
+      const [list, coverable] = await Promise.all([
+        classesApi.byDate(selectedDate, listParams),
+        mode === 'upcoming' ? classesApi.coverable(selectedDate, { ordering: 'start_datetime' }) : Promise.resolve([]),
+      ])
       setClasses(list)
+      setCoverableClasses(coverable)
     } catch (apiError) {
       setError(firstApiError(apiError?.response?.data, 'No se pudieron cargar las clases.'))
     } finally {
       setLoading(false)
+    }
+  }
+
+  const claimSubstitution = async () => {
+    if (!claimingClass) {
+      return
+    }
+    setWorking(true)
+    setError('')
+    try {
+      await classesApi.claimSubstitution(claimingClass.id)
+      setClaimingClass(null)
+      await loadData()
+    } catch (apiError) {
+      setError(firstApiError(apiError?.response?.data, 'No se pudo tomar la suplencia.'))
+    } finally {
+      setWorking(false)
     }
   }
 
@@ -518,6 +542,41 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
     return base
   }, [mode, working])
 
+  const coverableColumns = useMemo(
+    () => [
+      { key: 'name', label: 'Clase' },
+      { key: 'teacher_name', label: 'Titular' },
+      { key: 'branch_name', label: 'Sucursal' },
+      { key: 'discipline_name', label: 'Disciplina', render: (row) => <ValueBadge kind="discipline" value={row.discipline_name} /> },
+      { key: 'start_datetime', label: 'Inicio', render: (row) => formatDateTime(row.start_datetime) },
+      { key: 'end_datetime', label: 'Termino', render: (row) => formatDateTime(row.end_datetime) },
+      {
+        key: 'substitute_display_name',
+        label: 'Suplente',
+        render: (row) => (row.has_substitute ? row.substitute_display_name || '-' : <span className="text-brand-muted">Disponible</span>),
+      },
+      {
+        key: 'actions',
+        label: 'Acciones',
+        sortable: false,
+        render: (row) =>
+          row.can_claim_substitution ? (
+            <button
+              type="button"
+              disabled={working}
+              onClick={() => setClaimingClass(row)}
+              className="w-full rounded-lg border border-brand-orange/60 px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-orange disabled:opacity-60"
+            >
+              Cubrir esta clase
+            </button>
+          ) : (
+            <span className="text-xs text-brand-muted">Suplencia tomada</span>
+          ),
+      },
+    ],
+    [working],
+  )
+
   const title = mode === 'history' ? 'Teacher · Clases realizadas' : 'Teacher · Proximas clases'
   const subtitle =
     mode === 'history'
@@ -608,6 +667,20 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
         />
       </section>
 
+      {mode === 'upcoming' ? (
+        <section className="card-surface p-5">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <h2 className="panel-title">Clases disponibles para cubrir</h2>
+          </div>
+          <DataTable
+            columns={coverableColumns}
+            data={coverableClasses}
+            loading={loading}
+            defaultSort={{ key: 'start_datetime', direction: 'asc' }}
+          />
+        </section>
+      ) : null}
+
       <BulkActionModal
         open={mode === 'upcoming' && bulkModalOpen}
         title="Finalizar o cancelar clases"
@@ -629,6 +702,16 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
         defaultAction="cancel"
         onClose={() => setBulkModalOpen(false)}
         onConfirm={runBulkAction}
+      />
+
+      <ConfirmDialog
+        open={Boolean(claimingClass)}
+        title="Cubrir esta clase"
+        description={`Tomaras ${claimingClass?.name || 'esta clase'} como suplente. El profesor titular se mantiene.`}
+        confirmLabel="Cubrir clase"
+        loading={working}
+        onCancel={() => setClaimingClass(null)}
+        onConfirm={claimSubstitution}
       />
 
       <FormModal

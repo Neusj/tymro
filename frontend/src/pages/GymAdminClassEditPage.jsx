@@ -15,7 +15,19 @@ const initialForm = {
   capacity: 10,
   is_trial_eligible: false,
   has_substitute: false,
+  substitute_kind: 'external',
+  substitute_teacher: '',
   substitute_name: '',
+}
+
+function substitutePayload(form) {
+  if (!form.has_substitute) {
+    return { has_substitute: false, substitute_teacher: null, substitute_name: '' }
+  }
+  if (form.substitute_kind === 'registered') {
+    return { has_substitute: true, substitute_teacher: Number(form.substitute_teacher), substitute_name: '' }
+  }
+  return { has_substitute: true, substitute_teacher: null, substitute_name: form.substitute_name }
 }
 
 function toDateTimeLocalValue(value) {
@@ -88,6 +100,8 @@ export default function GymAdminClassEditPage() {
         capacity: classData.capacity || 10,
         is_trial_eligible: Boolean(classData.is_trial_eligible),
         has_substitute: Boolean(classData.has_substitute),
+        substitute_kind: classData.substitute_teacher ? 'registered' : 'external',
+        substitute_teacher: classData.substitute_teacher ? String(classData.substitute_teacher) : '',
         substitute_name: classData.substitute_name || '',
       })
     } catch (apiError) {
@@ -107,8 +121,10 @@ export default function GymAdminClassEditPage() {
     setError('')
 
     try {
+      const { substitute_kind, ...formPayload } = form
       await classesApi.update(id, {
-        ...form,
+        ...formPayload,
+        ...substitutePayload(form),
         branch: Number(form.branch),
         teacher: Number(form.teacher),
         class_type: Number(form.class_type),
@@ -288,7 +304,12 @@ export default function GymAdminClassEditPage() {
                     // Al desmarcar, se limpia el nombre: no puede quedar un suplente
                     // "fantasma" cargado si el check se apaga (mismo invariante que exige
                     // el backend).
-                    setForm((prev) => ({ ...prev, has_substitute: checked, substitute_name: checked ? prev.substitute_name : '' }))
+                    setForm((prev) => ({
+                      ...prev,
+                      has_substitute: checked,
+                      substitute_teacher: checked ? prev.substitute_teacher : '',
+                      substitute_name: checked ? prev.substitute_name : '',
+                    }))
                   }}
                   className="mt-0.5 h-4 w-4 shrink-0 accent-brand-orange"
                 />
@@ -300,16 +321,62 @@ export default function GymAdminClassEditPage() {
                 </span>
               </label>
               {form.has_substitute ? (
-                <label className="block space-y-1 pl-7 text-sm">
-                  <span>Nombre del suplente</span>
-                  <input
-                    required
-                    value={form.substitute_name}
-                    onChange={(event) => setForm((prev) => ({ ...prev, substitute_name: event.target.value }))}
-                    placeholder="Nombre y apellido"
-                    className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
-                  />
-                </label>
+                <div className="space-y-3 pl-7">
+                  <fieldset className="flex flex-wrap gap-3 text-sm">
+                    <legend className="sr-only">Tipo de suplente</legend>
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="radio"
+                        name="substitute_kind"
+                        value="registered"
+                        checked={form.substitute_kind === 'registered'}
+                        onChange={() => setForm((prev) => ({ ...prev, substitute_kind: 'registered', substitute_name: '' }))}
+                      />
+                      <span>Profesor registrado</span>
+                    </label>
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="radio"
+                        name="substitute_kind"
+                        value="external"
+                        checked={form.substitute_kind === 'external'}
+                        onChange={() => setForm((prev) => ({ ...prev, substitute_kind: 'external', substitute_teacher: '' }))}
+                      />
+                      <span>Externo</span>
+                    </label>
+                  </fieldset>
+                  {form.substitute_kind === 'registered' ? (
+                    <label className="block space-y-1 text-sm">
+                      <span>Profesor suplente</span>
+                      <select
+                        required
+                        value={form.substitute_teacher}
+                        onChange={(event) => setForm((prev) => ({ ...prev, substitute_teacher: event.target.value }))}
+                        className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
+                      >
+                        <option value="">Seleccionar</option>
+                        {teachers
+                          .filter((teacher) => String(teacher.id) !== String(form.teacher))
+                          .map((teacher) => (
+                            <option key={teacher.id} value={teacher.id}>
+                              {`${teacher.first_name || ''} ${teacher.last_name || ''}`.trim() || teacher.username}
+                            </option>
+                          ))}
+                      </select>
+                    </label>
+                  ) : (
+                    <label className="block space-y-1 text-sm">
+                      <span>Nombre del suplente externo</span>
+                      <input
+                        required
+                        value={form.substitute_name}
+                        onChange={(event) => setForm((prev) => ({ ...prev, substitute_name: event.target.value }))}
+                        placeholder="Nombre y apellido"
+                        className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
+                      />
+                    </label>
+                  )}
+                </div>
               ) : null}
             </div>
 

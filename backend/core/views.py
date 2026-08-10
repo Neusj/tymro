@@ -379,6 +379,13 @@ def _payment_type_label(code):
     return dict(TeacherPaymentRule.PaymentType.choices).get(code, code)
 
 
+def _user_display_name(user):
+    if not user:
+        return ''
+    full_name = f'{user.first_name} {user.last_name}'.strip()
+    return full_name or user.username
+
+
 def _parse_bool(value, default=True):
     if value is None:
         return default
@@ -2397,7 +2404,18 @@ class HolidayViewSet(ModelViewSet):
 
 
 class GymClassViewSet(ModelViewSet):
-    queryset = GymClass.objects.select_related('branch', 'teacher', 'class_type', 'discipline', 'organization', 'class_template', 'created_by', 'closed_by').all()
+    queryset = GymClass.objects.select_related(
+        'branch',
+        'teacher',
+        'substitute_teacher',
+        'substitution_assigned_by',
+        'class_type',
+        'discipline',
+        'organization',
+        'class_template',
+        'created_by',
+        'closed_by',
+    ).all()
     serializer_class = GymClassSerializer
 
     def get_serializer_class(self):
@@ -2626,6 +2644,22 @@ class GymClassViewSet(ModelViewSet):
             'is_active': True,
             'has_substitute': template.has_substitute,
             'substitute_name': template.substitute_name,
+            'substitute_teacher': template.substitute_teacher_id,
+            'substitute_teacher_name': _user_display_name(template.substitute_teacher) if template.substitute_teacher else '',
+            'substitute_display_name': (
+                _user_display_name(template.substitute_teacher)
+                if template.substitute_teacher_id else template.substitute_name
+            ),
+            'substitute_kind': 'registered' if template.substitute_teacher_id else ('external' if template.has_substitute and template.substitute_name else ''),
+            'substitution_source': template.substitution_source,
+            'effective_substitution_source': (
+                template.substitution_source
+                or (GymClass.SubstitutionSource.EXTERNAL_ADMIN if template.has_substitute and template.substitute_name else '')
+            ),
+            'substitution_assigned_at': template.substitution_assigned_at.isoformat() if template.substitution_assigned_at else None,
+            'substitution_assigned_by': template.substitution_assigned_by_id,
+            'substitution_assigned_by_name': _user_display_name(template.substitution_assigned_by) if template.substitution_assigned_by else '',
+            'can_claim_substitution': False,
             'enrollments_count': 0,
             'attendances_count': 0,
             'present_attendances_count': 0,
@@ -2674,6 +2708,117 @@ class GymClassViewSet(ModelViewSet):
         combined = [*real_data, *virtual_data]
         combined.sort(key=lambda item: (item['start_datetime'], str(item['id'])))
         return Response(combined)
+
+    def _substitution_conflict_exists(self, *, teacher, gym_class):
+        blocking_statuses = {
+            GymClass.Status.SCHEDULED,
+            GymClass.Status.IN_PROGRESS,
+        }
+        return GymClass.objects.filter(
+            organization_id=teacher.organization_id,
+            start_datetime__lt=gym_class.end_datetime,
+            end_datetime__gt=gym_class.start_datetime,
+            status__in=blocking_statuses,
+        ).exclude(pk=gym_class.pk).filter(
+            models.Q(teacher_id=teacher.id)
+            | models.Q(has_substitute=True, substitute_teacher_id=teacher.id)
+        ).exists()
+
+    def _validate_claim_substitution(self, *, teacher, gym_class):
+        if not _is_teacher(teacher):
+            raise PermissionDenied('Solo los profesores pueden tomar suplencias.')
+        if not teacher.organization_id:
+            raise PermissionDenied('Tu usuario no tiene organización asociada.')
+        if not teacher.is_active:
+            raise PermissionDenied('El profesor debe estar activo para tomar suplencias.')
+        if gym_class.organization_id != teacher.organization_id:
+            raise NotFound('Clase no encontrada.')
+        if gym_class.teacher_id == teacher.id:
+            raise ValidationError({'detail': 'No puedes tomar tu propia clase como suplente.'})
+        if gym_class.has_substitute:
+            raise ValidationError({'detail': 'Esta clase ya tiene suplente.'})
+        if gym_class.start_datetime <= timezone.now():
+            raise ValidationError({'detail': 'No puedes tomar una clase pasada.'})
+        if gym_class.status not in {GymClass.Status.SCHEDULED, GymClass.Status.IN_PROGRESS}:
+            raise ValidationError({'detail': 'Esta clase no admite suplencia.'})
+        if self._substitution_conflict_exists(teacher=teacher, gym_class=gym_class):
+            raise ValidationError({'detail': 'Ya tienes una clase o suplencia en ese horario.'})
+
+    @action(detail=False, methods=['get'], url_path='coverable')
+    def coverable(self, request):
+        user = request.user
+        if not _is_teacher(user):
+            raise PermissionDenied('Solo los profesores pueden ver suplencias disponibles.')
+        if not user.organization_id:
+            return Response([])
+
+        raw_date = request.query_params.get('date')
+        start_date_from = self.request.query_params.get('start_date_from')
+        start_date_to = self.request.query_params.get('start_date_to')
+        if raw_date:
+            target_date = parse_date(raw_date)
+            if target_date is None or raw_date != target_date.isoformat():
+                return Response({'date': 'Formato invalido. Usa YYYY-MM-DD.'}, status=status.HTTP_400_BAD_REQUEST)
+            start_date_from = target_date.isoformat()
+            start_date_to = target_date.isoformat()
+
+        queryset = self.queryset.filter(
+            organization_id=user.organization_id,
+            start_datetime__gt=timezone.now(),
+            status__in=[GymClass.Status.SCHEDULED, GymClass.Status.IN_PROGRESS],
+        ).exclude(teacher_id=user.id)
+        queryset = queryset.filter(models.Q(has_substitute=False) | models.Q(substitute_teacher_id=user.id))
+        queryset = self._apply_class_common_filters(
+            queryset,
+            start_date_from=start_date_from,
+            start_date_to=start_date_to,
+        )
+        queryset = _apply_ordering(
+            queryset,
+            self.request.query_params.get('ordering'),
+            self._class_ordering()[0],
+            ['start_datetime', 'id'],
+        )
+        _sync_class_statuses(queryset)
+        serializer = GymClassSerializer(queryset, many=True, context={'request': request})
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'], url_path='claim-substitution')
+    def claim_substitution(self, request, pk=None):
+        user = request.user
+        if not _is_teacher(user):
+            raise PermissionDenied('Solo los profesores pueden tomar suplencias.')
+        if not user.organization_id:
+            raise PermissionDenied('Tu usuario no tiene organización asociada.')
+
+        with transaction.atomic():
+            gym_class = GymClass.objects.select_for_update().filter(
+                pk=pk,
+                organization_id=user.organization_id,
+            ).first()
+            if gym_class is None:
+                raise NotFound('Clase no encontrada.')
+            self._validate_claim_substitution(teacher=user, gym_class=gym_class)
+            now = timezone.now()
+            gym_class.has_substitute = True
+            gym_class.substitute_teacher = user
+            gym_class.substitute_name = ''
+            gym_class.substitution_source = GymClass.SubstitutionSource.TEACHER_CLAIMED
+            gym_class.substitution_assigned_at = now
+            gym_class.substitution_assigned_by = user
+            gym_class.save(update_fields=[
+                'has_substitute',
+                'substitute_teacher',
+                'substitute_name',
+                'substitution_source',
+                'substitution_assigned_at',
+                'substitution_assigned_by',
+                'updated_at',
+            ])
+
+        gym_class = self.queryset.get(pk=gym_class.pk)
+        serializer = GymClassSerializer(gym_class, context={'request': request})
+        return Response(serializer.data)
 
     @action(detail=False, methods=['get'], url_path='dashboard-summary')
     def dashboard_summary(self, request):
@@ -4038,6 +4183,10 @@ class EnrollmentViewSet(ModelViewSet):
                 'is_active': True,
                 'has_substitute': template.has_substitute,
                 'substitute_name': template.substitute_name,
+                'substitute_teacher': template.substitute_teacher,
+                'substitution_source': template.substitution_source,
+                'substitution_assigned_at': template.substitution_assigned_at,
+                'substitution_assigned_by': template.substitution_assigned_by,
             },
         )
         return gym_class

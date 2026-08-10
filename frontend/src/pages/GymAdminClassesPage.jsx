@@ -177,10 +177,10 @@ export default function GymAdminClassesPage() {
       { key: 'branch_name', label: 'Sucursal' },
       { key: 'teacher_name', label: 'Profesor' },
       {
-        key: 'substitute_name',
+        key: 'substitute_display_name',
         label: 'Suplente',
         mobile: 'secondary',
-        render: (row) => (row.has_substitute ? row.substitute_name || '-' : <span className="text-brand-muted">Sin suplente</span>),
+        render: (row) => (row.has_substitute ? row.substitute_display_name || row.substitute_name || '-' : <span className="text-brand-muted">Sin suplente</span>),
       },
       { key: 'class_type_name', label: 'Tipo', render: (row) => <ValueBadge kind="class_type" value={row.class_type_name} /> },
       { key: 'discipline_name', label: 'Disciplina', render: (row) => <ValueBadge kind="discipline" value={row.discipline_name} /> },

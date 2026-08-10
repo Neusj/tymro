@@ -28,6 +28,15 @@ const ATTENDANCE_TOGGLE_OPTIONS = [
   { value: 'absent', label: 'Ausente' },
 ]
 
+function substitutionSourceLabel(source) {
+  const labels = {
+    external_admin: 'Externo asignado por admin',
+    admin_assigned: 'Profesor asignado por admin',
+    teacher_claimed: 'Tomada por profesor',
+  }
+  return labels[source] || ''
+}
+
 export default function GymAdminClassDetailPage() {
   const { id } = useParams()
   const { user } = useAuth()
@@ -258,7 +267,11 @@ export default function GymAdminClassDetailPage() {
             Suplente
           </span>
           <div className="text-sm">
-            <p className="font-semibold text-brand-white">{gymClass.substitute_name || '-'}</p>
+            <p className="font-semibold text-brand-white">{gymClass.substitute_display_name || gymClass.substitute_name || '-'}</p>
+            <p className="mt-0.5 text-xs text-brand-muted">
+              {gymClass.substitute_kind === 'registered' ? 'Profesor registrado' : 'Suplente externo'}
+              {substitutionSourceLabel(gymClass.effective_substitution_source) ? ` · ${substitutionSourceLabel(gymClass.effective_substitution_source)}` : ''}
+            </p>
             <p className="mt-0.5 text-xs text-brand-muted">
               Dio la clase en lugar de {gymClass.teacher_name || 'el profesor asignado'}. El profesor titular sigue siendo{' '}
               {gymClass.teacher_name || '-'} — el suplente no cambia a quién se le paga.
