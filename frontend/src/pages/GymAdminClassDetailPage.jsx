@@ -278,8 +278,7 @@ export default function GymAdminClassDetailPage() {
               {substitutionSourceLabel(gymClass.effective_substitution_source) ? ` · ${substitutionSourceLabel(gymClass.effective_substitution_source)}` : ''}
             </p>
             <p className="mt-0.5 text-xs text-brand-muted">
-              Dio la clase en lugar de {gymClass.teacher_name || 'el profesor asignado'}. El profesor titular sigue siendo{' '}
-              {gymClass.teacher_name || '-'} — el suplente no cambia a quién se le paga.
+              Dio la clase en lugar de {gymClass.teacher_name || 'el profesor asignado'}.
             </p>
           </div>
         </section>
