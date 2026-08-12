@@ -38,6 +38,12 @@ describe('RutReminderBanner', () => {
     expect(screen.getByText('Completa tu RUT')).toBeInTheDocument()
   })
 
+  it('se muestra para un profesor de organizacion sin RUT', () => {
+    mockUser = { role: 'teacher', rut: null }
+    render(<RutReminderBanner />)
+    expect(screen.getByText('Completa tu RUT')).toBeInTheDocument()
+  })
+
   it('RUT inválido: muestra error y no llama al API', async () => {
     mockUser = { role: 'student', rut: null }
     render(<RutReminderBanner />)

@@ -918,15 +918,20 @@ def test_students_missing_rut_is_allowed(api_client, admin_a, org_a):
     assert student.trial_eligible is False
 
 
-def test_teachers_missing_rut_is_required_error(api_client, admin_a):
+def test_teachers_missing_rut_is_allowed(api_client, admin_a, org_a):
+    from django.contrib.auth import get_user_model
+
     login(api_client, 'admin_a')
-    upload = build_xlsx([['sin.rut.teacher@gym.cl', '', 'Ana', '', '', '']], headers=USER_HEADERS)
-    resp = api_client.post('/api/imports/teachers/validate/', {'file': upload}, format='multipart')
-    body = resp.json()
-    assert body['can_commit'] is False
-    error = body['rows'][0]['errors'][0]
-    assert error['column'] == 'RUT'
-    assert 'obligatorio' in error['message']
+    resp = import_entity(
+        api_client,
+        'teachers',
+        [['sin.rut.teacher@gym.cl', '', 'Ana', '', '', '']],
+        USER_HEADERS,
+    )
+    assert resp.status_code == 201, resp.content
+    teacher = get_user_model().objects.get(organization=org_a, email='sin.rut.teacher@gym.cl')
+    assert teacher.role == 'teacher'
+    assert teacher.rut is None
 
 
 def test_students_invalid_rut_is_row_error(api_client, admin_a):

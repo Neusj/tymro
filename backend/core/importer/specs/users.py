@@ -207,7 +207,7 @@ TEACHERS = register(EntityImportSpec(
     label='Profesores',
     description='Tus profesores o coaches. Quedan listos para asignarlos a clases y horarios.',
     model='accounts.CustomUser',
-    fields=_user_fields('el profesor o la profesora', rut_required=True),
+    fields=_user_fields('el profesor o la profesora', rut_required=False),
     natural_key=('email',),
     row_validators=(
         _email_valid_as_username, _email_conflict_outside_org,
