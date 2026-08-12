@@ -1221,7 +1221,6 @@ class GymClassSerializer(serializers.ModelSerializer):
             and obj.organization_id == user.organization_id
             and obj.has_substitute
             and obj.substitute_teacher_id == user.id
-            and obj.substitution_source == GymClass.SubstitutionSource.TEACHER_CLAIMED
             and obj.start_datetime > timezone.now()
             and obj.status in {GymClass.Status.SCHEDULED, GymClass.Status.IN_PROGRESS}
         )

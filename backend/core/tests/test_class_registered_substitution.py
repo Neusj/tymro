@@ -228,7 +228,7 @@ def test_profesor_suelta_suplencia_tomada_por_el(api_client, setup):
     assert gym_class.substitution_assigned_at is None
 
 
-def test_profesor_no_suelta_suplencia_asignada_por_admin(api_client, setup):
+def test_profesor_suelta_suplencia_registrada_asignada_a_el(api_client, setup):
     gym_class = _make_class(
         setup,
         has_substitute=True,
@@ -241,11 +241,11 @@ def test_profesor_no_suelta_suplencia_asignada_por_admin(api_client, setup):
 
     resp = api_client.post(f"{CLASSES_URL}{gym_class.id}/release-substitution/", format='json')
 
-    assert resp.status_code == 400, resp.content
+    assert resp.status_code == 200, resp.content
     gym_class.refresh_from_db()
-    assert gym_class.has_substitute is True
-    assert gym_class.substitute_teacher_id == setup['substitute'].id
-    assert gym_class.substitution_source == GymClass.SubstitutionSource.ADMIN_ASSIGNED
+    assert gym_class.has_substitute is False
+    assert gym_class.substitute_teacher_id is None
+    assert gym_class.substitution_source == ''
 
 
 def test_profesor_no_suelta_suplencia_de_otro(api_client, setup, make_user):

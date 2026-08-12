@@ -1,5 +1,6 @@
 ﻿import { useEffect, useMemo, useState } from 'react'
 import { classesApi, enrollmentsApi } from '../api/client'
+import { useAuth } from '../auth/AuthContext'
 import BulkActionModal from '../components/BulkActionModal'
 import ConfirmDialog from '../components/ConfirmDialog'
 import ConfirmWithReasonDialog from '../components/ConfirmWithReasonDialog'
@@ -80,6 +81,7 @@ function PlanStatusBadge({ student }) {
 }
 
 export default function TeacherClassesPage({ mode = 'upcoming' }) {
+  const { user } = useAuth()
   const [classes, setClasses] = useState([])
   const [coverableClasses, setCoverableClasses] = useState([])
   const [selectedDate, setSelectedDate] = useState(todayIsoDate())
@@ -584,6 +586,13 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
         label: 'Acciones',
         sortable: false,
         render: (row) => {
+          const canReleaseSubstitution =
+            row.can_release_substitution ||
+            (
+              row.has_substitute &&
+              String(row.substitute_teacher || '') === String(user?.id || '') &&
+              ['scheduled', 'in_progress'].includes(row.status)
+            )
           if (row.can_claim_substitution) {
             return (
               <button
@@ -596,7 +605,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
               </button>
             )
           }
-          if (row.can_release_substitution) {
+          if (canReleaseSubstitution) {
             return (
               <button
                 type="button"
@@ -612,7 +621,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
         },
       },
     ],
-    [working],
+    [user?.id, working],
   )
 
   const title = mode === 'history' ? 'Teacher · Clases realizadas' : 'Teacher · Proximas clases'

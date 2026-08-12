@@ -15,6 +15,10 @@ vi.mock('../api/client', () => ({
   enrollmentsApi: { create: vi.fn(), cancel: vi.fn() },
 }))
 
+vi.mock('../auth/AuthContext', () => ({
+  useAuth: () => ({ user: { id: 777, role: 'teacher' } }),
+}))
+
 import { classesApi } from '../api/client'
 import TeacherClassesPage from './TeacherClassesPage'
 
@@ -150,9 +154,9 @@ describe('TeacherClassesPage — suplencias disponibles', () => {
         name: 'Boxeo',
         teacher_name: 'Prof. Matias',
         has_substitute: true,
+        substitute_teacher: 777,
         substitute_display_name: 'Yo Profesor',
         can_claim_substitution: false,
-        can_release_substitution: true,
       },
     ])
 

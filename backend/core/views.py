@@ -2811,12 +2811,8 @@ class GymClassViewSet(ModelViewSet):
             raise ValidationError({'detail': 'No puedes soltar una suplencia de una clase que ya comenzo.'})
         if gym_class.status not in {GymClass.Status.SCHEDULED, GymClass.Status.IN_PROGRESS}:
             raise ValidationError({'detail': 'Esta clase no admite cambios de suplencia.'})
-        if not (
-            gym_class.has_substitute
-            and gym_class.substitute_teacher_id == teacher.id
-            and gym_class.substitution_source == GymClass.SubstitutionSource.TEACHER_CLAIMED
-        ):
-            raise ValidationError({'detail': 'Solo puedes soltar una suplencia tomada por ti.'})
+        if not (gym_class.has_substitute and gym_class.substitute_teacher_id == teacher.id):
+            raise ValidationError({'detail': 'Solo puedes soltar una suplencia asignada a ti.'})
 
     @action(detail=False, methods=['get'], url_path='coverable')
     def coverable(self, request):
