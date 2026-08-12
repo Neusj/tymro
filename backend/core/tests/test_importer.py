@@ -1427,33 +1427,39 @@ def test_memberships_upsert_reactivation_keeps_organization(api_client, admin_a,
     assert StudentPlan.objects.filter(user=membership_setup['student']).count() == 1
 
 
-# ---------------------------------------------------------------- F5: Horario recurrente
+# ---------------------------------------------------------------- F5: Clases
 
-TEMPLATE_HEADERS = ['Sucursal', 'Día de la semana', 'Hora de inicio', 'Hora de término',
-                    'Nombre de la clase', 'Email del profesor', 'Tipo de clase', 'Disciplina',
-                    'Capacidad', 'Vigente desde', 'Vigente hasta', 'Apta para clase de prueba']
+TEMPLATE_HEADERS = ['Nombre visible', 'Dia de la semana', 'Sucursal', 'Email del profesor',
+                    'Tipo', 'Disciplina', 'Hora inicio', 'Hora termino', 'Capacidad',
+                    'Descripcion', 'Elegible para clase de prueba gratis',
+                    'Clase con suplente', 'Email del profesor suplente',
+                    'Nombre del suplente externo']
 
 
 @pytest.fixture
 def schedule_setup(make_user, org_a):
     branch = Branch.objects.create(organization=org_a, name='Sede Centro')
     teacher = make_user('coach', organization=org_a, role='teacher', email='coach@gym.cl')
+    substitute = make_user('sub', organization=org_a, role='teacher', email='suplente@gym.cl')
     class_type = ClassType.objects.create(organization=org_a, name='Clase grupal')
     discipline = Discipline.objects.create(organization=org_a, name='Yoga')
-    return {'branch': branch, 'teacher': teacher, 'class_type': class_type,
+    return {'branch': branch, 'teacher': teacher, 'substitute': substitute, 'class_type': class_type,
             'discipline': discipline}
 
 
 def test_class_templates_full_cycle(api_client, admin_a, org_a, schedule_setup):
     import datetime
 
+    from django.utils import timezone
+
     from core.models import ClassTemplate
 
     login(api_client, 'admin_a')
     rows = [
-        ['Sede Centro', 'Lunes', '18:30', '19:30', 'Yoga vespertino', 'coach@gym.cl',
-         'Clase grupal', 'Yoga', 15, '2026-06-15', '', 'Sí'],
-        ['Sede Centro', 'Miércoles', '09:00', '10:00', '', '', '', '', '', '2026-06-15', '', ''],
+        ['Yoga vespertino', 'Lunes', 'Sede Centro', 'coach@gym.cl', 'Clase grupal',
+         'Yoga', '18:30', '19:30', 15, 'Clase suave', 'Si', 'Si', '', 'Juan Perez'],
+        ['Yoga manana', 'Miercoles', 'Sede Centro', 'coach@gym.cl', 'Clase grupal',
+         'Yoga', '09:00', '10:00', '', '', '', '', '', ''],
     ]
     resp = import_entity(api_client, 'class-templates', rows, TEMPLATE_HEADERS)
     assert resp.status_code == 201, resp.content
@@ -1468,18 +1474,42 @@ def test_class_templates_full_cycle(api_client, admin_a, org_a, schedule_setup):
     assert yoga.class_type_id == schedule_setup['class_type'].id
     assert yoga.discipline_id == schedule_setup['discipline'].id
     assert yoga.capacity == 15
+    assert yoga.description == 'Clase suave'
     assert yoga.is_trial_eligible is True
+    assert yoga.has_substitute is True
+    assert yoga.substitute_name == 'Juan Perez'
+    assert yoga.substitute_teacher is None
     assert yoga.is_active is True
+    assert yoga.start_date == timezone.localdate()
+    assert yoga.end_date is None
 
     plain = ClassTemplate.objects.get(organization=org_a, weekday=2)
-    assert plain.teacher is None
+    assert plain.teacher_id == schedule_setup['teacher'].id
     assert plain.capacity == 20  # default del spec
     assert plain.is_trial_eligible is False
+    assert plain.has_substitute is False
 
-    # Idempotente por (sucursal, día, hora de inicio, profesor).
+    # Idempotente por (sucursal, dia, hora de inicio, profesor).
     resp = import_entity(api_client, 'class-templates', rows, TEMPLATE_HEADERS)
     assert resp.json()['created'] == 0
     assert resp.json()['skipped_duplicates'] == 2
+
+
+def test_class_templates_registered_substitute(api_client, admin_a, org_a, schedule_setup):
+    from core.models import ClassTemplate, GymClass
+
+    login(api_client, 'admin_a')
+    rows = [[
+        'Boxeo', 'Viernes', 'Sede Centro', 'coach@gym.cl', 'Clase grupal', 'Yoga',
+        '12:00', '13:00', 12, '', 'No', 'Si', 'suplente@gym.cl', '',
+    ]]
+    resp = import_entity(api_client, 'class-templates', rows, TEMPLATE_HEADERS)
+    assert resp.status_code == 201, resp.content
+    template = ClassTemplate.objects.get(organization=org_a, name='Boxeo')
+    assert template.has_substitute is True
+    assert template.substitute_teacher_id == schedule_setup['substitute'].id
+    assert template.substitute_name == ''
+    assert template.substitution_source == GymClass.SubstitutionSource.ADMIN_ASSIGNED
 
 
 def test_class_templates_same_slot_different_teacher_both_import(
@@ -1491,14 +1521,11 @@ def test_class_templates_same_slot_different_teacher_both_import(
 
     coach2 = make_user('coach2', organization=org_a, role='teacher', email='coach2@gym.cl')
     login(api_client, 'admin_a')
-    # Mismo branch / día / hora de inicio, profesores DISTINTOS → no se deduplican
-    # (la clave natural incluye al profesor) y profesores distintos no se cruzan
-    # entre sí → ambas se importan.
     rows = [
-        ['Sede Centro', 'Lunes', '07:00', '08:00', 'Kick Boxing', 'coach@gym.cl',
-         '', '', '', '2026-06-15', '', ''],
-        ['Sede Centro', 'Lunes', '07:00', '08:00', 'Boxeo', 'coach2@gym.cl',
-         '', '', '', '2026-06-15', '', ''],
+        ['Kick Boxing', 'Lunes', 'Sede Centro', 'coach@gym.cl', 'Clase grupal',
+         'Yoga', '07:00', '08:00', '', '', '', '', '', ''],
+        ['Boxeo', 'Lunes', 'Sede Centro', 'coach2@gym.cl', 'Clase grupal',
+         'Yoga', '07:00', '08:00', '', '', '', '', '', ''],
     ]
     resp = import_entity(api_client, 'class-templates', rows, TEMPLATE_HEADERS)
     assert resp.status_code == 201, resp.content
@@ -1516,13 +1543,11 @@ def test_class_templates_same_slot_same_teacher_dedups(api_client, admin_a, org_
     from core.models import ClassTemplate
 
     login(api_client, 'admin_a')
-    # Mismo branch / día / hora de inicio y MISMO profesor → la segunda es duplicada
-    # dentro del archivo y se omite.
     rows = [
-        ['Sede Centro', 'Lunes', '07:00', '08:00', 'Kick Boxing', 'coach@gym.cl',
-         '', '', '', '2026-06-15', '', ''],
-        ['Sede Centro', 'Lunes', '07:00', '08:00', 'Repetida', 'coach@gym.cl',
-         '', '', '', '2026-06-15', '', ''],
+        ['Kick Boxing', 'Lunes', 'Sede Centro', 'coach@gym.cl', 'Clase grupal',
+         'Yoga', '07:00', '08:00', '', '', '', '', '', ''],
+        ['Repetida', 'Lunes', 'Sede Centro', 'coach@gym.cl', 'Clase grupal',
+         'Yoga', '07:00', '08:00', '', '', '', '', '', ''],
     ]
     resp = import_entity(api_client, 'class-templates', rows, TEMPLATE_HEADERS)
     assert resp.status_code == 201, resp.content
@@ -1536,10 +1561,16 @@ def test_class_templates_same_slot_same_teacher_dedups(api_client, admin_a, org_
 def test_class_templates_row_rules(api_client, admin_a, schedule_setup):
     login(api_client, 'admin_a')
     rows = [
-        ['Sede Centro', 'Lunes', '19:30', '18:30', '', '', '', '', '', '2026-06-15', '', ''],
-        ['Sede Centro', 'Martes', '18:30', '19:30', '', '', '', '', 0, '2026-06-15', '', ''],
-        ['Sede Centro', 'Jueves', '18:30', '19:30', '', '', '', '', '', '2026-06-15', '2026-06-01', ''],
-        ['Sede Centro', 'Lunsex', '18:30', '19:30', '', '', '', '', '', '2026-06-15', '', ''],
+        ['Mal horario', 'Lunes', 'Sede Centro', 'coach@gym.cl', 'Clase grupal',
+         'Yoga', '19:30', '18:30', '', '', '', '', '', ''],
+        ['Sin cupos', 'Martes', 'Sede Centro', 'coach@gym.cl', 'Clase grupal',
+         'Yoga', '18:30', '19:30', 0, '', '', '', '', ''],
+        ['Mal dia', 'Lunsex', 'Sede Centro', 'coach@gym.cl', 'Clase grupal',
+         'Yoga', '18:30', '19:30', '', '', '', '', '', ''],
+        ['Suplente incompleto', 'Jueves', 'Sede Centro', 'coach@gym.cl', 'Clase grupal',
+         'Yoga', '18:30', '19:30', '', '', '', 'Si', '', ''],
+        ['Suplente doble', 'Viernes', 'Sede Centro', 'coach@gym.cl', 'Clase grupal',
+         'Yoga', '18:30', '19:30', '', '', '', 'Si', 'suplente@gym.cl', 'Juan Perez'],
     ]
     upload = build_xlsx(rows, headers=TEMPLATE_HEADERS)
     resp = api_client.post('/api/imports/class-templates/validate/', {'file': upload},
@@ -1549,59 +1580,27 @@ def test_class_templates_row_rules(api_client, admin_a, schedule_setup):
     by_row = {r['row']: r for r in body['rows']}
     assert 'posterior a la hora de inicio' in by_row[2]['errors'][0]['message']
     assert 'entre 1 y 1000' in by_row[3]['errors'][0]['message']
-    assert 'no puede ser anterior' in by_row[4]['errors'][0]['message']
-    assert 'Las opciones son' in by_row[5]['errors'][0]['message']
-
-
-def test_class_templates_teacher_overlap_against_db(api_client, admin_a, org_a, schedule_setup):
-    import datetime
-
-    from core.models import ClassTemplate
-
-    ClassTemplate.objects.create(
-        organization=org_a, branch=schedule_setup['branch'], teacher=schedule_setup['teacher'],
-        weekday=0, start_time=datetime.time(18, 0), end_time=datetime.time(19, 0),
-        start_date=datetime.date(2026, 6, 1), capacity=20,
-    )
-    login(api_client, 'admin_a')
-    # 18:30-19:30 del lunes se cruza con la existente de 18:00-19:00.
-    upload = build_xlsx(
-        [['Sede Centro', 'Lunes', '18:30', '19:30', '', 'coach@gym.cl', '', '', '', '2026-06-15', '', '']],
-        headers=TEMPLATE_HEADERS,
-    )
-    resp = api_client.post('/api/imports/class-templates/validate/', {'file': upload},
-                           format='multipart')
-    body = resp.json()
-    assert body['can_commit'] is False
-    error = body['rows'][0]['errors'][0]
-    assert error['column'] == 'Email del profesor'
-    assert 'se cruza con ese horario' in error['message']
+    assert 'Las opciones son' in by_row[4]['errors'][0]['message']
+    assert 'Indica el email de un profesor suplente' in by_row[5]['errors'][0]['message']
+    assert 'Usa solo una opcion de suplente' in by_row[6]['errors'][0]['message']
 
 
 def test_class_templates_teacher_overlap_within_file_now_creates_both_rows(api_client, admin_a, org_a,
                                                                            schedule_setup):
-    """Tarea 11.A: el solape de profesor ENTRE FILAS del propio archivo se detectaba
-    solo indirectamente, vía `ClassTemplate.full_clean()` en el commit (la primera fila
-    ya guardada quedaba visible para el `clean()` de la segunda). Al eliminarse el
-    chequeo de solape de `ClassTemplate.clean()` (relajación 11.A), esta ruta quedó
-    relajada SOLA, sin tocar el importador: ambas filas se cargan ahora.
-
-    Ojo: esto NO aplica al solape contra la BD/calendario ya existentes, que el
-    importador valida con su propia reimplementación en `_template_rules` (no delega
-    en full_clean) y sigue bloqueando sin cambios — ver
-    `test_class_templates_teacher_overlap_against_db` y `..._against_calendar`."""
     from core.models import ClassTemplate
 
     login(api_client, 'admin_a')
     rows = [
-        ['Sede Centro', 'Lunes', '18:00', '19:00', '', 'coach@gym.cl', '', '', '', '2026-06-15', '', ''],
-        ['Sede Centro', 'Lunes', '18:30', '19:30', '', 'coach@gym.cl', '', '', '', '2026-06-15', '', ''],
+        ['Yoga 18', 'Lunes', 'Sede Centro', 'coach@gym.cl', 'Clase grupal',
+         'Yoga', '18:00', '19:00', '', '', '', '', '', ''],
+        ['Yoga 1830', 'Lunes', 'Sede Centro', 'coach@gym.cl', 'Clase grupal',
+         'Yoga', '18:30', '19:30', '', '', '', '', '', ''],
     ]
     file_bytes = build_xlsx_bytes(rows, headers=TEMPLATE_HEADERS)
     resp = api_client.post('/api/imports/class-templates/validate/',
                            {'file': as_upload(file_bytes)}, format='multipart')
     body = resp.json()
-    assert body['can_commit'] is True  # el preview no puede verlo (no hay nada en BD)
+    assert body['can_commit'] is True
 
     resp = api_client.post('/api/imports/class-templates/commit/',
                            {'file': as_upload(file_bytes), 'token': body['token']},
@@ -1620,8 +1619,10 @@ def test_class_templates_foreign_org_fks_not_found(api_client, admin_a, org_b, m
     make_user('coach_b', organization=org_b, role='teacher', email='coach_b@gym.cl')
     login(api_client, 'admin_a')
     rows = [
-        ['Sede Ajena', 'Lunes', '18:30', '19:30', '', '', '', '', '', '2026-06-15', '', ''],
-        ['Sede Centro', 'Lunes', '18:30', '19:30', '', 'coach_b@gym.cl', '', '', '', '2026-06-15', '', ''],
+        ['Yoga', 'Lunes', 'Sede Ajena', 'coach@gym.cl', 'Clase grupal',
+         'Yoga', '18:30', '19:30', '', '', '', '', '', ''],
+        ['Yoga', 'Martes', 'Sede Centro', 'coach_b@gym.cl', 'Clase grupal',
+         'Yoga', '18:30', '19:30', '', '', '', '', '', ''],
     ]
     upload = build_xlsx(rows, headers=TEMPLATE_HEADERS)
     resp = api_client.post('/api/imports/class-templates/validate/', {'file': upload},
@@ -1632,69 +1633,31 @@ def test_class_templates_foreign_org_fks_not_found(api_client, admin_a, org_b, m
     assert by_row[2]['errors'][0]['column'] == 'Sucursal'
     assert by_row[3]['errors'][0]['column'] == 'Email del profesor'
     for row in body['rows']:
-        assert 'No se encontró' in row['errors'][0]['message']
+        assert 'No se encontr' in row['errors'][0]['message']
 
 
 def test_class_templates_commit_generates_calendar(api_client, admin_a, org_a, schedule_setup):
-    from datetime import timedelta
-
     from django.utils import timezone
 
     from core.models import ClassTemplate, GymClass
 
     login(api_client, 'admin_a')
-    # Vigencia = los DOS PRÓXIMOS LUNES, calculados desde hoy.
-    #
-    # Antes esto eran dos lunes de 2030 (fechas fijas, cómodas por ser inmunes al
-    # calendario). Ya no sirven: la materialización está topeada por la ventana rodante de
-    # la organización (`Organization.class_generation_window_days`, default 21 días), así
-    # que una vigencia en 2030 no materializa NADA todavía —sus clases van a aparecer
-    # cuando la ventana avance hasta ellas— y este test dejaría de probar lo que quiere
-    # probar (que el commit del importador genera el calendario). Se calculan relativas a
-    # hoy para que caigan dentro de la ventana cualquier día que corra la suite.
     today = timezone.localdate()
-    first_monday = today + timedelta(days=(0 - today.weekday()) % 7)
-    second_monday = first_monday + timedelta(days=7)
-    rows = [['Sede Centro', 'Lunes', '18:30', '19:30', 'Yoga', 'coach@gym.cl',
-             '', '', 10, str(first_monday), str(second_monday), '']]
+    weekday_label = ['Lunes', 'Martes', 'Miercoles', 'Jueves', 'Viernes', 'Sabado', 'Domingo'][today.weekday()]
+    rows = [[
+        'Yoga hoy', weekday_label, 'Sede Centro', 'coach@gym.cl', 'Clase grupal',
+        'Yoga', '18:30', '19:30', 10, '', '', '', '', '',
+    ]]
     resp = import_entity(api_client, 'class-templates', rows, TEMPLATE_HEADERS)
     assert resp.status_code == 201, resp.content
 
-    template = ClassTemplate.objects.get(organization=org_a, name='Yoga')
+    template = ClassTemplate.objects.get(organization=org_a, name='Yoga hoy')
     assert template.created_by_id == admin_a.id  # trazabilidad del actor
+    assert template.start_date == today
     instances = GymClass.objects.filter(class_template=template).order_by('start_datetime')
-    assert instances.count() == 2  # los dos lunes de la vigencia
+    assert instances.count() >= 1
     assert all(i.organization_id == org_a.id for i in instances)
     assert all(i.created_by_id == admin_a.id for i in instances)
-
-
-def test_class_templates_teacher_overlap_against_calendar(api_client, admin_a, org_a,
-                                                          schedule_setup):
-    import datetime
-
-    from django.utils import timezone as dj_tz
-
-    from core.models import GymClass
-
-    # Clase suelta (sin plantilla) del coach el lunes 2030-01-07 de 18:00 a 19:00.
-    GymClass.objects.create(
-        organization=org_a, branch=schedule_setup['branch'], teacher=schedule_setup['teacher'],
-        name='Clase suelta',
-        start_datetime=dj_tz.make_aware(datetime.datetime(2030, 1, 7, 18, 0)),
-        end_datetime=dj_tz.make_aware(datetime.datetime(2030, 1, 7, 19, 0)),
-    )
-    login(api_client, 'admin_a')
-    upload = build_xlsx(
-        [['Sede Centro', 'Lunes', '18:30', '19:30', '', 'coach@gym.cl', '', '', '', '2030-01-01', '', '']],
-        headers=TEMPLATE_HEADERS,
-    )
-    resp = api_client.post('/api/imports/class-templates/validate/', {'file': upload},
-                           format='multipart')
-    body = resp.json()
-    assert body['can_commit'] is False
-    error = body['rows'][0]['errors'][0]
-    assert error['column'] == 'Email del profesor'
-    assert 'clases en el calendario' in error['message']
 
 
 def test_class_templates_template_references_include_weekdays(api_client, admin_a, schedule_setup):
@@ -1703,12 +1666,15 @@ def test_class_templates_template_references_include_weekdays(api_client, admin_
     login(api_client, 'admin_a')
     resp = api_client.get('/api/imports/class-templates/template/')
     assert resp.status_code == 200
-    references = load_workbook(BytesIO(resp.content))['Referencias']
+    workbook = load_workbook(BytesIO(resp.content))
+    headers = [cell.value for cell in workbook['Datos'][1]]
+    assert headers == TEMPLATE_HEADERS
+    references = workbook['Referencias']
     all_values = {
         references.cell(row=row, column=col).value
         for row in range(1, 12) for col in range(1, 10)
     }
-    for label in ('Lunes', 'Miércoles', 'Domingo', 'Sede Centro', 'coach@gym.cl',
+    for label in ('Lunes', 'Miercoles', 'Domingo', 'Sede Centro', 'coach@gym.cl',
                   'Clase grupal', 'Yoga'):
         assert label in all_values
 

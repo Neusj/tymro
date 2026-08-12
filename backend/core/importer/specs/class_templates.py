@@ -1,139 +1,122 @@
-"""Spec de importación del Horario recurrente (core.ClassTemplate).
+"""Spec de importacion de Clases semanales (core.ClassTemplate).
 
-La entidad más conectada: 4 FK (sucursal obligatoria; profesor, tipo de clase
-y disciplina opcionales), todas resueltas dentro de la organización del actor.
+Cada fila crea una clase semanal recurrente, igual que el formulario
+/gym-admin/class-templates. La pantalla permite seleccionar varios dias en una
+sola operacion; la planilla usa una fila por dia para mantener el preview y la
+deduplicacion fila-a-fila.
 
-Las reglas de fila (fin > inicio, vigencia coherente, capacidad) replican
-ClassTemplate.clean() para que el preview las atrape. El solape de profesor
-contra BD/calendario es aparte: `_template_rules` lo reimplementa a mano
-(no delega en full_clean) porque el producto lo relajó en `ClassTemplate.clean()`
-(tarea 11.A, permite que un mismo profesor tenga clases solapadas) pero el
-importador lo sigue bloqueando en el preview — ver el comentario de
-`_template_rules` para el detalle de esa inconsistencia.
-
-El commit además ejecuta full_clean(), que vuelve a validar todo dentro de la
-transacción. Antes de la tarea 11.A esto también atrapaba los solapes de
-profesor ENTRE FILAS del propio archivo (cada fila guardada ya es visible para
-el clean() de la siguiente); al eliminarse ese chequeo de `ClassTemplate.clean()`,
-esa ruta quedó relajada — dos filas del archivo que se cruzan para el mismo
-profesor hoy se cargan ambas.
+El inicio se infiere como hoy y no se pide fecha de termino: las clases se
+generan hacia adelante por la ventana rodante, igual que el alta manual.
 """
 from ..registry import register
 from ..spec import EntityImportSpec, FieldSpec, FKSpec, RowError
 
-END_TIME_LABEL = 'Hora de término'
-END_DATE_LABEL = 'Vigente hasta'
+END_TIME_LABEL = 'Hora termino'
 CAPACITY_LABEL = 'Capacidad'
 TEACHER_LABEL = 'Email del profesor'
+SUBSTITUTE_LABEL = 'Clase con suplente'
+SUBSTITUTE_TEACHER_LABEL = 'Email del profesor suplente'
+SUBSTITUTE_NAME_LABEL = 'Nombre del suplente externo'
 
 WEEKDAY_CHOICES = (
     ('Lunes', 0),
     ('Martes', 1),
-    ('Miércoles', 2),
+    ('Miercoles', 2),
     ('Jueves', 3),
     ('Viernes', 4),
-    ('Sábado', 5),
+    ('Sabado', 5),
     ('Domingo', 6),
 )
 
+TEACHER_FILTERS = {'role__in': ('teacher', 'gym_admin'), 'is_active': True}
+
 
 def _template_rules(values, organization):
-    from django.db.models import Q
-
-    from core.models import ClassTemplate
-
     errors = []
     start_time, end_time = values.get('start_time'), values.get('end_time')
     if start_time is not None and end_time is not None and end_time <= start_time:
         errors.append(RowError(
             row=0, column=END_TIME_LABEL,
-            message='La hora de término debe ser posterior a la hora de inicio.',
+            message='La hora de termino debe ser posterior a la hora de inicio.',
         ))
-    start_date, end_date = values.get('start_date'), values.get('end_date')
-    if start_date is not None and end_date is not None and end_date < start_date:
-        errors.append(RowError(
-            row=0, column=END_DATE_LABEL,
-            message="La fecha de 'Vigente hasta' no puede ser anterior a la de 'Vigente desde'.",
-        ))
+
     capacity = values.get('capacity')
     if capacity is not None and not (0 < capacity <= 1000):
         errors.append(RowError(
             row=0, column=CAPACITY_LABEL,
             message='La capacidad debe estar entre 1 y 1000 personas.',
         ))
-    if errors:
-        return errors
 
-    # Solape del profesor contra el horario y las clases YA existentes: reimplementación
-    # PROPIA del importador (no delega en ClassTemplate.clean()/full_clean()), pensada
-    # para que el preview reporte el error fila por fila antes de confirmar. Los solapes
-    # entre filas del propio archivo los atrapa el full_clean del commit.
-    #
-    # NOTA (tarea 11.A, 2026-08): el producto decidió PERMITIR que un mismo profesor
-    # tenga clases solapadas, y por eso se eliminó el chequeo equivalente de
-    # `ClassTemplate.clean()` y de `core/services/recurrence.py` (antes
-    # `_has_teacher_conflict`). Esta copia del importador NO se tocó — no es uno de los
-    # 3 puntos de esa tarea — así que HOY SIGUE BLOQUEANDO el mismo caso en el preview
-    # de la planilla, aunque la API y la generación de clases ya lo permiten. Es una
-    # inconsistencia de producto pendiente (ver reporte de la tarea 11.A).
-    #
-    # Ambos querysets van acotados a `organization`: sin eso barrían toda la plataforma y,
-    # si el profesor tenía horarios en otra organización (FK de profesor "rancia"), el
-    # preview del importador respondía "ya tiene clases que se cruzan" — un bit de la
-    # agenda de otro gimnasio por fila, y una fila legítima bloqueada por un dato que el
-    # actor no puede ver ni corregir.
-    teacher = values.get('teacher')
-    if teacher is not None and start_time is not None and end_time is not None:
-        weekday = values.get('weekday')
-        queryset = ClassTemplate.objects.filter(
-            organization=organization,
-            teacher=teacher,
-            weekday=weekday,
-            is_active=True,
-            start_time__lt=end_time,
-            end_time__gt=start_time,
-        )
-        if end_date is None:
-            queryset = queryset.filter(Q(end_date__isnull=True) | Q(end_date__gte=start_date))
-        else:
-            queryset = queryset.filter(Q(start_date__lte=end_date))
-            queryset = queryset.filter(Q(end_date__isnull=True) | Q(end_date__gte=start_date))
-        if queryset.exists():
+    has_substitute = bool(values.get('has_substitute'))
+    substitute_teacher = values.get('substitute_teacher')
+    substitute_name = str(values.get('substitute_name') or '').strip()
+
+    if not has_substitute and (substitute_teacher is not None or substitute_name):
+        errors.append(RowError(
+            row=0, column=SUBSTITUTE_LABEL,
+            message=(
+                "Marca 'Clase con suplente' como 'Si' si vas a indicar un profesor "
+                'suplente o un suplente externo.'
+            ),
+        ))
+
+    if has_substitute:
+        if substitute_teacher is None and not substitute_name:
             errors.append(RowError(
-                row=0, column=TEACHER_LABEL,
-                message='El profesor ya tiene otra clase recurrente activa que se cruza con ese horario.',
+                row=0, column=SUBSTITUTE_LABEL,
+                message=(
+                    'Indica el email de un profesor suplente o el nombre de un '
+                    'suplente externo.'
+                ),
             ))
-            return errors
-
-        from core.models import GymClass
-
-        weekday_for_db = ((weekday + 1) % 7) + 1
-        class_query = GymClass.objects.filter(
-            organization=organization,
-            teacher=teacher,
-            start_datetime__week_day=weekday_for_db,
-            start_datetime__time__lt=end_time,
-            end_datetime__time__gt=start_time,
-        ).exclude(status=GymClass.Status.CANCELLED)
-        if end_date is None:
-            class_query = class_query.filter(start_datetime__date__gte=start_date)
-        else:
-            class_query = class_query.filter(
-                start_datetime__date__gte=start_date,
-                start_datetime__date__lte=end_date,
-            )
-        if class_query.exists():
+        if substitute_teacher is not None and substitute_name:
             errors.append(RowError(
-                row=0, column=TEACHER_LABEL,
-                message='El profesor ya tiene clases en el calendario que se cruzan con ese horario.',
+                row=0, column=SUBSTITUTE_LABEL,
+                message=(
+                    'Usa solo una opcion de suplente: email de profesor registrado '
+                    'o nombre de suplente externo.'
+                ),
             ))
+        if substitute_teacher is not None and substitute_teacher == values.get('teacher'):
+            errors.append(RowError(
+                row=0, column=SUBSTITUTE_TEACHER_LABEL,
+                message='El suplente no puede ser el profesor titular.',
+            ))
+
     return errors
 
 
+def _derive_defaults(values, organization):
+    from django.utils import timezone
+
+    derived = {
+        'start_date': timezone.localdate(),
+        'end_date': None,
+        'is_active': True,
+    }
+    if not values.get('has_substitute'):
+        derived['substitute_teacher'] = None
+        derived['substitute_name'] = ''
+        derived['substitution_source'] = ''
+        derived['substitution_assigned_at'] = None
+        derived['substitution_assigned_by'] = None
+        return derived
+
+    from core.models import GymClass
+
+    derived['substitute_name'] = str(values.get('substitute_name') or '').strip()
+    derived['substitution_source'] = (
+        GymClass.SubstitutionSource.ADMIN_ASSIGNED
+        if values.get('substitute_teacher') is not None
+        else GymClass.SubstitutionSource.EXTERNAL_ADMIN
+    )
+    derived['substitution_assigned_at'] = timezone.now()
+    return derived
+
+
 def _generate_calendar(instances, organization, actor):
-    # Espejo de ClassTemplateViewSet.perform_create: el horario importado genera
-    # sus clases en el calendario de inmediato (mismo servicio, mismos saltos de
-    # feriados y conflictos). Corre dentro de la transacción del commit.
+    # Espejo de ClassTemplateViewSet.perform_create: la clase importada genera
+    # su calendario de inmediato dentro de la ventana rodante.
     from core.services.recurrence import generate_instances_for_template_range
 
     for template in instances:
@@ -148,10 +131,20 @@ def _generate_calendar(instances, organization, actor):
 
 CLASS_TEMPLATES = register(EntityImportSpec(
     slug='class-templates',
-    label='Horario recurrente',
-    description='Tu parrilla semanal de clases: día, horario, sucursal y profesor de cada clase que se repite.',
+    label='Clases',
+    description='Crea clases semanales con profesor, tipo, disciplina, cupos y opciones de suplente.',
     model='core.ClassTemplate',
     fields=(
+        FieldSpec(
+            attr='name', label='Nombre visible', kind='string', max_length=150,
+            example='Yoga vespertino',
+            help_text='Nombre visible de la clase (opcional).',
+        ),
+        FieldSpec(
+            attr='weekday', label='Dia de la semana', kind='choice', required=True,
+            choices=WEEKDAY_CHOICES, example='Lunes',
+            help_text='Dia en que se repite la clase cada semana. Usa una fila por dia.',
+        ),
         FieldSpec(
             attr='branch', label='Sucursal', kind='fk', required=True,
             fk=FKSpec(model='core.Branch', lookup_field='name', reference_label='la sucursal'),
@@ -159,87 +152,91 @@ CLASS_TEMPLATES = register(EntityImportSpec(
             help_text='Sucursal donde se dicta la clase. Elige un valor de la hoja "Referencias".',
         ),
         FieldSpec(
-            attr='weekday', label='Día de la semana', kind='choice', required=True,
-            choices=WEEKDAY_CHOICES, example='Lunes',
-            help_text='Día en que se repite la clase cada semana.',
+            attr='teacher', label=TEACHER_LABEL, kind='fk', required=True,
+            fk=FKSpec(
+                model='accounts.CustomUser', lookup_field='email',
+                filters=TEACHER_FILTERS,
+                reference_label='el profesor',
+            ),
+            example='coach@gym.cl',
+            help_text='Email de un profesor o administrador-profesor activo de tu gimnasio.',
         ),
         FieldSpec(
-            attr='start_time', label='Hora de inicio', kind='time', required=True,
+            attr='class_type', label='Tipo', kind='fk', required=True,
+            fk=FKSpec(model='core.ClassType', lookup_field='name', reference_label='el tipo de clase'),
+            example='Clase grupal',
+            help_text='Tipo de clase ya cargado.',
+        ),
+        FieldSpec(
+            attr='discipline', label='Disciplina', kind='fk', required=True,
+            fk=FKSpec(model='core.Discipline', lookup_field='name', reference_label='la disciplina'),
+            example='Yoga',
+            help_text='Disciplina ya cargada.',
+        ),
+        FieldSpec(
+            attr='start_time', label='Hora inicio', kind='time', required=True,
             example='18:30',
             help_text='Hora de inicio en formato HH:MM (reloj de 24 horas).',
         ),
         FieldSpec(
             attr='end_time', label=END_TIME_LABEL, kind='time', required=True,
             example='19:30',
-            help_text='Hora de término en formato HH:MM. Debe ser posterior al inicio.',
-        ),
-        FieldSpec(
-            attr='name', label='Nombre de la clase', kind='string', max_length=150,
-            example='Yoga vespertino',
-            help_text='Nombre visible de la clase (opcional). Si lo dejas vacío se usa el día y la hora.',
-        ),
-        FieldSpec(
-            attr='teacher', label=TEACHER_LABEL, kind='fk',
-            fk=FKSpec(
-                model='accounts.CustomUser', lookup_field='email',
-                filters={'role': 'teacher', 'is_active': True},
-                reference_label='el profesor',
-            ),
-            example='coach@gym.cl',
-            help_text='Email de un profesor ya cargado (opcional, puedes asignarlo después).',
-        ),
-        FieldSpec(
-            attr='class_type', label='Tipo de clase', kind='fk',
-            fk=FKSpec(model='core.ClassType', lookup_field='name', reference_label='el tipo de clase'),
-            example='Clase grupal',
-            help_text='Tipo de clase ya cargado (opcional).',
-        ),
-        FieldSpec(
-            attr='discipline', label='Disciplina', kind='fk',
-            fk=FKSpec(model='core.Discipline', lookup_field='name', reference_label='la disciplina'),
-            example='Yoga',
-            help_text='Disciplina ya cargada (opcional).',
+            help_text='Hora de termino en formato HH:MM. Debe ser posterior al inicio.',
         ),
         FieldSpec(
             attr='capacity', label=CAPACITY_LABEL, kind='int', default=20,
             example='20',
-            help_text='Cupos de la clase. Si dejas la celda vacía se asume 20.',
+            help_text='Cupos de la clase. Si dejas la celda vacia se asume 20.',
         ),
         FieldSpec(
-            attr='start_date', label='Vigente desde', kind='date', required=True,
-            example='2026-06-15',
-            help_text='Desde qué fecha se generan las clases de este horario. Formato AAAA-MM-DD.',
-        ),
-        FieldSpec(
-            attr='end_date', label=END_DATE_LABEL, kind='date',
+            attr='description', label='Descripcion', kind='text',
             example='',
-            help_text='Hasta cuándo vale el horario (opcional: vacío = sin fecha de término).',
+            help_text='Descripcion opcional de la clase.',
         ),
         FieldSpec(
-            attr='is_trial_eligible', label='Apta para clase de prueba', kind='bool', default=False,
-            example='No',
-            help_text="'Sí' si los prospectos pueden agendar su clase de prueba gratis aquí. Vacío = 'No'.",
+            attr='is_trial_eligible', label='Elegible para clase de prueba gratis',
+            kind='bool', default=False, example='No',
+            help_text="'Si' si los prospectos pueden agendar su clase de prueba gratis aqui. Vacio = 'No'.",
+        ),
+        FieldSpec(
+            attr='has_substitute', label=SUBSTITUTE_LABEL,
+            kind='bool', default=False, example='No',
+            help_text="'Si' cuando la clase tiene un suplente por defecto. Vacio = 'No'.",
+        ),
+        FieldSpec(
+            attr='substitute_teacher', label=SUBSTITUTE_TEACHER_LABEL, kind='fk',
+            fk=FKSpec(
+                model='accounts.CustomUser', lookup_field='email',
+                filters=TEACHER_FILTERS,
+                reference_label='el profesor suplente',
+            ),
+            example='suplente@gym.cl',
+            help_text='Opcional. Usalo solo si el suplente es un profesor registrado.',
+        ),
+        FieldSpec(
+            attr='substitute_name', label=SUBSTITUTE_NAME_LABEL, kind='string', max_length=150,
+            example='Juan Perez',
+            help_text='Opcional. Usalo solo si el suplente es externo.',
         ),
     ),
     natural_key=('branch', 'weekday', 'start_time', 'teacher'),
-    dependencies=('branches',),
+    dependencies=('branches', 'class-types', 'disciplines', 'teachers'),
     row_validators=(_template_rules,),
+    derive=_derive_defaults,
     post_commit=_generate_calendar,
     instructions=(
-        'El horario recurrente es tu parrilla semanal: cada fila es una clase que se '
-        'repite todas las semanas el mismo día y a la misma hora en una sucursal.',
-        'Antes de importar el horario carga las Sucursales (obligatorio). Profesores, '
-        'Tipos de clase y Disciplinas son opcionales pero conviene cargarlos antes '
-        'para poder asignarlos aquí.',
+        'Cada fila crea una clase semanal. Si la misma clase va lunes y miercoles, '
+        'carga dos filas: una por cada dia.',
+        'Antes de importar clases carga Sucursales, Tipos, Disciplinas y Profesores.',
+        'La clase arranca hoy y no tiene fecha de fin: se genera automaticamente cada '
+        'semana hacia adelante dentro de la ventana configurada.',
         'Las horas van en formato de 24 horas (HH:MM): 09:00, 18:30. La hora de '
-        'término debe ser posterior a la de inicio.',
-        "En 'Vigente desde' indica desde qué fecha se generan las clases (AAAA-MM-DD).",
-        'Un profesor no puede tener dos clases que se crucen el mismo día: esas filas '
-        'saldrán con error.',
-        'Si ya existe una clase en la misma sucursal, día, hora de inicio y profesor, '
-        'esa fila se omite (no se duplica). Dos clases en el mismo horario con '
-        'profesores distintos sí se cargan ambas.',
-        'Al confirmar, las clases del calendario se generan automáticamente desde la '
-        'fecha de vigencia (saltando los festivos configurados).',
+        'termino debe ser posterior a la de inicio.',
+        "Para 'Clase con suplente', marca 'Si' y completa solo una de estas columnas: "
+        'Email del profesor suplente o Nombre del suplente externo.',
+        'Si ya existe una clase en la misma sucursal, dia, hora de inicio y profesor, '
+        'esa fila se omite (no se duplica).',
+        'Al confirmar, las clases del calendario se generan automaticamente desde hoy '
+        '(saltando los festivos configurados).',
     ),
 ))
