@@ -23,9 +23,12 @@ function formatDateTime(value) {
 // Solo 2 estados marcables por el admin (igual que el toggle del profe en
 // TeacherClassesPage); el historial de correcciones sí puede MOSTRAR cualquier
 // status heredado (p.ej. 'late'/'excused'/'no_show' marcados antes por el profe).
-const ATTENDANCE_TOGGLE_OPTIONS = [
+const ATTENDANCE_STATUS_OPTIONS = [
   { value: 'present', label: 'Presente' },
   { value: 'absent', label: 'Ausente' },
+  { value: 'late', label: 'Tarde' },
+  { value: 'excused', label: 'Justificado' },
+  { value: 'no_show', label: 'No asistio' },
 ]
 
 function substitutionSourceLabel(source) {
@@ -51,6 +54,7 @@ export default function GymAdminClassDetailPage() {
   const [deleting, setDeleting] = useState(null)
 
   const [attendanceMap, setAttendanceMap] = useState({})
+  const [attendanceOpen, setAttendanceOpen] = useState(false)
   const [attendanceSaving, setAttendanceSaving] = useState(false)
   const [attendanceError, setAttendanceError] = useState('')
 
@@ -131,6 +135,7 @@ export default function GymAdminClassDetailPage() {
         status: attendanceMap[enrollment.student] || 'absent',
       }))
       await classesApi.saveAttendance(id, payload)
+      setAttendanceOpen(false)
       await loadData()
       if (historyOpen) {
         await fetchAttendanceHistory()
@@ -286,36 +291,59 @@ export default function GymAdminClassDetailPage() {
       </section>
 
       <section className="card-surface p-5">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <h2 className="panel-title">Asistencia</h2>
           <button
             type="button"
             disabled={attendanceSaving || activeEnrollments.length === 0}
-            onClick={saveAttendance}
+            onClick={() => {
+              setAttendanceError('')
+              setAttendanceOpen(true)
+            }}
             className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
           >
-            {attendanceSaving ? 'Guardando...' : 'Guardar asistencia'}
+            Tomar asistencia
           </button>
         </div>
+        <p className="mt-2 text-sm text-brand-muted">
+          {activeEnrollments.length > 0
+            ? `${activeEnrollments.length} alumnos inscritos activos.`
+            : 'No hay alumnos inscritos activos en esta clase.'}
+        </p>
+      </section>
 
-        {attendanceError ? (
-          <p className="mb-3 rounded-lg border border-brand-red/50 bg-brand-red/10 px-3 py-2 text-sm text-red-200">{attendanceError}</p>
-        ) : null}
+      <FormModal
+        open={attendanceOpen}
+        closeDisabled={attendanceSaving}
+        onClose={() => {
+          setAttendanceOpen(false)
+          setAttendanceError('')
+        }}
+        title={gymClass ? `Asistencia · ${gymClass.name}` : 'Asistencia'}
+      >
+        <div className="space-y-3">
+          {activeEnrollments.length === 0 ? (
+            <p className="text-sm text-brand-muted">No hay alumnos inscritos activos en esta clase.</p>
+          ) : null}
 
-        {activeEnrollments.length === 0 ? (
-          <p className="text-sm text-brand-muted">No hay alumnos inscritos activos en esta clase.</p>
-        ) : (
-          <div className="space-y-2">
+          {attendanceError ? (
+            <p className="rounded-lg border border-brand-red/50 bg-brand-red/10 px-3 py-2 text-sm text-red-200">{attendanceError}</p>
+          ) : null}
+
+          <div className="max-h-[24rem] space-y-2 overflow-y-auto rounded-lg border border-brand-line p-2">
             {activeEnrollments.map((enrollment) => (
               <div
                 key={enrollment.id}
-                className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-brand-line px-3 py-2 text-sm"
+                className="flex items-center justify-between gap-3 rounded-lg border border-brand-line px-3 py-2 text-sm"
               >
-                <span className="font-semibold">{enrollment.student_name}</span>
-                <span className="flex items-center gap-2">
+                <span>
+                  <span className="font-semibold">{enrollment.student_name}</span>
+                  <span className="block text-xs text-brand-muted">{enrollment.student_email || '-'}</span>
+                </span>
+                <span className="flex flex-col items-end gap-2 text-xs text-brand-muted">
                   <ValueBadge kind="attendance_status" value={attendanceMap[enrollment.student]} />
-                  <span className="flex gap-1">
-                    {ATTENDANCE_TOGGLE_OPTIONS.map((option) => {
+                  <span className="grid grid-cols-2 gap-1 sm:grid-cols-5">
+                    {ATTENDANCE_STATUS_OPTIONS.map((option) => {
                       const selected = attendanceMap[enrollment.student] === option.value
                       return (
                         <button
@@ -327,7 +355,7 @@ export default function GymAdminClassDetailPage() {
                               [enrollment.student]: option.value,
                             }))
                           }
-                          className={`rounded-lg border px-2.5 py-1 text-xs transition ${
+                          className={`rounded-lg border px-2 py-1 text-[11px] transition ${
                             selected ? 'border-brand-blue bg-brand-blue/20 text-brand-white' : 'border-brand-line text-brand-muted hover:text-brand-white'
                           }`}
                         >
@@ -340,8 +368,19 @@ export default function GymAdminClassDetailPage() {
               </div>
             ))}
           </div>
-        )}
-      </section>
+
+          <div className="flex justify-end">
+            <button
+              type="button"
+              disabled={attendanceSaving || activeEnrollments.length === 0}
+              onClick={saveAttendance}
+              className="btn-primary"
+            >
+              {attendanceSaving ? 'Guardando...' : 'Guardar asistencia'}
+            </button>
+          </div>
+        </div>
+      </FormModal>
 
       <section className="card-surface p-5">
         <button

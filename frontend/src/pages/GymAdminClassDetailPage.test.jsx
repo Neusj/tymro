@@ -63,6 +63,12 @@ function renderPage(classId = '55') {
   )
 }
 
+async function openAttendanceModal(user) {
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Tomar asistencia' })).toBeEnabled())
+  await user.click(screen.getByRole('button', { name: 'Tomar asistencia' }))
+  await screen.findByRole('dialog', { name: /Asistencia/i })
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   classesApi.retrieve.mockResolvedValue(gymClassFixture())
@@ -90,15 +96,15 @@ describe('GymAdminClassDetailPage — guardar asistencia (#10.2)', () => {
     const user = userEvent.setup()
 
     // El botón se habilita recién cuando el detalle de clase (con enrollments) cargó.
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Guardar asistencia' })).toBeEnabled())
+    await openAttendanceModal(user)
 
     // Bruno_Diaz@21 debe quedar 'present' sin tocar (viene de attendances).
     // Carla@22 no tiene registro previo → arranca 'absent'; la marcamos 'Presente'.
-    const attendanceSection = screen.getByRole('heading', { name: 'Asistencia' }).closest('section')
-    const carlaRow = within(attendanceSection).getByText('Carla Ruiz').closest('div')
+    const attendanceDialog = screen.getByRole('dialog', { name: /Asistencia/i })
+    const carlaRow = within(attendanceDialog).getByText('Carla Ruiz').closest('div')
     await user.click(within(carlaRow).getByRole('button', { name: 'Presente' }))
 
-    await user.click(screen.getByRole('button', { name: 'Guardar asistencia' }))
+    await user.click(within(attendanceDialog).getByRole('button', { name: 'Guardar asistencia' }))
 
     await waitFor(() =>
       expect(classesApi.saveAttendance).toHaveBeenCalledWith('55', [
@@ -112,10 +118,11 @@ describe('GymAdminClassDetailPage — guardar asistencia (#10.2)', () => {
     renderPage('55')
     const user = userEvent.setup()
 
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Guardar asistencia' })).toBeEnabled())
+    await openAttendanceModal(user)
 
     // Sin tocar nada: Bruno queda 'present' (su registro previo), Carla 'absent' (default).
-    await user.click(screen.getByRole('button', { name: 'Guardar asistencia' }))
+    const attendanceDialog = screen.getByRole('dialog', { name: /Asistencia/i })
+    await user.click(within(attendanceDialog).getByRole('button', { name: 'Guardar asistencia' }))
 
     await waitFor(() =>
       expect(classesApi.saveAttendance).toHaveBeenCalledWith('55', [
@@ -146,7 +153,7 @@ describe('GymAdminClassDetailPage — historial de correcciones (#10.2)', () => 
     renderPage('55')
     const user = userEvent.setup()
 
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Guardar asistencia' })).toBeEnabled())
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Tomar asistencia' })).toBeEnabled())
 
     await user.click(screen.getByRole('button', { name: /Historial de correcciones/i }))
 
@@ -179,7 +186,7 @@ describe('GymAdminClassDetailPage — historial de correcciones (#10.2)', () => 
     renderPage('55')
     const user = userEvent.setup()
 
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Guardar asistencia' })).toBeEnabled())
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Tomar asistencia' })).toBeEnabled())
     await user.click(screen.getByRole('button', { name: /Historial de correcciones/i }))
     await waitFor(() => expect(classesApi.getAttendanceHistory).toHaveBeenCalledWith('55'))
 
@@ -194,7 +201,7 @@ describe('GymAdminClassDetailPage — historial de correcciones (#10.2)', () => 
     renderPage('55')
     const user = userEvent.setup()
 
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Guardar asistencia' })).toBeEnabled())
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Tomar asistencia' })).toBeEnabled())
     await user.click(screen.getByRole('button', { name: /Historial de correcciones/i }))
 
     expect(await screen.findByText('Sin correcciones registradas.')).toBeInTheDocument()
@@ -207,7 +214,7 @@ describe('GymAdminClassDetailPage — historial de correcciones (#10.2)', () => 
     renderPage('55')
     const user = userEvent.setup()
 
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Guardar asistencia' })).toBeEnabled())
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Tomar asistencia' })).toBeEnabled())
     await user.click(screen.getByRole('button', { name: /Historial de correcciones/i }))
 
     expect(await screen.findByText('No tienes permisos para ver el historial de asistencia.')).toBeInTheDocument()
