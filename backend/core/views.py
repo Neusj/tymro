@@ -4326,9 +4326,11 @@ class EnrollmentViewSet(ModelViewSet):
             if not can_cancel:
                 return Response({'detail': reason}, status=status.HTTP_400_BAD_REQUEST)
         if _is_teacher(user):
-            can_cancel, reason = _student_can_modify_before_class(enrollment.gym_class.start_datetime, 0)
-            if not can_cancel:
-                return Response({'detail': reason}, status=status.HTTP_400_BAD_REQUEST)
+            if enrollment.gym_class.end_datetime <= timezone.now():
+                return Response(
+                    {'detail': 'La clase ya termino y no admite cambios.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             if enrollment.gym_class.status in {GymClass.Status.CANCELLED, GymClass.Status.COMPLETED, GymClass.Status.COMPLETED_EARLY}:
                 return Response({'detail': 'La clase esta cerrada y ya no se puede modificar la reserva.'}, status=status.HTTP_400_BAD_REQUEST)
             if enrollment.status != 'active':
@@ -4606,6 +4608,7 @@ class EnrollmentViewSet(ModelViewSet):
                         gym_class=serializer.validated_data.get('gym_class'),
                         require_plan=should_validate_plan,
                         student_plan_id=student_plan_id,
+                        allow_started_class=True,
                     )
                 except ReservationRuleError as exc:
                     raise ValidationError(reservation_error_payload(exc))
@@ -4620,6 +4623,7 @@ class EnrollmentViewSet(ModelViewSet):
                     enrollment = reserve_student_in_class(
                         student=student, gym_class=gym_class, require_plan=True,
                         student_plan_id=student_plan_id,
+                        allow_started_class=True,
                     )
                 except ReservationRuleError as exc:
                     raise ValidationError(reservation_error_payload(exc))
@@ -4668,6 +4672,7 @@ class EnrollmentViewSet(ModelViewSet):
                         recurring_enrollment=enrollment.recurring_enrollment,
                         require_plan=True,
                         student_plan_id=student_plan_id,
+                        allow_started_class=True,
                     )
                 except ReservationRuleError as exc:
                     raise ValidationError(reservation_error_payload(exc))

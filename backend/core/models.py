@@ -853,12 +853,9 @@ class StudentPlan(TimestampedModel):
             is_new
             and self.enrollment_fee
             and self.enrollment_fee > 0
-            and self.enrollment_fee_paid_at is not None
             and self.enrollment_fee_due_at is None
         ):
-            self.enrollment_fee_due_at = (
-                timezone.localtime(self.enrollment_fee_paid_at).date() + timedelta(days=365)
-            )
+            self.enrollment_fee_due_at = (self.created_at + timedelta(days=365)).date()
             super().save(update_fields=['enrollment_fee_due_at', 'updated_at'])
 
 

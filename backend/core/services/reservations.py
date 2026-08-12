@@ -650,15 +650,26 @@ def revert_consumption_for_enrollment(enrollment):
     )
 
 
-def _validate_reservation_rules(*, student, gym_class, existing=None, require_plan=True, student_plan_id=None):
+def _validate_reservation_rules(
+    *,
+    student,
+    gym_class,
+    existing=None,
+    require_plan=True,
+    student_plan_id=None,
+    allow_started_class=False,
+):
     if student.organization_id != gym_class.organization_id:
         raise ReservationRuleError('No puedes inscribir alumnos de otra organización.', code='wrong_organization')
     if gym_class.status == GymClass.Status.CANCELLED:
         raise ReservationRuleError('No puedes reservar una clase cancelada.', code='class_cancelled')
     if gym_class.status == GymClass.Status.SUSPENDED:
         raise ReservationRuleError('No puedes reservar una clase suspendida.', code='class_suspended')
-    if gym_class.start_datetime <= timezone.now():
+    now = timezone.now()
+    if gym_class.start_datetime <= now and not allow_started_class:
         raise ReservationRuleError('No puedes reservar clases pasadas o ya iniciadas.', code='class_started')
+    if allow_started_class and gym_class.end_datetime <= now:
+        raise ReservationRuleError('No puedes reservar una clase cerrada.', code='class_closed')
     if gym_class.status in TERMINAL_CLASS_STATUSES:
         raise ReservationRuleError('No puedes reservar una clase cerrada.', code='class_closed')
     validate_reservation_window_for_class(gym_class)
@@ -714,7 +725,16 @@ def validate_reservation_candidate_for_student(*, student, gym_class, student_pl
 
 
 @transaction.atomic
-def reserve_student_in_class(*, student, gym_class, recurring_enrollment=None, require_plan=True, is_trial=False, student_plan_id=None):
+def reserve_student_in_class(
+    *,
+    student,
+    gym_class,
+    recurring_enrollment=None,
+    require_plan=True,
+    is_trial=False,
+    student_plan_id=None,
+    allow_started_class=False,
+):
     gym_class = GymClass.objects.select_related(
         'organization', 'branch', 'class_template', 'discipline', 'class_type'
     ).select_for_update(of=('self',)).get(pk=gym_class.pk)
@@ -740,6 +760,7 @@ def reserve_student_in_class(*, student, gym_class, recurring_enrollment=None, r
         existing=existing,
         require_plan=require_plan,
         student_plan_id=student_plan_id,
+        allow_started_class=allow_started_class,
     )
     if student_plan is not None:
         student_plan = (
