@@ -7,10 +7,10 @@ import Sidebar from './Sidebar'
 // P3.5: se eliminó el REPORTE/LISTADO de pagos manuales (la capa 2 de Ingresos lo
 // reemplaza). Este test cubre el pedido explícito de "un test sobre Sidebar verificando
 // que el menú de Reportes ya no ofrece 'Pagos manuales' y sí ofrece los otros cuatro".
-const renderSidebar = () =>
+const renderSidebar = (user = { role: 'gym_admin' }) =>
   render(
     <MemoryRouter>
-      <Sidebar isOpen isMobile user={{ role: 'gym_admin' }} onNavigate={() => {}} onRequestOpen={() => {}} />
+      <Sidebar isOpen isMobile user={user} onNavigate={() => {}} onRequestOpen={() => {}} />
     </MemoryRouter>,
   )
 
@@ -30,5 +30,18 @@ describe('Sidebar — menú de Reportes (gym_admin)', () => {
 
     expect(screen.queryByRole('link', { name: 'Pagos manuales' })).not.toBeInTheDocument()
     expect(screen.queryByText('Pagos manuales')).not.toBeInTheDocument()
+  })
+})
+
+describe('Sidebar — menú de profesor', () => {
+  it('oculta "Mis pagos" y muestra la vista completa de clases', async () => {
+    renderSidebar({ role: 'teacher' })
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'Mis clases' }))
+
+    expect(screen.getByRole('link', { name: 'Ver clases' })).toHaveAttribute('href', '/teacher/classes/all')
+    expect(screen.queryByRole('link', { name: 'Mis pagos' })).not.toBeInTheDocument()
+    expect(screen.queryByText('Mis pagos')).not.toBeInTheDocument()
   })
 })

@@ -19,6 +19,7 @@ import {
   canOperateClass,
   extractFilterOptions,
   formatDateTime,
+  ALL_STATUS_OPTIONS,
   HISTORY_STATUS_OPTIONS,
   UPCOMING_STATUS_OPTIONS,
 } from './teacherClasses.helpers'
@@ -122,7 +123,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
     }
     if (mode === 'history') {
       params.status_in = 'completed,completed_early'
-    } else {
+    } else if (mode === 'upcoming') {
       params.status_in = 'scheduled,in_progress,suspended'
     }
     return params
@@ -131,9 +132,17 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
   const loadData = async () => {
     setLoading(true)
     try {
+      const classesRequest =
+        mode === 'all'
+          ? classesApi.list(listParams)
+          : classesApi.byDate(selectedDate, listParams)
       const [list, coverable] = await Promise.all([
-        classesApi.byDate(selectedDate, listParams),
-        mode === 'upcoming' ? classesApi.coverable(selectedDate, { ordering: 'start_datetime' }) : Promise.resolve([]),
+        classesRequest,
+        mode === 'upcoming'
+          ? classesApi.coverable(selectedDate, { ordering: 'start_datetime' })
+          : mode === 'all'
+            ? classesApi.coverable(null, { ordering: 'start_datetime' })
+            : Promise.resolve([]),
       ])
       setClasses(list)
       setCoverableClasses(coverable)
@@ -624,11 +633,18 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
     [user?.id, working],
   )
 
-  const title = mode === 'history' ? 'Teacher · Clases realizadas' : 'Teacher · Proximas clases'
+  const title =
+    mode === 'all'
+      ? 'Teacher · Mis clases'
+      : mode === 'history'
+        ? 'Teacher · Clases realizadas'
+        : 'Teacher · Proximas clases'
   const subtitle =
-    mode === 'history'
-      ? 'Historico de clases para revisar asistentes y resultados finales.'
-      : 'Operacion diaria de tus clases: inscritos, ocupacion y acciones de suspension/cancelacion.'
+    mode === 'all'
+      ? 'Vista completa de tus clases con filtros, asistencia, inscripciones y acciones operativas.'
+      : mode === 'history'
+        ? 'Historico de clases para revisar asistentes y resultados finales.'
+        : 'Operacion diaria de tus clases: inscritos, ocupacion y acciones de suspension/cancelacion.'
 
   const filteredEnrollStudents = enrollStudents.filter((student) => {
     const query = enrollSearch.trim().toLowerCase()
@@ -647,7 +663,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
     return text.includes(query)
   })
 
-  const statusOptions = mode === 'history' ? HISTORY_STATUS_OPTIONS : UPCOMING_STATUS_OPTIONS
+  const statusOptions = mode === 'all' ? ALL_STATUS_OPTIONS : mode === 'history' ? HISTORY_STATUS_OPTIONS : UPCOMING_STATUS_OPTIONS
 
   return (
     <div className="space-y-6">
@@ -655,7 +671,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
 
       {error ? <p className="rounded-lg border border-brand-red/50 bg-brand-red/10 px-3 py-2 text-sm text-red-200">{error}</p> : null}
 
-      <DaySelector value={selectedDate} onChange={setSelectedDate} />
+      {mode === 'all' ? null : <DaySelector value={selectedDate} onChange={setSelectedDate} />}
 
       <section className="card-surface space-y-4 p-5">
         <KpiStrip
@@ -689,7 +705,13 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
 
       <section className="space-y-3">
         <div className="flex items-center justify-between gap-3">
-          <h2 className="panel-title">{mode === 'history' ? 'Detalle de clases realizadas (filtrado)' : 'Detalle de proximas clases (filtrado)'}</h2>
+          <h2 className="panel-title">
+            {mode === 'all'
+              ? 'Detalle de clases (filtrado)'
+              : mode === 'history'
+                ? 'Detalle de clases realizadas (filtrado)'
+                : 'Detalle de proximas clases (filtrado)'}
+          </h2>
           {mode === 'upcoming' ? (
             <button
               type="button"
@@ -714,7 +736,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
         />
       </section>
 
-      {mode === 'upcoming' ? (
+      {mode === 'upcoming' || mode === 'all' ? (
         <section className="space-y-3">
           <div className="flex items-center justify-between gap-3">
             <h2 className="panel-title">Clases disponibles para cubrir</h2>

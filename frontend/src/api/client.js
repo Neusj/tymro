@@ -317,7 +317,8 @@ export const classesApi = {
     return data
   },
   coverable: async (date, params = {}) => {
-    const { data } = await api.get('/classes/coverable/', { params: { ...params, date } })
+    const requestParams = date ? { ...params, date } : params
+    const { data } = await api.get('/classes/coverable/', { params: requestParams })
     return data
   },
   retrieve: async (id) => {

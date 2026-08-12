@@ -44,8 +44,8 @@ export default function TeacherDashboard() {
           </div>
         </SectionCard>
 
-        <SectionCard title="Próximas clases y pagos" subtitle="Placeholder para siguiente sprint">
-          <EmptyState title="Sin datos aún" description="Aquí verás próximas clases, asistencia y estado de pagos." />
+        <SectionCard title="Mis clases" subtitle="Vista inicial de trabajo docente">
+          <EmptyState title="Sin datos aún" description="Aquí verás próximas clases, asistencia e inscritos." />
         </SectionCard>
       </section>
     </div>

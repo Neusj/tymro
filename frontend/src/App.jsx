@@ -57,7 +57,6 @@ import TeacherClassesPage from './pages/TeacherClassesPage'
 import TeacherDashboard from './pages/TeacherDashboard'
 import TeacherPaymentRulesPage from './pages/TeacherPaymentRulesPage'
 import TeacherPaymentsOverviewPage from './pages/TeacherPaymentsOverviewPage'
-import TeacherPaymentsPage from './pages/TeacherPaymentsPage'
 import ProtectedRoute from './routes/ProtectedRoute'
 import { defaultRouteByRole } from './utils/roles'
 
@@ -550,7 +549,7 @@ export default function App() {
         path="/teacher"
         element={
           <ProtectedRoute allowedRoles={['teacher', 'gym_admin']}>
-            <Navigate to="/teacher/classes/upcoming" replace />
+            <Navigate to="/teacher/classes/all" replace />
           </ProtectedRoute>
         }
       />
@@ -568,7 +567,17 @@ export default function App() {
         path="/teacher/classes"
         element={
           <ProtectedRoute allowedRoles={['teacher', 'gym_admin']}>
-            <Navigate to="/teacher/classes/upcoming" replace />
+            <Navigate to="/teacher/classes/all" replace />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/teacher/classes/all"
+        element={
+          <ProtectedRoute allowedRoles={['teacher', 'gym_admin']}>
+            <ShellRoute>
+              <TeacherClassesPage mode="all" />
+            </ShellRoute>
           </ProtectedRoute>
         }
       />
@@ -596,9 +605,7 @@ export default function App() {
         path="/teacher/payments"
         element={
           <ProtectedRoute allowedRoles={['teacher']}>
-            <ShellRoute>
-              <TeacherPaymentsPage />
-            </ShellRoute>
+            <Navigate to="/teacher/classes/all" replace />
           </ProtectedRoute>
         }
       />

@@ -164,7 +164,7 @@ const navByRole = {
       icon: <ClassesIcon />,
       children: [
         { to: '/gym-admin/classes', label: 'Ver clases' },
-        { to: '/teacher/classes/upcoming', label: 'Mis clases como profesor' },
+        { to: '/teacher/classes/all', label: 'Mis clases como profesor' },
         { to: '/gym-admin/class-templates', label: 'Gestión de clases' },
         { to: '/gym-admin/holidays', label: 'Festivos' },
         { to: '/gym-admin/class-types', label: 'Tipos de clase' },
@@ -224,11 +224,11 @@ const navByRole = {
       label: 'Mis clases',
       icon: <ClassesIcon />,
       children: [
+        { to: '/teacher/classes/all', label: 'Ver clases' },
         { to: '/teacher/classes/upcoming', label: 'Próximas clases' },
         { to: '/teacher/classes/history', label: 'Clases realizadas' },
       ],
     },
-    { type: 'item', to: '/teacher/payments', label: 'Mis pagos', icon: <PaymentsIcon /> },
   ],
   student: [
     { type: 'item', to: '/student/dashboard', label: 'Dashboard', icon: <DashboardIcon /> },

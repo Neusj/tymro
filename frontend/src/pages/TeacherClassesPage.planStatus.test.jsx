@@ -143,6 +143,21 @@ describe('TeacherClassesPage — badge de plan en el roster', () => {
   })
 })
 
+describe('TeacherClassesPage - vista completa', () => {
+  it('lista todas las clases del profesor sin filtrar por dia', async () => {
+    render(<TeacherClassesPage mode="all" />)
+
+    await waitFor(() => expect(shown('BJJ Fundamentos')).toBeGreaterThan(0))
+
+    expect(classesApi.list).toHaveBeenCalledWith({
+      ordering: 'start_datetime',
+      teacher_scope: 'mine',
+    })
+    expect(classesApi.byDate).not.toHaveBeenCalled()
+    expect(screen.getByText(/Mis clases/)).toBeInTheDocument()
+  })
+})
+
 describe('TeacherClassesPage — suplencias disponibles', () => {
   it('permite quitar la suplencia tomada por el usuario desde el mismo boton de accion', async () => {
     const user = userEvent.setup()

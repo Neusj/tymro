@@ -5,7 +5,7 @@ export const roleRoutes = {
   gym_admin: '/gym-admin/dashboard',
   manager: '/gym-admin/dashboard',
   monitor: '/gym-admin/classes',
-  teacher: '/teacher/classes/upcoming',
+  teacher: '/teacher/classes/all',
   student: '/student/classes/available',
 }
 
