@@ -70,11 +70,6 @@ export default function GymAdminClassTemplatesPage() {
   // las dos vias, ver ClassTemplateViewSet). Sin esto el manager veia un boton y una accion
   // masiva que siempre fallaban.
   const canDeleteSeries = canManageAdmin(user?.role)
-  // El robot de ventana rodante es SOLO gym_admin (ni manager ni superadmin, ver
-  // AdvanceClassWindowsView.post en el backend): mueve saldo real de alumnos y borra
-  // clases sin vuelta atras, asi que no reutiliza canManageAdmin/canManageOperational.
-  // Esto es cosmetico; la autorizacion real es el 403 del backend.
-  const canAdvanceClassWindows = user?.role === 'gym_admin'
   const [form, setForm] = useState(initialForm)
   const [editingId, setEditingId] = useState(null)
   const [templates, setTemplates] = useState([])
@@ -418,18 +413,6 @@ export default function GymAdminClassTemplatesPage() {
         title="Gym Admin · Crear Clase"
         subtitle="Programa una nueva clase con profesor, tipo y cupos. Se repite cada semana en los dias que elijas y las clases se generan automaticamente desde hoy."
         back={{ to: '/gym-admin/classes', label: 'Clases' }}
-        extra={
-          canAdvanceClassWindows ? (
-            <button
-              type="button"
-              disabled={advancingWindows}
-              onClick={() => setConfirmingAdvance(true)}
-              className="btn-accent"
-            >
-              {advancingWindows ? 'Actualizando...' : 'Actualizar clases'}
-            </button>
-          ) : null
-        }
       />
 
       <section ref={formSectionRef} className="card-surface p-5 space-y-3">
