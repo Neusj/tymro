@@ -101,7 +101,7 @@ describe('GymAdminClassDetailPage — guardar asistencia (#10.2)', () => {
     // Bruno_Diaz@21 debe quedar 'present' sin tocar (viene de attendances).
     // Carla@22 no tiene registro previo → arranca 'absent'; la marcamos 'Presente'.
     const attendanceDialog = screen.getByRole('dialog', { name: /Asistencia/i })
-    const carlaRow = within(attendanceDialog).getByText('Carla Ruiz').closest('div')
+    const carlaRow = within(attendanceDialog).getByTestId('attendance-row-22')
     await user.click(within(carlaRow).getByRole('button', { name: 'Presente' }))
 
     await user.click(within(attendanceDialog).getByRole('button', { name: 'Guardar asistencia' }))
@@ -130,6 +130,33 @@ describe('GymAdminClassDetailPage — guardar asistencia (#10.2)', () => {
         { student_id: 22, status: 'absent' },
       ]),
     )
+  })
+
+  it('permite buscar alumnos por nombre dentro del modal de asistencia', async () => {
+    renderPage('55')
+    const user = userEvent.setup()
+
+    await openAttendanceModal(user)
+
+    const attendanceDialog = screen.getByRole('dialog', { name: /Asistencia/i })
+    await user.type(within(attendanceDialog).getByLabelText('Buscar alumno'), 'Carla')
+
+    expect(within(attendanceDialog).queryByText('Bruno Diaz')).not.toBeInTheDocument()
+    expect(within(attendanceDialog).getByText('Carla Ruiz')).toBeInTheDocument()
+    expect(within(attendanceDialog).getByText('Visibles')).toBeInTheDocument()
+    expect(within(attendanceDialog).getByText('1')).toBeInTheDocument()
+  })
+
+  it('muestra el estado de asistencia en la tabla de alumnos inscritos', async () => {
+    renderPage('55')
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Tomar asistencia' })).toBeEnabled())
+
+    const enrolledSection = screen.getByRole('heading', { name: 'Alumnos inscritos' }).closest('section')
+    expect(within(enrolledSection).getByText('Asistencia')).toBeInTheDocument()
+    expect(within(enrolledSection).getAllByText('Bruno Diaz').length).toBeGreaterThan(0)
+    expect(within(enrolledSection).getAllByText('Presente').length).toBeGreaterThan(0)
+    expect(within(enrolledSection).getAllByText('Ausente').length).toBeGreaterThan(0)
   })
 })
 

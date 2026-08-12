@@ -55,6 +55,7 @@ export default function GymAdminClassDetailPage() {
 
   const [attendanceMap, setAttendanceMap] = useState({})
   const [attendanceOpen, setAttendanceOpen] = useState(false)
+  const [attendanceSearch, setAttendanceSearch] = useState('')
   const [attendanceSaving, setAttendanceSaving] = useState(false)
   const [attendanceError, setAttendanceError] = useState('')
 
@@ -81,6 +82,23 @@ export default function GymAdminClassDetailPage() {
   const enrollments = gymClass?.enrollments || []
   const activeEnrollments = enrollments.filter((item) => item.status === 'active')
   const enrolledStudentIds = useMemo(() => new Set(enrollments.map((item) => String(item.student))), [enrollments])
+  const attendanceByStudent = useMemo(() => {
+    const byStudent = {}
+    ;(gymClass?.attendances || []).forEach((item) => {
+      byStudent[item.student] = item.status
+    })
+    return byStudent
+  }, [gymClass?.attendances])
+  const filteredActiveEnrollments = useMemo(() => {
+    const query = attendanceSearch.trim().toLowerCase()
+    if (!query) {
+      return activeEnrollments
+    }
+    return activeEnrollments.filter((enrollment) => {
+      const matchText = `${enrollment.student_name || ''} ${enrollment.student_email || ''}`.toLowerCase()
+      return matchText.includes(query)
+    })
+  }, [activeEnrollments, attendanceSearch])
 
   // Asistencia actual: viene YA en el detalle de clase (GymClassDetailSerializer →
   // `attendances`), no hace falta un GET aparte. Default visual 'absent' para el
@@ -90,10 +108,6 @@ export default function GymAdminClassDetailPage() {
     if (!gymClass) {
       return
     }
-    const attendanceByStudent = {}
-    ;(gymClass.attendances || []).forEach((item) => {
-      attendanceByStudent[item.student] = item.status
-    })
     const draft = {}
     ;(gymClass.enrollments || [])
       .filter((item) => item.status === 'active')
@@ -101,7 +115,7 @@ export default function GymAdminClassDetailPage() {
         draft[item.student] = attendanceByStudent[item.student] || 'absent'
       })
     setAttendanceMap(draft)
-  }, [gymClass])
+  }, [gymClass, attendanceByStudent])
 
   const fetchAttendanceHistory = async () => {
     setHistoryLoading(true)
@@ -136,6 +150,7 @@ export default function GymAdminClassDetailPage() {
       }))
       await classesApi.saveAttendance(id, payload)
       setAttendanceOpen(false)
+      setAttendanceSearch('')
       await loadData()
       if (historyOpen) {
         await fetchAttendanceHistory()
@@ -202,6 +217,16 @@ export default function GymAdminClassDetailPage() {
       { key: 'student_name', label: 'Alumno' },
       { key: 'student_email', label: 'Email' },
       { key: 'status', label: 'Estado', render: (row) => <ValueBadge kind="enrollment_status" value={row.status} /> },
+      {
+        key: 'attendance_status',
+        label: 'Asistencia',
+        render: (row) =>
+          row.status === 'active' ? (
+            <ValueBadge kind="attendance_status" value={attendanceMap[row.student] || attendanceByStudent[row.student] || 'absent'} />
+          ) : (
+            <span className="text-brand-muted">-</span>
+          ),
+      },
       ...(canManage
         ? [
             {
@@ -216,7 +241,7 @@ export default function GymAdminClassDetailPage() {
           ]
         : []),
     ],
-    [canManage],
+    [attendanceByStudent, attendanceMap, canManage],
   )
 
   return (
@@ -297,6 +322,7 @@ export default function GymAdminClassDetailPage() {
             disabled={attendanceSaving || activeEnrollments.length === 0}
             onClick={() => {
               setAttendanceError('')
+              setAttendanceSearch('')
               setAttendanceOpen(true)
             }}
             className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
@@ -316,11 +342,13 @@ export default function GymAdminClassDetailPage() {
         closeDisabled={attendanceSaving}
         onClose={() => {
           setAttendanceOpen(false)
+          setAttendanceSearch('')
           setAttendanceError('')
         }}
         title={gymClass ? `Asistencia · ${gymClass.name}` : 'Asistencia'}
+        size="lg"
       >
-        <div className="space-y-3">
+        <div className="space-y-4">
           {activeEnrollments.length === 0 ? (
             <p className="text-sm text-brand-muted">No hay alumnos inscritos activos en esta clase.</p>
           ) : null}
@@ -329,19 +357,53 @@ export default function GymAdminClassDetailPage() {
             <p className="rounded-lg border border-brand-red/50 bg-brand-red/10 px-3 py-2 text-sm text-red-200">{attendanceError}</p>
           ) : null}
 
-          <div className="max-h-[24rem] space-y-2 overflow-y-auto rounded-lg border border-brand-line p-2">
-            {activeEnrollments.map((enrollment) => (
-              <div
-                key={enrollment.id}
-                className="flex items-center justify-between gap-3 rounded-lg border border-brand-line px-3 py-2 text-sm"
-              >
-                <span>
-                  <span className="font-semibold">{enrollment.student_name}</span>
-                  <span className="block text-xs text-brand-muted">{enrollment.student_email || '-'}</span>
-                </span>
-                <span className="flex flex-col items-end gap-2 text-xs text-brand-muted">
-                  <ValueBadge kind="attendance_status" value={attendanceMap[enrollment.student]} />
-                  <span className="grid grid-cols-2 gap-1 sm:grid-cols-5">
+          <div className="grid gap-3 rounded-xl border border-brand-line bg-black/20 p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+            <label className="block space-y-1 text-sm" htmlFor="attendance-student-search">
+              <span className="text-xs font-semibold uppercase tracking-wide text-brand-muted">Buscar alumno</span>
+              <input
+                id="attendance-student-search"
+                value={attendanceSearch}
+                onChange={(event) => setAttendanceSearch(event.target.value)}
+                placeholder="Nombre o email"
+                className="field"
+              />
+            </label>
+            <div className="grid grid-cols-2 gap-2 text-sm sm:min-w-44">
+              <div className="rounded-lg border border-brand-line bg-brand-panel/60 px-3 py-2">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-brand-dim">Inscritos</p>
+                <p className="mt-0.5 font-semibold text-brand-white">{activeEnrollments.length}</p>
+              </div>
+              <div className="rounded-lg border border-brand-line bg-brand-panel/60 px-3 py-2">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-brand-dim">Visibles</p>
+                <p className="mt-0.5 font-semibold text-brand-white">{filteredActiveEnrollments.length}</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="overflow-hidden rounded-xl border border-brand-line">
+            <div className="hidden grid-cols-[minmax(0,1fr)_8rem_minmax(18rem,auto)] gap-4 border-b border-brand-line bg-brand-panel/80 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-brand-muted sm:grid">
+              <span>Alumno</span>
+              <span>Estado</span>
+              <span className="text-right">Marcar asistencia</span>
+            </div>
+            <div className="max-h-[26rem] divide-y divide-brand-line overflow-y-auto">
+              {filteredActiveEnrollments.length === 0 ? (
+                <p className="px-4 py-8 text-center text-sm text-brand-muted">Sin resultados.</p>
+              ) : null}
+              {filteredActiveEnrollments.map((enrollment) => (
+                <div
+                  key={enrollment.id}
+                  data-testid={`attendance-row-${enrollment.student}`}
+                  className="grid gap-3 px-4 py-3 text-sm sm:grid-cols-[minmax(0,1fr)_8rem_minmax(18rem,auto)] sm:items-center"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate font-semibold text-brand-white">{enrollment.student_name}</p>
+                    <p className="truncate text-xs text-brand-muted">{enrollment.student_email || '-'}</p>
+                  </div>
+                  <div>
+                    <ValueBadge kind="attendance_status" value={attendanceMap[enrollment.student]} />
+                  </div>
+                  <div className="grid grid-cols-2 gap-1 sm:flex sm:flex-wrap sm:justify-end">
                     {ATTENDANCE_STATUS_OPTIONS.map((option) => {
                       const selected = attendanceMap[enrollment.student] === option.value
                       return (
@@ -354,21 +416,23 @@ export default function GymAdminClassDetailPage() {
                               [enrollment.student]: option.value,
                             }))
                           }
-                          className={`rounded-lg border px-2 py-1 text-[11px] transition ${
-                            selected ? 'border-brand-blue bg-brand-blue/20 text-brand-white' : 'border-brand-line text-brand-muted hover:text-brand-white'
+                          className={`min-h-9 rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition ${
+                            selected
+                              ? 'border-brand-blue bg-brand-blue/20 text-brand-white'
+                              : 'border-brand-line bg-black/20 text-brand-muted hover:border-brand-blue hover:text-brand-white'
                           }`}
                         >
                           {option.label}
                         </button>
                       )
                     })}
-                  </span>
-                </span>
-              </div>
-            ))}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
 
-          <div className="flex justify-end">
+          <div className="flex justify-end border-t border-brand-line pt-4">
             <button
               type="button"
               disabled={attendanceSaving || activeEnrollments.length === 0}

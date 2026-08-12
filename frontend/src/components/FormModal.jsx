@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import useBodyScrollLock from '../hooks/useBodyScrollLock'
 import useModalFocus, { getFocusable } from '../hooks/useModalFocus'
 
-export default function FormModal({ open, title, children, onClose, closeDisabled = false }) {
+export default function FormModal({ open, title, children, onClose, closeDisabled = false, size = 'md' }) {
   useBodyScrollLock(open)
   const titleId = useId()
   const dialogRef = useRef(null)
@@ -27,6 +27,8 @@ export default function FormModal({ open, title, children, onClose, closeDisable
     return null
   }
 
+  const widthClass = size === 'lg' ? 'sm:max-w-3xl' : 'sm:max-w-lg'
+
   return createPortal(
     <div
       className="fixed inset-0 z-40 flex items-center justify-center overflow-y-auto bg-black/75 p-4 backdrop-blur-sm"
@@ -38,7 +40,7 @@ export default function FormModal({ open, title, children, onClose, closeDisable
       <div
         ref={dialogRef}
         tabIndex={-1}
-        className="flex max-h-[85vh] w-full flex-col overflow-hidden rounded-2xl border border-brand-line bg-brand-soft shadow-float animate-scale-in sm:max-w-lg"
+        className={`flex max-h-[85vh] w-full flex-col overflow-hidden rounded-2xl border border-brand-line bg-brand-soft shadow-float animate-scale-in ${widthClass}`}
         onClick={(event) => event.stopPropagation()}
       >
         <div className="flex items-center justify-between gap-3 border-b border-brand-line bg-brand-soft/95 px-5 py-4 backdrop-blur">
