@@ -4609,6 +4609,7 @@ class EnrollmentViewSet(ModelViewSet):
                         require_plan=should_validate_plan,
                         student_plan_id=student_plan_id,
                         allow_started_class=True,
+                        allow_ended_class=True,
                     )
                 except ReservationRuleError as exc:
                     raise ValidationError(reservation_error_payload(exc))
@@ -4673,6 +4674,7 @@ class EnrollmentViewSet(ModelViewSet):
                         require_plan=True,
                         student_plan_id=student_plan_id,
                         allow_started_class=True,
+                        allow_ended_class=True,
                     )
                 except ReservationRuleError as exc:
                     raise ValidationError(reservation_error_payload(exc))

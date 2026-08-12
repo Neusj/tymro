@@ -60,7 +60,7 @@ def _started_class(world):
     )
 
 
-def _ended_class(world):
+def _ended_class(world, *, status=GymClass.Status.SCHEDULED):
     start = timezone.now() - timedelta(hours=2)
     return GymClass.objects.create(
         organization=world['org'],
@@ -70,7 +70,7 @@ def _ended_class(world):
         start_datetime=start,
         end_datetime=start + timedelta(hours=1),
         capacity=10,
-        status=GymClass.Status.SCHEDULED,
+        status=status,
     )
 
 
@@ -124,10 +124,27 @@ def test_student_still_cannot_reserve_after_class_started(api_client, world):
     assert Enrollment.objects.count() == 0
 
 
-def test_staff_cannot_enroll_after_class_ended(api_client, world):
-    _student_plan(world)
-    gym_class = _ended_class(world)
+def test_gym_admin_can_enroll_student_after_class_ended(api_client, world):
+    membership = _student_plan(world)
+    gym_class = _ended_class(world, status=GymClass.Status.COMPLETED)
     api_client.force_authenticate(user=world['admin'])
+
+    resp = api_client.post(
+        ENROLLMENTS_URL,
+        {'gym_class': gym_class.id, 'student': world['student'].id, 'status': 'active'},
+        format='json',
+    )
+
+    assert resp.status_code == 201, resp.content
+    assert Enrollment.objects.filter(gym_class=gym_class, student=world['student'], status='active').exists()
+    membership.refresh_from_db()
+    assert membership.classes_used == 1
+
+
+def test_teacher_cannot_enroll_student_after_class_ended(api_client, world):
+    _student_plan(world)
+    gym_class = _ended_class(world, status=GymClass.Status.COMPLETED)
+    api_client.force_authenticate(user=world['teacher'])
 
     resp = api_client.post(
         ENROLLMENTS_URL,

@@ -658,6 +658,7 @@ def _validate_reservation_rules(
     require_plan=True,
     student_plan_id=None,
     allow_started_class=False,
+    allow_ended_class=False,
 ):
     if student.organization_id != gym_class.organization_id:
         raise ReservationRuleError('No puedes inscribir alumnos de otra organización.', code='wrong_organization')
@@ -668,9 +669,12 @@ def _validate_reservation_rules(
     now = timezone.now()
     if gym_class.start_datetime <= now and not allow_started_class:
         raise ReservationRuleError('No puedes reservar clases pasadas o ya iniciadas.', code='class_started')
-    if allow_started_class and gym_class.end_datetime <= now:
+    if allow_started_class and gym_class.end_datetime <= now and not allow_ended_class:
         raise ReservationRuleError('No puedes reservar una clase cerrada.', code='class_closed')
-    if gym_class.status in TERMINAL_CLASS_STATUSES:
+    if gym_class.status in TERMINAL_CLASS_STATUSES and not (
+        allow_ended_class
+        and gym_class.status in {GymClass.Status.COMPLETED, GymClass.Status.COMPLETED_EARLY}
+    ):
         raise ReservationRuleError('No puedes reservar una clase cerrada.', code='class_closed')
     validate_reservation_window_for_class(gym_class)
 
@@ -734,6 +738,7 @@ def reserve_student_in_class(
     is_trial=False,
     student_plan_id=None,
     allow_started_class=False,
+    allow_ended_class=False,
 ):
     gym_class = GymClass.objects.select_related(
         'organization', 'branch', 'class_template', 'discipline', 'class_type'
@@ -761,6 +766,7 @@ def reserve_student_in_class(
         require_plan=require_plan,
         student_plan_id=student_plan_id,
         allow_started_class=allow_started_class,
+        allow_ended_class=allow_ended_class,
     )
     if student_plan is not None:
         student_plan = (

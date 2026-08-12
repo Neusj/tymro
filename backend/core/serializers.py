@@ -1033,13 +1033,23 @@ class EnrollmentSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({'gym_class': 'No puedes reservar una clase cancelada.'})
 
         now = timezone.now()
-        staff_can_enroll_started = (
+        admin_can_enroll_ended = (
             user
             and user.is_authenticated
             and (
                 user.role == User.Role.SUPERADMIN
-                or roles.is_org_admin(user)
                 or (
+                    roles.is_org_admin(user)
+                    and user.organization_id == gym_class.organization_id
+                )
+            )
+        )
+        staff_can_enroll_started = (
+            admin_can_enroll_ended
+            or (
+                user
+                and user.is_authenticated
+                and (
                     user.role == User.Role.TEACHER
                     and user.organization_id == gym_class.organization_id
                 )
@@ -1047,10 +1057,13 @@ class EnrollmentSerializer(serializers.ModelSerializer):
         )
         if gym_class.start_datetime <= now and not staff_can_enroll_started:
             raise serializers.ValidationError({'gym_class': 'No puedes reservar clases pasadas o ya iniciadas.'})
-        if staff_can_enroll_started and gym_class.end_datetime <= now:
+        if staff_can_enroll_started and gym_class.end_datetime <= now and not admin_can_enroll_ended:
             raise serializers.ValidationError({'gym_class': 'No puedes reservar una clase cerrada.'})
 
-        if status_value == 'active' and gym_class.status in TERMINAL_CLASS_STATUSES:
+        if status_value == 'active' and gym_class.status in TERMINAL_CLASS_STATUSES and not (
+            admin_can_enroll_ended
+            and gym_class.status in {GymClass.Status.COMPLETED, GymClass.Status.COMPLETED_EARLY}
+        ):
             raise serializers.ValidationError({'gym_class': 'No puedes reservar una clase cerrada.'})
 
         duplicate_exists = Enrollment.objects.filter(gym_class=gym_class, student=student)
