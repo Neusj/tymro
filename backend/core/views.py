@@ -2713,6 +2713,7 @@ class GymClassViewSet(ModelViewSet):
             'substitution_assigned_by': template.substitution_assigned_by_id,
             'substitution_assigned_by_name': _user_display_name(template.substitution_assigned_by) if template.substitution_assigned_by else '',
             'can_claim_substitution': False,
+            'can_release_substitution': False,
             'enrollments_count': 0,
             'attendances_count': 0,
             'present_attendances_count': 0,
@@ -2797,6 +2798,26 @@ class GymClassViewSet(ModelViewSet):
         if self._substitution_conflict_exists(teacher=teacher, gym_class=gym_class):
             raise ValidationError({'detail': 'Ya tienes una clase o suplencia en ese horario.'})
 
+    def _validate_release_substitution(self, *, teacher, gym_class):
+        if not _is_teacher_eligible_actor(teacher):
+            raise PermissionDenied('Solo los profesores pueden soltar suplencias.')
+        if not teacher.organization_id:
+            raise PermissionDenied('Tu usuario no tiene organización asociada.')
+        if not teacher.is_active:
+            raise PermissionDenied('El profesor debe estar activo para soltar suplencias.')
+        if gym_class.organization_id != teacher.organization_id:
+            raise NotFound('Clase no encontrada.')
+        if gym_class.start_datetime <= timezone.now():
+            raise ValidationError({'detail': 'No puedes soltar una suplencia de una clase que ya comenzo.'})
+        if gym_class.status not in {GymClass.Status.SCHEDULED, GymClass.Status.IN_PROGRESS}:
+            raise ValidationError({'detail': 'Esta clase no admite cambios de suplencia.'})
+        if not (
+            gym_class.has_substitute
+            and gym_class.substitute_teacher_id == teacher.id
+            and gym_class.substitution_source == GymClass.SubstitutionSource.TEACHER_CLAIMED
+        ):
+            raise ValidationError({'detail': 'Solo puedes soltar una suplencia tomada por ti.'})
+
     @action(detail=False, methods=['get'], url_path='coverable')
     def coverable(self, request):
         user = request.user
@@ -2859,6 +2880,42 @@ class GymClassViewSet(ModelViewSet):
             gym_class.substitution_source = GymClass.SubstitutionSource.TEACHER_CLAIMED
             gym_class.substitution_assigned_at = now
             gym_class.substitution_assigned_by = user
+            gym_class.save(update_fields=[
+                'has_substitute',
+                'substitute_teacher',
+                'substitute_name',
+                'substitution_source',
+                'substitution_assigned_at',
+                'substitution_assigned_by',
+                'updated_at',
+            ])
+
+        gym_class = self.queryset.get(pk=gym_class.pk)
+        serializer = GymClassSerializer(gym_class, context={'request': request})
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'], url_path='release-substitution')
+    def release_substitution(self, request, pk=None):
+        user = request.user
+        if not _is_teacher_eligible_actor(user):
+            raise PermissionDenied('Solo los profesores pueden soltar suplencias.')
+        if not user.organization_id:
+            raise PermissionDenied('Tu usuario no tiene organización asociada.')
+
+        with transaction.atomic():
+            gym_class = GymClass.objects.select_for_update().filter(
+                pk=pk,
+                organization_id=user.organization_id,
+            ).first()
+            if gym_class is None:
+                raise NotFound('Clase no encontrada.')
+            self._validate_release_substitution(teacher=user, gym_class=gym_class)
+            gym_class.has_substitute = False
+            gym_class.substitute_teacher = None
+            gym_class.substitute_name = ''
+            gym_class.substitution_source = ''
+            gym_class.substitution_assigned_at = None
+            gym_class.substitution_assigned_by = None
             gym_class.save(update_fields=[
                 'has_substitute',
                 'substitute_teacher',

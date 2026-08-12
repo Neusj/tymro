@@ -336,6 +336,10 @@ export const classesApi = {
     const { data } = await api.post(`/classes/${id}/claim-substitution/`)
     return data
   },
+  releaseSubstitution: async (id) => {
+    const { data } = await api.post(`/classes/${id}/release-substitution/`)
+    return data
+  },
   remove: async (id) => {
     await api.delete(`/classes/${id}/`)
   },

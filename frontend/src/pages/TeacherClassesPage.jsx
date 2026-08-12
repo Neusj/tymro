@@ -91,6 +91,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
   const [selectedIds, setSelectedIds] = useState([])
   const [bulkModalOpen, setBulkModalOpen] = useState(false)
   const [claimingClass, setClaimingClass] = useState(null)
+  const [releasingClass, setReleasingClass] = useState(null)
   const [classReasonAction, setClassReasonAction] = useState(null)
   const [suspendingClass, setSuspendingClass] = useState(null)
   const [reactivatingClass, setReactivatingClass] = useState(null)
@@ -153,6 +154,23 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
       await loadData()
     } catch (apiError) {
       setError(firstApiError(apiError?.response?.data, 'No se pudo tomar la suplencia.'))
+    } finally {
+      setWorking(false)
+    }
+  }
+
+  const releaseSubstitution = async () => {
+    if (!releasingClass) {
+      return
+    }
+    setWorking(true)
+    setError('')
+    try {
+      await classesApi.releaseSubstitution(releasingClass.id)
+      setReleasingClass(null)
+      await loadData()
+    } catch (apiError) {
+      setError(firstApiError(apiError?.response?.data, 'No se pudo quitar la suplencia.'))
     } finally {
       setWorking(false)
     }
@@ -565,19 +583,33 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
         key: 'actions',
         label: 'Acciones',
         sortable: false,
-        render: (row) =>
-          row.can_claim_substitution ? (
-            <button
-              type="button"
-              disabled={working}
-              onClick={() => setClaimingClass(row)}
-              className="w-full rounded-lg border border-brand-orange/60 px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-orange disabled:opacity-60"
-            >
-              Cubrir esta clase
-            </button>
-          ) : (
-            <span className="text-xs text-brand-muted">Suplencia tomada</span>
-          ),
+        render: (row) => {
+          if (row.can_claim_substitution) {
+            return (
+              <button
+                type="button"
+                disabled={working}
+                onClick={() => setClaimingClass(row)}
+                className="w-full rounded-lg border border-brand-orange/60 px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-orange disabled:opacity-60"
+              >
+                Cubrir esta clase
+              </button>
+            )
+          }
+          if (row.can_release_substitution) {
+            return (
+              <button
+                type="button"
+                disabled={working}
+                onClick={() => setReleasingClass(row)}
+                className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-red hover:text-red-100 disabled:opacity-60"
+              >
+                Quitar suplencia
+              </button>
+            )
+          }
+          return <span className="text-xs text-brand-muted">Suplencia tomada</span>
+        },
       },
     ],
     [working],
@@ -718,6 +750,16 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
         loading={working}
         onCancel={() => setClaimingClass(null)}
         onConfirm={claimSubstitution}
+      />
+
+      <ConfirmDialog
+        open={Boolean(releasingClass)}
+        title="Quitar suplencia"
+        description={`Dejaras de cubrir ${releasingClass?.name || 'esta clase'} y volvera a quedar disponible para otros profesores.`}
+        confirmLabel="Quitar suplencia"
+        loading={working}
+        onCancel={() => setReleasingClass(null)}
+        onConfirm={releaseSubstitution}
       />
 
       <ConfirmWithReasonDialog

@@ -1100,6 +1100,7 @@ class GymClassSerializer(serializers.ModelSerializer):
     effective_substitution_source = serializers.SerializerMethodField()
     substitution_assigned_by_name = serializers.SerializerMethodField()
     can_claim_substitution = serializers.SerializerMethodField()
+    can_release_substitution = serializers.SerializerMethodField()
     class_type_name = serializers.CharField(source='class_type.name', read_only=True)
     discipline_name = serializers.CharField(source='discipline.name', read_only=True)
     enrollments_count = serializers.SerializerMethodField()
@@ -1154,6 +1155,7 @@ class GymClassSerializer(serializers.ModelSerializer):
             'substitution_assigned_by',
             'substitution_assigned_by_name',
             'can_claim_substitution',
+            'can_release_substitution',
             'enrollments_count',
             'attendances_count',
             'present_attendances_count',
@@ -1203,6 +1205,23 @@ class GymClassSerializer(serializers.ModelSerializer):
             and obj.organization_id == user.organization_id
             and obj.teacher_id != user.id
             and not obj.has_substitute
+            and obj.start_datetime > timezone.now()
+            and obj.status in {GymClass.Status.SCHEDULED, GymClass.Status.IN_PROGRESS}
+        )
+
+    def get_can_release_substitution(self, obj):
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        return bool(
+            user
+            and getattr(user, 'is_authenticated', False)
+            and user.role in TEACHER_ELIGIBLE_ROLES
+            and user.is_active
+            and user.organization_id
+            and obj.organization_id == user.organization_id
+            and obj.has_substitute
+            and obj.substitute_teacher_id == user.id
+            and obj.substitution_source == GymClass.SubstitutionSource.TEACHER_CLAIMED
             and obj.start_datetime > timezone.now()
             and obj.status in {GymClass.Status.SCHEDULED, GymClass.Status.IN_PROGRESS}
         )

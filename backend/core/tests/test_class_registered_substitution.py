@@ -206,6 +206,63 @@ def test_profesor_toma_clase_de_otro_profesor(api_client, setup):
     assert gym_class.substitution_assigned_at is not None
 
 
+def test_profesor_suelta_suplencia_tomada_por_el(api_client, setup):
+    gym_class = _make_class(setup)
+    _login(api_client, setup['substitute'])
+    claim = api_client.post(f"{CLASSES_URL}{gym_class.id}/claim-substitution/", format='json')
+    assert claim.status_code == 200, claim.content
+
+    resp = api_client.post(f"{CLASSES_URL}{gym_class.id}/release-substitution/", format='json')
+
+    assert resp.status_code == 200, resp.content
+    body = resp.json()
+    assert body['has_substitute'] is False
+    assert body['substitute_teacher'] is None
+    assert body['substitute_name'] == ''
+    assert body['effective_substitution_source'] == ''
+    gym_class.refresh_from_db()
+    assert gym_class.has_substitute is False
+    assert gym_class.substitute_teacher_id is None
+    assert gym_class.substitution_source == ''
+    assert gym_class.substitution_assigned_by_id is None
+    assert gym_class.substitution_assigned_at is None
+
+
+def test_profesor_no_suelta_suplencia_asignada_por_admin(api_client, setup):
+    gym_class = _make_class(
+        setup,
+        has_substitute=True,
+        substitute_teacher=setup['substitute'],
+        substitution_source=GymClass.SubstitutionSource.ADMIN_ASSIGNED,
+        substitution_assigned_by=setup['admin'],
+        substitution_assigned_at=timezone.now(),
+    )
+    _login(api_client, setup['substitute'])
+
+    resp = api_client.post(f"{CLASSES_URL}{gym_class.id}/release-substitution/", format='json')
+
+    assert resp.status_code == 400, resp.content
+    gym_class.refresh_from_db()
+    assert gym_class.has_substitute is True
+    assert gym_class.substitute_teacher_id == setup['substitute'].id
+    assert gym_class.substitution_source == GymClass.SubstitutionSource.ADMIN_ASSIGNED
+
+
+def test_profesor_no_suelta_suplencia_de_otro(api_client, setup, make_user):
+    gym_class = _make_class(setup)
+    another = make_user('another-release-sub', organization=setup['org'], role='teacher')
+    _login(api_client, setup['substitute'])
+    claim = api_client.post(f"{CLASSES_URL}{gym_class.id}/claim-substitution/", format='json')
+    assert claim.status_code == 200, claim.content
+    _login(api_client, another)
+
+    resp = api_client.post(f"{CLASSES_URL}{gym_class.id}/release-substitution/", format='json')
+
+    assert resp.status_code == 400, resp.content
+    gym_class.refresh_from_db()
+    assert gym_class.substitute_teacher_id == setup['substitute'].id
+
+
 def test_profesor_no_toma_propia_ajena_inactiva_pasada_ni_ya_suplida(api_client, setup, other_org):
     own = _make_class(setup, teacher=setup['substitute'])
     foreign = _make_class(other_org)

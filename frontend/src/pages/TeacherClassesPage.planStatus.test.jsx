@@ -7,6 +7,8 @@ vi.mock('../api/client', () => ({
     list: vi.fn(),
     byDate: vi.fn(),
     coverable: vi.fn(),
+    claimSubstitution: vi.fn(),
+    releaseSubstitution: vi.fn(),
     enrollableStudents: vi.fn(),
     enrolledStudents: vi.fn(),
   },
@@ -56,6 +58,8 @@ beforeEach(() => {
   classesApi.list.mockResolvedValue([GYM_CLASS])
   classesApi.byDate.mockImplementation((date, params) => classesApi.list(params))
   classesApi.coverable.mockResolvedValue([])
+  classesApi.claimSubstitution.mockResolvedValue({})
+  classesApi.releaseSubstitution.mockResolvedValue({})
   classesApi.enrolledStudents.mockResolvedValue([])
   classesApi.enrollableStudents.mockResolvedValue([candidate()])
   window.matchMedia = (query) => ({
@@ -132,5 +136,59 @@ describe('TeacherClassesPage — badge de plan en el roster', () => {
     // El saldo se sigue diciendo tal cual: las 8 clases existen, lo que falta es la matrícula.
     expect(within(row).getByText('8 clases')).toBeInTheDocument()
     expect(within(row).getByText('Matrícula impaga')).toBeInTheDocument()
+  })
+})
+
+describe('TeacherClassesPage — suplencias disponibles', () => {
+  it('permite quitar la suplencia tomada por el usuario desde el mismo boton de accion', async () => {
+    const user = userEvent.setup()
+    classesApi.list.mockResolvedValue([])
+    classesApi.coverable.mockResolvedValue([
+      {
+        ...GYM_CLASS,
+        id: 202,
+        name: 'Boxeo',
+        teacher_name: 'Prof. Matias',
+        has_substitute: true,
+        substitute_display_name: 'Yo Profesor',
+        can_claim_substitution: false,
+        can_release_substitution: true,
+      },
+    ])
+
+    render(<TeacherClassesPage mode="upcoming" />)
+
+    await waitFor(() => expect(shown('Boxeo')).toBeGreaterThan(0))
+    await user.click(screen.getAllByRole('button', { name: 'Abrir acciones' })[0])
+    await user.click(await screen.findByRole('button', { name: 'Quitar suplencia' }))
+    await user.click(await screen.findByRole('button', { name: 'Quitar suplencia' }))
+
+    await waitFor(() => expect(classesApi.releaseSubstitution).toHaveBeenCalledWith(202))
+  })
+
+  it('mantiene la accion de cubrir cuando la clase sigue disponible', async () => {
+    const user = userEvent.setup()
+    classesApi.list.mockResolvedValue([])
+    classesApi.coverable.mockResolvedValue([
+      {
+        ...GYM_CLASS,
+        id: 203,
+        name: 'Kick Boxing',
+        teacher_name: 'Prof. Matias',
+        has_substitute: false,
+        substitute_display_name: '',
+        can_claim_substitution: true,
+        can_release_substitution: false,
+      },
+    ])
+
+    render(<TeacherClassesPage mode="upcoming" />)
+
+    await waitFor(() => expect(shown('Kick Boxing')).toBeGreaterThan(0))
+    await user.click(screen.getAllByRole('button', { name: 'Abrir acciones' })[0])
+    await user.click(await screen.findByRole('button', { name: 'Cubrir esta clase' }))
+    await user.click(await screen.findByRole('button', { name: 'Cubrir clase' }))
+
+    await waitFor(() => expect(classesApi.claimSubstitution).toHaveBeenCalledWith(203))
   })
 })
