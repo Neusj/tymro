@@ -270,6 +270,76 @@ def test_aligned_teacher_keeps_full_access_to_its_own_class(api_client, aligned_
     }, format='json').status_code == 200
 
 
+def test_registered_substitute_teacher_can_operate_assigned_class(api_client, make_organization,
+                                                                  make_user):
+    org = make_organization()
+    branch = Branch.objects.create(organization=org, name='Sede')
+    titular = make_user('titular', organization=org, role='teacher', email='titular@gym.cl')
+    substitute = make_user('suplente', organization=org, role='teacher', email='suplente@gym.cl')
+    student = make_user('alu-sub', organization=org, role='student', email='alu-sub@gym.cl')
+    start = timezone.now() + timedelta(days=2)
+    gym_class = GymClass.objects.create(
+        organization=org, branch=branch, teacher=titular, name='Clase con suplente',
+        start_datetime=start, end_datetime=start + timedelta(hours=1), capacity=10,
+        status=GymClass.Status.SCHEDULED, has_substitute=True, substitute_teacher=substitute,
+    )
+    Enrollment.objects.create(gym_class=gym_class, student=student, status='active')
+
+    _login(api_client, substitute)
+    listing = api_client.get('/api/classes/by-date/', {
+        'date': start.date().isoformat(),
+        'teacher_scope': 'mine',
+    })
+    assert listing.status_code == 200, listing.content
+    assert [row for row in listing.json() if row['id'] == gym_class.id]
+
+    assert api_client.get(f'/api/classes/{gym_class.id}/enrolled-students/').status_code == 200
+    attendance = api_client.post(f'/api/classes/{gym_class.id}/attendance/', {
+        'attendances': [{'student_id': student.id, 'status': 'present'}],
+    }, format='json')
+    assert attendance.status_code == 200, attendance.content
+
+
+def test_gym_admin_can_claim_and_operate_substitution_as_teacher(api_client, make_organization,
+                                                                 make_user):
+    org = make_organization()
+    branch = Branch.objects.create(organization=org, name='Sede')
+    admin = make_user('admin-profe', organization=org, role='gym_admin', email='admin-profe@gym.cl')
+    titular = make_user('titular-admin-sub', organization=org, role='teacher',
+                        email='titular-admin-sub@gym.cl')
+    student = make_user('alu-admin-sub', organization=org, role='student', email='alu-admin-sub@gym.cl')
+    start = timezone.now() + timedelta(days=2)
+    gym_class = GymClass.objects.create(
+        organization=org, branch=branch, teacher=titular, name='Clase libre',
+        start_datetime=start, end_datetime=start + timedelta(hours=1), capacity=10,
+        status=GymClass.Status.SCHEDULED,
+    )
+    Enrollment.objects.create(gym_class=gym_class, student=student, status='active')
+
+    _login(api_client, admin)
+    coverable = api_client.get('/api/classes/coverable/', {'date': start.date().isoformat()})
+    assert coverable.status_code == 200, coverable.content
+    assert [row for row in coverable.json() if row['id'] == gym_class.id and row['can_claim_substitution']]
+
+    claim = api_client.post(f'/api/classes/{gym_class.id}/claim-substitution/', {}, format='json')
+    assert claim.status_code == 200, claim.content
+    gym_class.refresh_from_db()
+    assert gym_class.has_substitute is True
+    assert gym_class.substitute_teacher_id == admin.id
+
+    mine = api_client.get('/api/classes/by-date/', {
+        'date': start.date().isoformat(),
+        'teacher_scope': 'mine',
+    })
+    assert mine.status_code == 200, mine.content
+    assert [row for row in mine.json() if row['id'] == gym_class.id]
+
+    attendance = api_client.post(f'/api/classes/{gym_class.id}/attendance/', {
+        'attendances': [{'student_id': student.id, 'status': 'present'}],
+    }, format='json')
+    assert attendance.status_code == 200, attendance.content
+
+
 def test_aligned_teacher_still_sees_its_enrollments_and_payments(api_client, aligned_teacher):
     """Regresión de los otros dos querysets que se acotan."""
     from core.models import TeacherPaymentRecord

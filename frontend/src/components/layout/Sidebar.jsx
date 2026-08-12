@@ -164,6 +164,7 @@ const navByRole = {
       icon: <ClassesIcon />,
       children: [
         { to: '/gym-admin/classes', label: 'Ver clases' },
+        { to: '/teacher/classes/upcoming', label: 'Mis clases como profesor' },
         { to: '/gym-admin/class-templates', label: 'Gestión de clases' },
         { to: '/gym-admin/holidays', label: 'Festivos' },
         { to: '/gym-admin/class-types', label: 'Tipos de clase' },

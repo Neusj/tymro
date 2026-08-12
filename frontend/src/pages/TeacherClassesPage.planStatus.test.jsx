@@ -6,6 +6,7 @@ vi.mock('../api/client', () => ({
   classesApi: {
     list: vi.fn(),
     byDate: vi.fn(),
+    coverable: vi.fn(),
     enrollableStudents: vi.fn(),
     enrolledStudents: vi.fn(),
   },
@@ -54,6 +55,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   classesApi.list.mockResolvedValue([GYM_CLASS])
   classesApi.byDate.mockImplementation((date, params) => classesApi.list(params))
+  classesApi.coverable.mockResolvedValue([])
   classesApi.enrolledStudents.mockResolvedValue([])
   classesApi.enrollableStudents.mockResolvedValue([candidate()])
   window.matchMedia = (query) => ({

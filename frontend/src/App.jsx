@@ -549,7 +549,7 @@ export default function App() {
       <Route
         path="/teacher"
         element={
-          <ProtectedRoute allowedRoles={['teacher']}>
+          <ProtectedRoute allowedRoles={['teacher', 'gym_admin']}>
             <Navigate to="/teacher/classes/upcoming" replace />
           </ProtectedRoute>
         }
@@ -557,7 +557,7 @@ export default function App() {
       <Route
         path="/teacher/dashboard"
         element={
-          <ProtectedRoute allowedRoles={['teacher']}>
+          <ProtectedRoute allowedRoles={['teacher', 'gym_admin']}>
             <ShellRoute>
               <TeacherDashboard />
             </ShellRoute>
@@ -567,7 +567,7 @@ export default function App() {
       <Route
         path="/teacher/classes"
         element={
-          <ProtectedRoute allowedRoles={['teacher']}>
+          <ProtectedRoute allowedRoles={['teacher', 'gym_admin']}>
             <Navigate to="/teacher/classes/upcoming" replace />
           </ProtectedRoute>
         }
@@ -575,7 +575,7 @@ export default function App() {
       <Route
         path="/teacher/classes/upcoming"
         element={
-          <ProtectedRoute allowedRoles={['teacher']}>
+          <ProtectedRoute allowedRoles={['teacher', 'gym_admin']}>
             <ShellRoute>
               <TeacherClassesPage mode="upcoming" />
             </ShellRoute>
@@ -585,7 +585,7 @@ export default function App() {
       <Route
         path="/teacher/classes/history"
         element={
-          <ProtectedRoute allowedRoles={['teacher']}>
+          <ProtectedRoute allowedRoles={['teacher', 'gym_admin']}>
             <ShellRoute>
               <TeacherClassesPage mode="history" />
             </ShellRoute>

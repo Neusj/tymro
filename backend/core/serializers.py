@@ -1197,7 +1197,7 @@ class GymClassSerializer(serializers.ModelSerializer):
         return bool(
             user
             and getattr(user, 'is_authenticated', False)
-            and user.role == User.Role.TEACHER
+            and user.role in TEACHER_ELIGIBLE_ROLES
             and user.is_active
             and user.organization_id
             and obj.organization_id == user.organization_id

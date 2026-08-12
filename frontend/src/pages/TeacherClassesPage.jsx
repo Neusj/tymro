@@ -115,6 +115,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
   const listParams = useMemo(() => {
     const params = {
       ordering: mode === 'history' ? '-start_datetime' : 'start_datetime',
+      teacher_scope: 'mine',
     }
     if (mode === 'history') {
       params.status_in = 'completed,completed_early'

@@ -188,6 +188,10 @@ def _is_teacher(user):
     return _user_role(user) == User.Role.TEACHER
 
 
+def _is_teacher_eligible_actor(user):
+    return _user_role(user) in TEACHER_ELIGIBLE_ROLES
+
+
 def _is_student(user):
     return _user_role(user) == User.Role.STUDENT
 
@@ -291,20 +295,26 @@ def _class_sync_scope(user):
 
 
 def _is_own_class_teacher(user, gym_class):
-    """El profesor de ESTA clase, y de la misma organización que él.
+    """El titular o suplente registrado de ESTA clase, y de la misma organización.
 
     `teacher_id == user.id` a secas no alcanza: `GymClass.teacher` es SET_NULL, así que una
     clase conserva el `teacher_id` aunque después muevan al profesor a otra organización
     (`PATCH /api/users/{id}/ {"organization": ...}` del superadmin). Con esa FK rancia, el
     usuario leía y ESCRIBÍA en la organización que dejó atrás: cerrar la clase, cancelar
-    inscripciones, registrar asistencia y disparar el pago al profe. El scope del profesor
-    es la intersección de "mis clases" con "mi organización" (regla #1), nunca solo la FK.
+    inscripciones, registrar asistencia y disparar el pago al profe. El scope operativo es
+    la intersección de "mis clases" con "mi organización" (regla #1), nunca solo la FK.
     """
     return (
-        _is_teacher(user)
-        and gym_class.teacher_id == user.id
+        _is_teacher_eligible_actor(user)
         and bool(user.organization_id)
         and gym_class.organization_id == user.organization_id
+        and (
+            gym_class.teacher_id == user.id
+            or (
+                gym_class.has_substitute
+                and gym_class.substitute_teacher_id == user.id
+            )
+        )
     )
 
 
@@ -1478,12 +1488,8 @@ def _teacher_qr_class_or_403(teacher, class_id):
         # class_id malformado (no numérico): se trata como clase inexistente → 403,
         # nunca un 500 por castear el PK.
         raise PermissionDenied('Solo puedes exponer el QR de una clase que dictas en tu gimnasio.')
-    gym_class = GymClass.objects.filter(
-        id=class_id,
-        organization_id=teacher.organization_id,
-        teacher_id=teacher.id,
-    ).first()
-    if gym_class is None:
+    gym_class = GymClass.objects.filter(id=class_id, organization_id=teacher.organization_id).first()
+    if gym_class is None or not _is_own_class_teacher(teacher, gym_class):
         raise PermissionDenied('Solo puedes exponer el QR de una clase que dictas en tu gimnasio.')
     return gym_class
 
@@ -2492,12 +2498,31 @@ class GymClassViewSet(ModelViewSet):
         user = self.request.user
         organization_id = self.request.query_params.get('organization_id')
         ordering = self.request.query_params.get('ordering')
+        teacher_scope = str(self.request.query_params.get('teacher_scope', '')).strip().lower()
         ordering_map, default_ordering = self._class_ordering()
 
         if _is_superadmin(user):
             queryset = self.queryset
             if organization_id:
                 queryset = queryset.filter(organization_id=organization_id)
+            queryset = self._apply_class_common_filters(
+                queryset,
+                start_date_from=start_date_from,
+                start_date_to=start_date_to,
+            )
+            queryset = _apply_ordering(queryset, ordering, ordering_map, default_ordering)
+            _sync_class_statuses(queryset)
+            return queryset
+
+        if (
+            teacher_scope in {'mine', '1', 'true', 'yes'}
+            and _is_teacher_eligible_actor(user)
+            and user.organization_id
+        ):
+            queryset = self.queryset.filter(organization_id=user.organization_id).filter(
+                models.Q(teacher_id=user.id)
+                | models.Q(has_substitute=True, substitute_teacher_id=user.id)
+            )
             queryset = self._apply_class_common_filters(
                 queryset,
                 start_date_from=start_date_from,
@@ -2523,7 +2548,10 @@ class GymClassViewSet(ModelViewSet):
             # clase con `teacher_id` rancio se listaba y `_sync_class_statuses` (que
             # ESCRIBE) corría sobre la organización que el profe ya dejó.
             queryset = (
-                self.queryset.filter(teacher_id=user.id, organization_id=user.organization_id)
+                self.queryset.filter(organization_id=user.organization_id).filter(
+                    models.Q(teacher_id=user.id)
+                    | models.Q(has_substitute=True, substitute_teacher_id=user.id)
+                )
                 if user.organization_id else self.queryset.none()
             )
             queryset = self._apply_class_common_filters(
@@ -2584,6 +2612,7 @@ class GymClassViewSet(ModelViewSet):
     def _virtual_template_queryset(self, target_date):
         user = self.request.user
         organization_id = self.request.query_params.get('organization_id')
+        teacher_scope = str(self.request.query_params.get('teacher_scope', '')).strip().lower()
         queryset = ClassTemplate.objects.select_related(
             'organization', 'branch', 'teacher', 'class_type', 'discipline'
         ).filter(
@@ -2598,10 +2627,22 @@ class GymClassViewSet(ModelViewSet):
             if organization_id:
                 queryset = queryset.filter(organization_id=organization_id)
             return queryset
+        if (
+            teacher_scope in {'mine', '1', 'true', 'yes'}
+            and _is_teacher_eligible_actor(user)
+            and user.organization_id
+        ):
+            return queryset.filter(organization_id=user.organization_id).filter(
+                models.Q(teacher_id=user.id)
+                | models.Q(has_substitute=True, substitute_teacher_id=user.id)
+            )
         if (roles.is_org_admin(user) or _is_monitor(user)) and user.organization_id:
             return queryset.filter(organization_id=user.organization_id)
         if _is_teacher(user) and user.organization_id:
-            return queryset.filter(organization_id=user.organization_id, teacher_id=user.id)
+            return queryset.filter(organization_id=user.organization_id).filter(
+                models.Q(teacher_id=user.id)
+                | models.Q(has_substitute=True, substitute_teacher_id=user.id)
+            )
         if _is_student(user) and user.organization_id:
             mine_param = str(self.request.query_params.get('mine', '')).lower()
             if mine_param in {'1', 'true', 'yes'}:
@@ -2737,7 +2778,7 @@ class GymClassViewSet(ModelViewSet):
         ).exists()
 
     def _validate_claim_substitution(self, *, teacher, gym_class):
-        if not _is_teacher(teacher):
+        if not _is_teacher_eligible_actor(teacher):
             raise PermissionDenied('Solo los profesores pueden tomar suplencias.')
         if not teacher.organization_id:
             raise PermissionDenied('Tu usuario no tiene organización asociada.')
@@ -2759,7 +2800,7 @@ class GymClassViewSet(ModelViewSet):
     @action(detail=False, methods=['get'], url_path='coverable')
     def coverable(self, request):
         user = request.user
-        if not _is_teacher(user):
+        if not _is_teacher_eligible_actor(user):
             raise PermissionDenied('Solo los profesores pueden ver suplencias disponibles.')
         if not user.organization_id:
             return Response([])
@@ -2798,7 +2839,7 @@ class GymClassViewSet(ModelViewSet):
     @action(detail=True, methods=['post'], url_path='claim-substitution')
     def claim_substitution(self, request, pk=None):
         user = request.user
-        if not _is_teacher(user):
+        if not _is_teacher_eligible_actor(user):
             raise PermissionDenied('Solo los profesores pueden tomar suplencias.')
         if not user.organization_id:
             raise PermissionDenied('Tu usuario no tiene organización asociada.')
@@ -3300,7 +3341,10 @@ class GymClassViewSet(ModelViewSet):
         # no, "Sin permisos" seguia distinguiendo un id existente de uno inexistente DENTRO
         # de la propia org (un profe enumeraba las clases de sus colegas).
         if _is_teacher(user):
-            queryset = queryset.filter(teacher_id=user.id)
+            queryset = queryset.filter(
+                models.Q(teacher_id=user.id)
+                | models.Q(has_substitute=True, substitute_teacher_id=user.id)
+            )
         elif not (_is_superadmin(user) or roles.is_org_admin(user)):
             queryset = GymClass.objects.none()
         reachable_ids = set()
@@ -4186,9 +4230,9 @@ class EnrollmentViewSet(ModelViewSet):
             # Acotado por organización además del profesor: ver `_is_own_class_teacher`.
             if not user.organization_id:
                 return queryset.none()
-            return queryset.filter(
-                gym_class__teacher_id=user.id,
-                gym_class__organization_id=user.organization_id,
+            return queryset.filter(gym_class__organization_id=user.organization_id).filter(
+                models.Q(gym_class__teacher_id=user.id)
+                | models.Q(gym_class__has_substitute=True, gym_class__substitute_teacher_id=user.id)
             )
         if _is_student(user):
             # Acotado por organizacion ademas del alumno: ver `_is_own_org_student`.
