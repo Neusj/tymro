@@ -169,12 +169,6 @@ export default function GymAdminUsersPage() {
       { key: 'branch', label: 'Sucursal', mobile: 'secondary', render: (row) => row.branch_detail?.name || 'Sin sucursal' },
       { key: 'status', label: 'Estado', mobile: 'meta', render: (row) => <ValueBadge kind="user_status" value={row.is_active ? 'active' : 'inactive'} /> },
       {
-        key: 'enrollment_fee',
-        label: 'Matricula',
-        mobile: 'secondary',
-        render: (row) => (row.pays_enrollment_fee === false ? 'Exento' : 'Se cobra'),
-      },
-      {
         key: 'actions',
         label: 'Acciones',
         mobilePrimary: (row) =>

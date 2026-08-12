@@ -218,11 +218,6 @@ export default function SuperadminUsersPage() {
     { key: 'branch', label: 'Sucursal', render: (row) => row.branch_detail?.name || 'Sin sucursal' },
     { key: 'status', label: 'Estado', render: (row) => <ValueBadge kind="user_status" value={row.is_active ? 'active' : 'inactive'} /> },
     {
-      key: 'enrollment_fee',
-      label: 'Matricula',
-      render: (row) => (row.pays_enrollment_fee === false ? 'Exento' : 'Se cobra'),
-    },
-    {
       key: 'actions',
       label: 'Acciones',
       render: (row) =>
