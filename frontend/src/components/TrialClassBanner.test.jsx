@@ -59,12 +59,10 @@ describe('TrialClassBanner', () => {
     expect(screen.queryByRole('link', { name: /agéndala/i })).not.toBeInTheDocument()
   })
 
-  it('alumno sin email verificado y sin prueba gratis: muestra confirmaciÃ³n sin prometer agendar', () => {
+  it('oculto si el alumno sin email verificado no tiene prueba gratis', () => {
     mockUser = { role: 'student', email_verified: false, trial_eligible: false, has_used_trial: false }
-    renderBanner()
-    expect(screen.getByText(/confirma tu correo/i)).toBeInTheDocument()
-    expect(screen.getByText(/cuenta quedar/i)).toBeInTheDocument()
-    expect(screen.queryByText(/agendar tu clase de prueba gratis/i)).not.toBeInTheDocument()
+    const { container } = renderBanner()
+    expect(container).toBeEmptyDOMElement()
   })
 
   it('oculto para roles que no son alumno', () => {

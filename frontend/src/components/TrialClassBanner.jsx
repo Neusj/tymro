@@ -67,9 +67,12 @@ export default function TrialClassBanner() {
   }
 
   const canUseTrial = user.trial_eligible && !user.has_used_trial
+  if (!canUseTrial) {
+    return null
+  }
 
-  // Sin email verificado se mantiene el aviso de confirmación para todos los
-  // alumnos. Si no tiene prueba gratis disponible, el texto no promete agendarla.
+  // Sin email verificado el backend no deja agendar: en vez del CTA se invita a
+  // confirmar el correo y se ofrece reenviar el enlace de verificación (#26).
   if (!user.email_verified) {
     return (
       <div className="mb-5 rounded-xl border border-brand-orange/50 bg-brand-orange/10 px-4 py-3">
@@ -84,10 +87,6 @@ export default function TrialClassBanner() {
         <ResendVerificationButton />
       </div>
     )
-  }
-
-  if (!canUseTrial) {
-    return null
   }
 
   return (
