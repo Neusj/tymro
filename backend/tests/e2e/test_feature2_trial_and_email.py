@@ -26,6 +26,7 @@ def test_public_trial_booking_marks_is_trial(api, login, make_organization, make
     student = make_user(
         'trial_maria', organization=org, role='student',
         email='maria@gym.cl', first_name='Maria', email_verified=True,
+        trial_eligible=True,
     )
     branch = f.make_branch(org)
     start = f.now() + timedelta(days=1)

@@ -905,12 +905,23 @@ def test_users_email_invalid_as_username_is_row_error(api_client, admin_a):
     assert 'caracteres no permitidos' in body['rows'][0]['errors'][0]['message']
 
 
-# --- RUT en el importador (obligatorio + validado + normalizado) -------------
+# --- RUT en el importador (alumnos opcional; si viene, validado + normalizado) -------------
 
-def test_students_missing_rut_is_required_error(api_client, admin_a):
+def test_students_missing_rut_is_allowed(api_client, admin_a, org_a):
+    from django.contrib.auth import get_user_model
+
     login(api_client, 'admin_a')
-    upload = build_xlsx([['sin.rut@gym.cl', '', 'Ana', '', '', '']], headers=USER_HEADERS)
-    resp = api_client.post('/api/imports/students/validate/', {'file': upload}, format='multipart')
+    resp = import_entity(api_client, 'students', [['sin.rut@gym.cl', '', 'Ana', '', '', '']], USER_HEADERS)
+    assert resp.status_code == 201, resp.content
+    student = get_user_model().objects.get(organization=org_a, email='sin.rut@gym.cl')
+    assert student.rut is None
+    assert student.trial_eligible is False
+
+
+def test_teachers_missing_rut_is_required_error(api_client, admin_a):
+    login(api_client, 'admin_a')
+    upload = build_xlsx([['sin.rut.teacher@gym.cl', '', 'Ana', '', '', '']], headers=USER_HEADERS)
+    resp = api_client.post('/api/imports/teachers/validate/', {'file': upload}, format='multipart')
     body = resp.json()
     assert body['can_commit'] is False
     error = body['rows'][0]['errors'][0]

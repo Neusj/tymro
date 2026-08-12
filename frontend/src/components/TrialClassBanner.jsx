@@ -55,31 +55,39 @@ function ResendVerificationButton() {
 }
 
 // Punto de entrada a la clase de prueba gratis DESDE la app (no solo por el redirect
-// post-verificación): un alumno logueado o importado no tenía cómo llegar a /trial.
-// Persistente y con el mismo estilo que RutReminderBanner. Solo para alumnos que aún
-// no usaron su prueba; desaparece en cuanto has_used_trial pasa a true.
+// post-verificación). Solo para alumnos que vienen del registro público y aún no
+// usaron su prueba; para los demás conserva solo el aviso de confirmar correo.
 export default function TrialClassBanner() {
   const { user } = useAuth()
 
-  // Los flags viajan en /me (CustomUserSerializer, solo lectura). Sin usuario, si no
-  // es alumno, o si ya usó la prueba, no hay banner.
-  if (!user || user.role !== 'student' || user.has_used_trial) {
+  // Los flags viajan en /me (CustomUserSerializer, solo lectura). Sin usuario o si
+  // no es alumno no hay aviso desde este componente.
+  if (!user || user.role !== 'student') {
     return null
   }
 
-  // Sin email verificado el backend no deja agendar: en vez del CTA se invita a
-  // confirmar el correo y se ofrece reenviar el enlace de verificación (#26).
+  const canUseTrial = user.trial_eligible && !user.has_used_trial
+
+  // Sin email verificado se mantiene el aviso de confirmación para todos los
+  // alumnos. Si no tiene prueba gratis disponible, el texto no promete agendarla.
   if (!user.email_verified) {
     return (
       <div className="mb-5 rounded-xl border border-brand-orange/50 bg-brand-orange/10 px-4 py-3">
-        <p className="text-sm font-semibold text-brand-white">✉️ Confirma tu correo para agendar tu clase de prueba</p>
+        <p className="text-sm font-semibold text-brand-white">
+          {canUseTrial ? '✉️ Confirma tu correo para agendar tu clase de prueba' : '✉️ Confirma tu correo'}
+        </p>
         <p className="mt-1 text-xs text-brand-muted">
-          Te enviamos un enlace para confirmar tu cuenta. Revisa tu bandeja de entrada (y spam);
-          al confirmarlo podrás agendar tu clase de prueba gratis.
+          {canUseTrial
+            ? 'Te enviamos un enlace para confirmar tu cuenta. Revisa tu bandeja de entrada (y spam); al confirmarlo podrás agendar tu clase de prueba gratis.'
+            : 'Te enviamos un enlace para confirmar tu cuenta. Revisa tu bandeja de entrada (y spam); al confirmarlo tu cuenta quedará activa.'}
         </p>
         <ResendVerificationButton />
       </div>
     )
+  }
+
+  if (!canUseTrial) {
+    return null
   }
 
   return (

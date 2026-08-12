@@ -71,6 +71,7 @@ def test_public_registration_happy_path(api_client, make_organization, mailoutbo
     assert user.organization_id == org.id
     assert user.branch_id is None
     assert user.email_verified is False
+    assert user.trial_eligible is True
     assert user.has_used_trial is False
 
     assert len(mailoutbox) == 1
@@ -153,7 +154,8 @@ def test_trial_class_is_one_per_person(api_client, make_organization, make_user)
     branch = Branch.objects.create(organization=org, name='Sede')
     student = make_user('stu', organization=org, role='student', email='stu@example.com')
     student.email_verified = True
-    student.save(update_fields=['email_verified'])
+    student.trial_eligible = True
+    student.save(update_fields=['email_verified', 'trial_eligible'])
 
     c1 = _make_trial_class(org, branch, when=timezone.now() + timedelta(days=1), name='C1')
     c2 = _make_trial_class(org, branch, when=timezone.now() + timedelta(days=2), name='C2')
@@ -196,7 +198,8 @@ def test_trial_rejects_non_eligible_class(api_client, make_organization, make_us
     branch = Branch.objects.create(organization=org, name='Sede')
     student = make_user('stu', organization=org, role='student', email='stu@example.com')
     student.email_verified = True
-    student.save(update_fields=['email_verified'])
+    student.trial_eligible = True
+    student.save(update_fields=['email_verified', 'trial_eligible'])
     klass = _make_trial_class(org, branch, eligible=False)
 
     api_client.force_authenticate(user=student)
@@ -211,7 +214,8 @@ def test_trial_respects_capacity(api_client, make_organization, make_user):
     branch = Branch.objects.create(organization=org, name='Sede')
     student = make_user('stu', organization=org, role='student', email='stu@example.com')
     student.email_verified = True
-    student.save(update_fields=['email_verified'])
+    student.trial_eligible = True
+    student.save(update_fields=['email_verified', 'trial_eligible'])
     filler = make_user('filler', organization=org, role='student', email='filler@example.com')
 
     klass = _make_trial_class(org, branch, capacity=1)
@@ -221,6 +225,28 @@ def test_trial_respects_capacity(api_client, make_organization, make_user):
     resp = api_client.post(TRIAL_BOOK_URL, {'gym_class': klass.id}, format='json')
     assert resp.status_code == 400
     student.refresh_from_db()
+    assert student.has_used_trial is False
+
+
+def test_admin_created_student_cannot_book_free_trial(api_client, make_organization, make_user):
+    org = make_organization(name='Org A')
+    branch = Branch.objects.create(organization=org, name='Sede')
+    student = make_user(
+        'admin_created',
+        organization=org,
+        role='student',
+        email='admin.created@example.com',
+        email_verified=True,
+    )
+    klass = _make_trial_class(org, branch)
+
+    api_client.force_authenticate(user=student)
+    resp = api_client.post(TRIAL_BOOK_URL, {'gym_class': klass.id}, format='json')
+
+    assert resp.status_code == 400
+    assert 'no tiene clase de prueba gratis' in resp.json()['detail']
+    student.refresh_from_db()
+    assert student.trial_eligible is False
     assert student.has_used_trial is False
 
 

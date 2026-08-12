@@ -71,7 +71,7 @@ def _email_valid_as_username(values, organization):
 def _valid_and_normalize_rut(values, organization):
     """Valida el dígito verificador y normaliza el RUT a canónico IN-PLACE
     (mutando ``values['rut']``), para que build_instance guarde 26711486-2.
-    Si el RUT es vacío lo maneja required=True del FieldSpec (no aquí)."""
+    Si el RUT es vacío lo maneja la regla required del FieldSpec (no aquí)."""
     from accounts.rut import clean_rut
 
     raw = values.get('rut')
@@ -128,7 +128,8 @@ def _build_user_factory(role):
     return _build
 
 
-def _user_fields(person_label):
+def _user_fields(person_label, *, rut_required=True):
+    rut_requirement = 'obligatorio' if rut_required else 'opcional'
     return (
         FieldSpec(
             # max_length 150 (no 254): username=email y username es CharField(150).
@@ -139,10 +140,10 @@ def _user_fields(person_label):
         FieldSpec(
             # max_length 15 sobre el texto de la celda (admite puntos y guion:
             # '12.345.678-5' = 12 chars). Se guarda normalizado a canónico (12345678-5).
-            attr='rut', label=RUT_LABEL, kind='string', required=True, max_length=15,
+            attr='rut', label=RUT_LABEL, kind='string', required=rut_required, max_length=15,
             example='12.345.678-5',
             help_text=(
-                f'RUT de {person_label} (obligatorio). Con o sin puntos, con guion; '
+                f'RUT de {person_label} ({rut_requirement}). Con o sin puntos, con guion; '
                 'se guarda normalizado (ej. 12345678-5) y no puede repetirse en tu organización.'
             ),
         ),
@@ -187,7 +188,7 @@ STUDENTS = register(EntityImportSpec(
     label='Alumnos',
     description='Tus alumnos o socios. Quedan listos para asignarles membresías y reservar clases.',
     model='accounts.CustomUser',
-    fields=_user_fields('el alumno o la alumna'),
+    fields=_user_fields('el alumno o la alumna', rut_required=False),
     natural_key=('email',),
     row_validators=(
         _email_valid_as_username, _email_conflict_outside_org,
@@ -206,7 +207,7 @@ TEACHERS = register(EntityImportSpec(
     label='Profesores',
     description='Tus profesores o coaches. Quedan listos para asignarlos a clases y horarios.',
     model='accounts.CustomUser',
-    fields=_user_fields('el profesor o la profesora'),
+    fields=_user_fields('el profesor o la profesora', rut_required=True),
     natural_key=('email',),
     row_validators=(
         _email_valid_as_username, _email_conflict_outside_org,

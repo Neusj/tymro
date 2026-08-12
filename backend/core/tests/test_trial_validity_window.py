@@ -20,7 +20,8 @@ TRIAL_BOOK_URL = '/api/public/trial/book/'
 def _verified_student(make_user, org):
     student = make_user('stu', organization=org, role='student', email='stu@example.com')
     student.email_verified = True
-    student.save(update_fields=['email_verified'])
+    student.trial_eligible = True
+    student.save(update_fields=['email_verified', 'trial_eligible'])
     return student
 
 

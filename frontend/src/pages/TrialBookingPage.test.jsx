@@ -7,8 +7,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // debe refrescarse para que TrialClassBanner desaparezca al volver a la app (misma
 // mecánica que RutReminderBanner: refreshMe tras guardar).
 const refreshMe = vi.fn()
+let mockUser
 vi.mock('../auth/AuthContext', () => ({
-  useAuth: () => ({ user: { role: 'student' }, logout: vi.fn(), refreshMe }),
+  useAuth: () => ({ user: mockUser, logout: vi.fn(), refreshMe }),
 }))
 vi.mock('../api/client', () => ({
   registrationApi: {
@@ -34,6 +35,7 @@ function renderPage() {
 }
 
 beforeEach(() => {
+  mockUser = { role: 'student', trial_eligible: true, has_used_trial: false }
   vi.clearAllMocks()
   registrationApi.listTrialClasses.mockResolvedValue([CLASS])
   registrationApi.bookTrial.mockResolvedValue({})
@@ -61,5 +63,15 @@ describe('TrialBookingPage', () => {
 
     expect(await screen.findByText(/sin cupos/i)).toBeInTheDocument()
     expect(refreshMe).not.toHaveBeenCalled()
+  })
+
+  it('si la cuenta no tiene prueba gratis, no carga horarios ni ofrece agendar', async () => {
+    mockUser = { role: 'student', trial_eligible: false, has_used_trial: false }
+    renderPage()
+
+    expect(await screen.findByText(/clase de prueba no disponible/i)).toBeInTheDocument()
+    expect(screen.getByText(/no tiene una clase de prueba gratis disponible/i)).toBeInTheDocument()
+    expect(registrationApi.listTrialClasses).not.toHaveBeenCalled()
+    expect(screen.queryByRole('button', { name: /agendar/i })).not.toBeInTheDocument()
   })
 })

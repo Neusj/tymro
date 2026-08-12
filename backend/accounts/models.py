@@ -45,6 +45,7 @@ class CustomUser(AbstractUser):
         help_text='Si esta desmarcado, este alumno no debe pagar matricula anual.',
     )
     email_verified = models.BooleanField(default=False)
+    trial_eligible = models.BooleanField(default=False)
     has_used_trial = models.BooleanField(default=False)
 
     class Meta:

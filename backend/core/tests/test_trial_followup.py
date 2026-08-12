@@ -40,6 +40,7 @@ def setup(make_organization, make_user):
     student = make_user(
         'maria', organization=org, role='student',
         email='maria@gym.cl', first_name='Maria', email_verified=True,
+        trial_eligible=True,
     )
     branch = Branch.objects.create(organization=org, name='Sede')
     return {'org': org, 'teacher': teacher, 'student': student, 'branch': branch}

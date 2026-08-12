@@ -27,6 +27,7 @@ export default function TrialBookingPage() {
   const [error, setError] = useState('')
   const [bookingId, setBookingId] = useState(null)
   const [booked, setBooked] = useState(null)
+  const canUseTrial = user?.role === 'student' && user?.trial_eligible && !user?.has_used_trial
 
   const brandStyle = useMemo(
     () => ({
@@ -39,6 +40,11 @@ export default function TrialBookingPage() {
   useEffect(() => {
     let active = true
     const load = async () => {
+      if (user && !canUseTrial) {
+        setClasses([])
+        setLoading(false)
+        return
+      }
       try {
         const data = await registrationApi.listTrialClasses()
         if (active) {
@@ -58,7 +64,7 @@ export default function TrialBookingPage() {
     return () => {
       active = false
     }
-  }, [])
+  }, [canUseTrial, user])
 
   const book = async (gymClass) => {
     setError('')
@@ -94,7 +100,9 @@ export default function TrialBookingPage() {
             <p className="font-display text-xs font-bold uppercase tracking-[0.3em] text-brand-orange">
               {user?.organization_detail?.name || 'TYMRO'}
             </p>
-            <h1 className="mt-1 font-display text-2xl font-bold sm:text-3xl">Tu clase de prueba gratis</h1>
+            <h1 className="mt-1 font-display text-2xl font-bold sm:text-3xl">
+              {canUseTrial ? 'Tu clase de prueba gratis' : 'Clase de prueba no disponible'}
+            </h1>
           </div>
           <button
             type="button"
@@ -127,6 +135,10 @@ export default function TrialBookingPage() {
             >
               Ver mis reservas
             </button>
+          </section>
+        ) : !canUseTrial ? (
+          <section className="mt-8 rounded-2xl border border-brand-line bg-brand-soft/80 p-6 text-center text-sm text-brand-muted">
+            Esta cuenta no tiene una clase de prueba gratis disponible.
           </section>
         ) : (
           <>

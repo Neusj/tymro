@@ -33,7 +33,7 @@ beforeEach(() => {
 
 describe('TrialClassBanner', () => {
   it('alumno verificado que no usó la prueba: muestra el CTA para agendar en /trial', () => {
-    mockUser = { role: 'student', email_verified: true, has_used_trial: false }
+    mockUser = { role: 'student', email_verified: true, trial_eligible: true, has_used_trial: false }
     renderBanner()
     expect(screen.getByText(/clase de prueba gratis/i)).toBeInTheDocument()
     const cta = screen.getByRole('link', { name: /agéndala/i })
@@ -41,20 +41,34 @@ describe('TrialClassBanner', () => {
   })
 
   it('oculto si el alumno YA usó su clase de prueba', () => {
-    mockUser = { role: 'student', email_verified: true, has_used_trial: true }
+    mockUser = { role: 'student', email_verified: true, trial_eligible: true, has_used_trial: true }
+    const { container } = renderBanner()
+    expect(container).toBeEmptyDOMElement()
+  })
+
+  it('oculto si el alumno no tiene clase de prueba gratis disponible', () => {
+    mockUser = { role: 'student', email_verified: true, trial_eligible: false, has_used_trial: false }
     const { container } = renderBanner()
     expect(container).toBeEmptyDOMElement()
   })
 
   it('alumno sin email verificado: variante "confirma tu correo", sin CTA a /trial', () => {
-    mockUser = { role: 'student', email_verified: false, has_used_trial: false }
+    mockUser = { role: 'student', email_verified: false, trial_eligible: true, has_used_trial: false }
     renderBanner()
     expect(screen.getByText(/confirma tu correo/i)).toBeInTheDocument()
     expect(screen.queryByRole('link', { name: /agéndala/i })).not.toBeInTheDocument()
   })
 
+  it('alumno sin email verificado y sin prueba gratis: muestra confirmaciÃ³n sin prometer agendar', () => {
+    mockUser = { role: 'student', email_verified: false, trial_eligible: false, has_used_trial: false }
+    renderBanner()
+    expect(screen.getByText(/confirma tu correo/i)).toBeInTheDocument()
+    expect(screen.getByText(/cuenta quedar/i)).toBeInTheDocument()
+    expect(screen.queryByText(/agendar tu clase de prueba gratis/i)).not.toBeInTheDocument()
+  })
+
   it('oculto para roles que no son alumno', () => {
-    mockUser = { role: 'gym_admin', email_verified: true, has_used_trial: false }
+    mockUser = { role: 'gym_admin', email_verified: true, trial_eligible: true, has_used_trial: false }
     const { container } = renderBanner()
     expect(container).toBeEmptyDOMElement()
   })
@@ -68,7 +82,7 @@ describe('TrialClassBanner', () => {
 
 describe('TrialClassBanner — reenvío de confirmación (#26)', () => {
   beforeEach(() => {
-    mockUser = { role: 'student', email_verified: false, has_used_trial: false }
+    mockUser = { role: 'student', email_verified: false, trial_eligible: true, has_used_trial: false }
     authApi.resendVerification.mockReset()
   })
 
@@ -109,7 +123,7 @@ describe('TrialClassBanner — reenvío de confirmación (#26)', () => {
   })
 
   it('no toca la rama verificada (sigue el CTA a /trial, sin botón de reenvío)', () => {
-    mockUser = { role: 'student', email_verified: true, has_used_trial: false }
+    mockUser = { role: 'student', email_verified: true, trial_eligible: true, has_used_trial: false }
     renderBanner()
     expect(screen.getByRole('link', { name: /agéndala/i })).toHaveAttribute('href', '/trial')
     expect(screen.queryByRole('button', { name: /reenviar/i })).not.toBeInTheDocument()

@@ -1037,6 +1037,7 @@ class PublicRegisterView(APIView):
             branch=None,
             is_active=True,
             email_verified=False,
+            trial_eligible=True,
             has_used_trial=False,
         )
         user.set_password(data['password'])
@@ -1130,7 +1131,12 @@ class PublicTrialClassesView(APIView):
 
     def get(self, request):
         user = request.user
-        if not _is_student(user) or not user.organization_id:
+        if (
+            not _is_student(user)
+            or not user.organization_id
+            or not user.trial_eligible
+            or user.has_used_trial
+        ):
             return Response([], status=status.HTTP_200_OK)
 
         now = timezone.now()
@@ -1179,6 +1185,11 @@ class PublicTrialBookView(APIView):
             if locked_user.has_used_trial:
                 return Response(
                     {'detail': 'Ya usaste tu clase de prueba gratis.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if not locked_user.trial_eligible:
+                return Response(
+                    {'detail': 'Tu cuenta no tiene clase de prueba gratis disponible.'},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 

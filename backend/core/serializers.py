@@ -366,9 +366,9 @@ class CustomUserSerializer(serializers.ModelSerializer):
     # Email es la clave de login (único por org). 'username' ya NO se expone: es un
     # identificador interno auto-generado (ver CustomUser.save()).
     email = serializers.EmailField(required=True)
-    # RUT: obligatorio en el ALTA de usuarios de organización (ver validate()); en
-    # edición el corte es 'por presencia' (required=False => un PATCH parcial de
-    # sistema, ej. toggle is_active, no lo exige). Si viene, se valida y normaliza.
+    # RUT: en edición el corte es 'por presencia' (required=False => un PATCH
+    # parcial de sistema, ej. toggle is_active, no lo exige). Si viene, se valida
+    # y normaliza.
     rut = RutField(required=False)
     # Etiqueta legible del rol (única fuente: los choices de CustomUser.Role vía
     # get_role_display()). Solo lectura: nunca expone la key interna ('gym_admin').
@@ -400,9 +400,10 @@ class CustomUserSerializer(serializers.ModelSerializer):
             # email / reserva de la prueba). Un admin no puede negar la prueba ni
             # falsear la verificación marcándolos a mano.
             'email_verified',
+            'trial_eligible',
             'has_used_trial',
         ]
-        read_only_fields = ['email_verified', 'has_used_trial']
+        read_only_fields = ['email_verified', 'trial_eligible', 'has_used_trial']
 
     def validate(self, attrs):
         """Integridad de datos del usuario. La decisión de qué rol puede asignar
@@ -455,10 +456,9 @@ class CustomUserSerializer(serializers.ModelSerializer):
                     {'email': f'Ya existe un usuario con ese email en {scope}.'}
                 )
 
-        # RUT: obligatorio en el ALTA de usuarios de ORGANIZACIÓN (los roles de
-        # plataforma como superadmin no lo requieren). En edición no se exige
-        # (corte por presencia): el RutField ya validó/normalizó si vino, y si no
-        # vino queda intacto. Nunca se puede blanquear (allow_blank/allow_null False).
+        # RUT: obligatorio en el ALTA manual de usuarios de ORGANIZACIÓN (los
+        # roles de plataforma como superadmin no lo requieren). El importador no
+        # pasa por este serializer y define su propia regla por entidad.
         if self.instance is None and effective_role in roles.ORG_ROLES and not attrs.get('rut'):
             raise serializers.ValidationError({'rut': 'El RUT es obligatorio.'})
 
@@ -520,10 +520,12 @@ class SelfProfileSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'first_name', 'last_name', 'email', 'phone', 'rut',
             'role', 'role_display', 'is_active', 'is_active_member',
+            'email_verified', 'trial_eligible', 'has_used_trial',
         ]
         read_only_fields = [
             'id', 'first_name', 'last_name', 'email',
             'role', 'role_display', 'is_active', 'is_active_member',
+            'email_verified', 'trial_eligible', 'has_used_trial',
         ]
 
     def validate(self, attrs):
