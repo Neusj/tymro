@@ -127,9 +127,14 @@ def parse_workbook(spec, file_bytes):
 
     column_map = {}
     for field in spec.fields:
-        normalized = _normalize_header(field.label)
-        if normalized in header_index:
-            column_map[field.attr] = header_index[normalized]
+        matched = None
+        for label in (field.label,) + tuple(getattr(field, 'aliases', ()) or ()):
+            normalized = _normalize_header(label)
+            if normalized in header_index:
+                matched = normalized
+                break
+        if matched:
+            column_map[field.attr] = header_index[matched]
         elif field.required:
             raise ImportFileError(
                 f"Falta la columna '{field.label}'. Usa la plantilla descargada "
@@ -163,6 +168,28 @@ def parse_workbook(spec, file_bytes):
                 'Divide la carga en varios archivos.'
             )
     return parsed
+
+
+def expand_parsed_rows(spec, parsed):
+    """Aplica fan-out opcional de filas antes de coercion/dedup.
+
+    El caso principal es Clases: una fila fisica con varios dias debe convertirse
+    en varias plantillas logicas, una por weekday, antes de evaluar duplicados.
+    """
+    if not spec.expand_rows:
+        return parsed
+
+    expanded = []
+    for row_number, raw in parsed:
+        new_rows = spec.expand_rows(row_number, raw) or []
+        for expanded_row_number, expanded_raw in new_rows:
+            expanded.append((expanded_row_number, expanded_raw))
+            if len(expanded) > spec.max_rows:
+                raise ImportFileError(
+                    f'El archivo genera mas de {spec.max_rows} filas con datos. '
+                    'Reduce la cantidad de registros o divide la carga en varios archivos.'
+                )
+    return expanded
 
 
 def _coerce(field, raw):
@@ -530,7 +557,7 @@ def verify_token(token, spec, organization, file_bytes):
 def run_validate(spec, organization, uploaded_file):
     """Valida todo sin persistir. Devuelve (report, token)."""
     file_bytes = read_upload(uploaded_file)
-    parsed = parse_workbook(spec, file_bytes)
+    parsed = expand_parsed_rows(spec, parse_workbook(spec, file_bytes))
     report = validate_rows(spec, organization, parsed)
     return report, issue_token(spec, organization, file_bytes)
 
@@ -639,7 +666,7 @@ def run_commit(spec, organization, uploaded_file, token, actor=None):
 
     file_bytes = read_upload(uploaded_file)
     verify_token(token, spec, organization, file_bytes)
-    parsed = parse_workbook(spec, file_bytes)
+    parsed = expand_parsed_rows(spec, parse_workbook(spec, file_bytes))
 
     model = apps.get_model(spec.model)
     try:

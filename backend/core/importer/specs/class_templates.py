@@ -1,16 +1,20 @@
 """Spec de importacion de Clases semanales (core.ClassTemplate).
 
-Cada fila crea una clase semanal recurrente, igual que el formulario
-/gym-admin/class-templates. La pantalla permite seleccionar varios dias en una
-sola operacion; la planilla usa una fila por dia para mantener el preview y la
-deduplicacion fila-a-fila.
+Cada fila crea una o mas clases semanales recurrentes, igual que el formulario
+/gym-admin/class-templates: la columna "Dias de la semana" acepta uno o varios
+dias, y el motor expande internamente una plantilla por dia para conservar el
+preview, la deduplicacion y la generacion de calendario por clase.
 
 El inicio se infiere como hoy y no se pide fecha de termino: las clases se
 generan hacia adelante por la ventana rodante, igual que el alta manual.
 """
+import re
+import unicodedata
+
 from ..registry import register
 from ..spec import EntityImportSpec, FieldSpec, FKSpec, RowError
 
+WEEKDAYS_LABEL = 'Dias de la semana'
 END_TIME_LABEL = 'Hora termino'
 CAPACITY_LABEL = 'Capacidad'
 TEACHER_LABEL = 'Email del profesor'
@@ -29,6 +33,57 @@ WEEKDAY_CHOICES = (
 )
 
 TEACHER_FILTERS = {'role__in': ('teacher', 'gym_admin'), 'is_active': True}
+
+
+def _text(value):
+    if value is None:
+        return ''
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    return str(value).strip()
+
+
+def _normalize_weekday_token(value):
+    text = unicodedata.normalize('NFKD', _text(value).casefold())
+    return ''.join(char for char in text if not unicodedata.combining(char)).strip()
+
+
+WEEKDAY_TOKEN_MAP = {
+    _normalize_weekday_token(label): label
+    for label, _ in WEEKDAY_CHOICES
+}
+WEEKDAY_TOKEN_MAP.update({
+    str(db_value): label
+    for label, db_value in WEEKDAY_CHOICES
+})
+
+
+def _split_weekdays(raw_value):
+    text = _text(raw_value)
+    if not text:
+        return []
+    text = re.sub(r'\s+y\s+', ',', text, flags=re.IGNORECASE)
+    return [part.strip() for part in re.split(r'[,;/|\n]+', text) if part.strip()]
+
+
+def _expand_weekday_rows(row_number, raw):
+    tokens = _split_weekdays(raw.get('weekday'))
+    if not tokens:
+        return [(row_number, raw)]
+
+    rows = []
+    seen = set()
+    for token in tokens:
+        canonical = WEEKDAY_TOKEN_MAP.get(_normalize_weekday_token(token))
+        value = canonical or token
+        dedup_key = _normalize_weekday_token(value)
+        if dedup_key in seen:
+            continue
+        seen.add(dedup_key)
+        expanded = dict(raw)
+        expanded['weekday'] = value
+        rows.append((row_number, expanded))
+    return rows or [(row_number, raw)]
 
 
 def _template_rules(values, organization):
@@ -141,9 +196,13 @@ CLASS_TEMPLATES = register(EntityImportSpec(
             help_text='Nombre visible de la clase (opcional).',
         ),
         FieldSpec(
-            attr='weekday', label='Dia de la semana', kind='choice', required=True,
-            choices=WEEKDAY_CHOICES, example='Lunes',
-            help_text='Dia en que se repite la clase cada semana. Usa una fila por dia.',
+            attr='weekday', label=WEEKDAYS_LABEL, kind='choice', required=True,
+            choices=WEEKDAY_CHOICES, example='Lunes, Miercoles, Viernes',
+            help_text=(
+                'Dias en que se repite la clase cada semana. Puedes indicar uno o '
+                'varios separados por coma.'
+            ),
+            aliases=('Dia de la semana',),
         ),
         FieldSpec(
             attr='branch', label='Sucursal', kind='fk', required=True,
@@ -222,11 +281,12 @@ CLASS_TEMPLATES = register(EntityImportSpec(
     natural_key=('branch', 'weekday', 'start_time', 'teacher'),
     dependencies=('branches', 'class-types', 'disciplines', 'teachers'),
     row_validators=(_template_rules,),
+    expand_rows=_expand_weekday_rows,
     derive=_derive_defaults,
     post_commit=_generate_calendar,
     instructions=(
-        'Cada fila crea una clase semanal. Si la misma clase va lunes y miercoles, '
-        'carga dos filas: una por cada dia.',
+        'Cada fila puede crear una clase semanal para uno o varios dias. Para varios '
+        'dias usa coma, por ejemplo: Lunes, Miercoles, Viernes.',
         'Antes de importar clases carga Sucursales, Tipos, Disciplinas y Profesores.',
         'La clase arranca hoy y no tiene fecha de fin: se genera automaticamente cada '
         'semana hacia adelante dentro de la ventana configurada.',

@@ -1429,7 +1429,7 @@ def test_memberships_upsert_reactivation_keeps_organization(api_client, admin_a,
 
 # ---------------------------------------------------------------- F5: Clases
 
-TEMPLATE_HEADERS = ['Nombre visible', 'Dia de la semana', 'Sucursal', 'Email del profesor',
+TEMPLATE_HEADERS = ['Nombre visible', 'Dias de la semana', 'Sucursal', 'Email del profesor',
                     'Tipo', 'Disciplina', 'Hora inicio', 'Hora termino', 'Capacidad',
                     'Descripcion', 'Elegible para clase de prueba gratis',
                     'Clase con suplente', 'Email del profesor suplente',
@@ -1510,6 +1510,49 @@ def test_class_templates_registered_substitute(api_client, admin_a, org_a, sched
     assert template.substitute_teacher_id == schedule_setup['substitute'].id
     assert template.substitute_name == ''
     assert template.substitution_source == GymClass.SubstitutionSource.ADMIN_ASSIGNED
+
+
+def test_class_templates_multi_day_cell_expands_like_form(api_client, admin_a, org_a,
+                                                          schedule_setup):
+    from core.models import ClassTemplate
+
+    login(api_client, 'admin_a')
+    rows = [[
+        'Yoga multi-dia', 'Lunes, Miércoles, Viernes', 'Sede Centro', 'coach@gym.cl',
+        'Clase grupal', 'Yoga', '18:00', '19:00', 18, '', 'No', 'No', '', '',
+    ]]
+    resp = import_entity(api_client, 'class-templates', rows, TEMPLATE_HEADERS)
+    assert resp.status_code == 201, resp.content
+    assert resp.json()['created'] == 3
+    assert resp.json()['skipped_duplicates'] == 0
+
+    templates = ClassTemplate.objects.filter(
+        organization=org_a, name='Yoga multi-dia',
+    ).order_by('weekday')
+    assert list(templates.values_list('weekday', flat=True)) == [0, 2, 4]
+
+    resp = import_entity(api_client, 'class-templates', rows, TEMPLATE_HEADERS)
+    assert resp.status_code == 201, resp.content
+    assert resp.json()['created'] == 0
+    assert resp.json()['skipped_duplicates'] == 3
+
+
+def test_class_templates_legacy_day_header_still_imports(api_client, admin_a, org_a,
+                                                         schedule_setup):
+    from core.models import ClassTemplate
+
+    login(api_client, 'admin_a')
+    headers = list(TEMPLATE_HEADERS)
+    headers[1] = 'Dia de la semana'
+    rows = [[
+        'Yoga legacy', 'Miércoles', 'Sede Centro', 'coach@gym.cl',
+        'Clase grupal', 'Yoga', '08:00', '09:00', '', '', '', '', '', '',
+    ]]
+    resp = import_entity(api_client, 'class-templates', rows, headers)
+    assert resp.status_code == 201, resp.content
+    assert resp.json()['created'] == 1
+    template = ClassTemplate.objects.get(organization=org_a, name='Yoga legacy')
+    assert template.weekday == 2
 
 
 def test_class_templates_same_slot_different_teacher_both_import(

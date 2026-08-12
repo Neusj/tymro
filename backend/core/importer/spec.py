@@ -44,6 +44,7 @@ class FieldSpec:
     fk: FKSpec | None = None            # solo si kind == 'fk'
     default: object = None              # se aplica si la celda viene vacía y no es required
     help_text: str = ''                 # descripción para Instrucciones y catálogo
+    aliases: tuple = ()                 # encabezados legacy aceptados al parsear archivos existentes
     updatable: bool = False             # upsert: si existe el registro, este campo se actualiza
 
 
@@ -69,6 +70,7 @@ class EntityImportSpec:
     max_rows: int = 1000
     # Hooks para entidades de fases futuras; el motor los invoca si existen:
     row_validators: tuple = ()          # Callable(values: dict, ctx) -> list[RowError]
+    expand_rows: object = None          # Callable(row_number, raw) -> [(row_number, raw)] para fan-out
     derive: object = None               # Callable(values, ctx) -> dict de kwargs extra (ej. classes_used)
     build_instance: object = None       # Callable(values, organization) -> instancia sin guardar
     extra_permission: object = None     # Callable(user) -> bool, además del permiso base
