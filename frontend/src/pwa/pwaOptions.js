@@ -1,13 +1,14 @@
 // Opciones de vite-plugin-pwa extraídas de vite.config.js para poder testear el
-// contrato de auto-update (ver pwaOptions.test.js). El comportamiento es idéntico:
+// contrato de actualización PWA (ver pwaOptions.test.js). El comportamiento es idéntico:
 // vite.config.js hace `VitePWA(pwaOptions)`.
 export const pwaOptions = {
   // Permite desactivar el service worker (p.ej. en E2E, donde el SW puede
   // servir un shell cacheado y enmascarar cambios). VITE_DISABLE_PWA=1.
   disable: process.env.VITE_DISABLE_PWA === '1',
-  // 'autoUpdate' = cuando hay una nueva versión, el SW la instala y la
-  // página se recarga automáticamente para tomarla (update policy).
-  registerType: 'autoUpdate',
+  // 'prompt' = cuando hay una nueva versión, el SW queda esperando y la app
+  // muestra un botón "Actualizar". Evita quedarse con una PWA vieja sin obligar
+  // a desinstalar/reinstalar.
+  registerType: 'prompt',
   // Activos sueltos de public/ que también queremos precachear/exponer.
   includeAssets: ['favicon.svg', 'apple-touch-icon.png'],
   manifest: {
@@ -42,7 +43,7 @@ export const pwaOptions = {
     navigateFallbackDenylist: [/^\/api\//, /^\/media\//],
     cleanupOutdatedCaches: true,
     clientsClaim: true,
-    skipWaiting: true,
+    skipWaiting: false,
     runtimeCaching: [
       {
         // API: NetworkFirst → online usa la red; offline muestra lo último

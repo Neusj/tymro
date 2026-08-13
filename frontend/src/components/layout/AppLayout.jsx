@@ -1,5 +1,6 @@
 ﻿import { useEffect, useRef, useState } from 'react'
 import InstallAppButton from '../InstallAppButton'
+import PwaUpdateButton from '../PwaUpdateButton'
 import RutReminderBanner from '../RutReminderBanner'
 import ScrollToTopButton from '../ScrollToTopButton'
 import TrialClassBanner from '../TrialClassBanner'
@@ -90,6 +91,7 @@ export default function AppLayout({ user, onLogout, children }) {
                 {identity}
               </span>
             ) : null}
+            <PwaUpdateButton />
             <InstallAppButton variant="header" />
             <button
               type="button"

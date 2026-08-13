@@ -25,6 +25,27 @@ from .models import RESERVED_SUBDOMAINS, Organization
 _ALLOWLIST_PREFIXES = ('/admin', '/static', '/media', '/api/health',
                        '/api/payments/webhook', '/api/payments/oauth/callback')
 
+_PWA_ENTRYPOINTS = {'/sw.js', '/manifest.webmanifest'}
+
+
+class PwaNoCacheMiddleware:
+    """Evita que el browser/CDN deje pegado el shell o el service worker viejo."""
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        response = self.get_response(request)
+        content_type = response.get('Content-Type', '')
+        is_spa_html = content_type.startswith('text/html') and not request.path.startswith(
+            ('/admin/', '/api/', '/static/', '/media/', '/assets/'),
+        )
+        if request.path in _PWA_ENTRYPOINTS or is_spa_html:
+            response['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+            response['Pragma'] = 'no-cache'
+            response['Expires'] = '0'
+        return response
+
 
 def _base_domain():
     return getattr(settings, 'BASE_DOMAIN', 'localhost').lower()

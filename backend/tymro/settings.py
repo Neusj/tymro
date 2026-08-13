@@ -107,6 +107,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    'core.middleware.PwaNoCacheMiddleware',
     # WhiteNoise sirve los estáticos (admin/DRF) y el build del SPA. Va justo
     # después de SecurityMiddleware, como recomienda la documentación.
     'whitenoise.middleware.WhiteNoiseMiddleware',

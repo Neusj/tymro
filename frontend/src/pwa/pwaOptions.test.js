@@ -1,21 +1,19 @@
 import { describe, it, expect } from 'vitest'
 import { pwaOptions } from './pwaOptions'
 
-// Contrato de auto-update silencioso. Estos flags juntos = una versión nueva del
-// service worker se instala, toma control y la app se recarga limpia SIN toast ni
-// UI de "actualizar". Si alguien los cambia (p.ej. autoUpdate -> prompt), este
-// test falla a propósito: rompería la actualización automática.
-describe('pwaOptions — contrato de auto-update', () => {
-  it('mantiene registerType en autoUpdate (recarga silenciosa, no "prompt")', () => {
-    expect(pwaOptions.registerType).toBe('autoUpdate')
+// Contrato de actualización in-app. Una versión nueva queda esperando y la app
+// muestra un botón "Actualizar"; al pulsarlo el SW toma control y recarga.
+describe('pwaOptions - contrato de actualizacion in-app', () => {
+  it('mantiene registerType en prompt para mostrar boton de actualizacion', () => {
+    expect(pwaOptions.registerType).toBe('prompt')
   })
 
-  it('el service worker toma control de inmediato (skipWaiting + clientsClaim)', () => {
-    expect(pwaOptions.workbox.skipWaiting).toBe(true)
+  it('el service worker espera al boton y luego puede tomar control', () => {
+    expect(pwaOptions.workbox.skipWaiting).toBe(false)
     expect(pwaOptions.workbox.clientsClaim).toBe(true)
   })
 
-  it('limpia cachés viejas para no servir un shell obsoleto', () => {
+  it('limpia caches viejas para no servir un shell obsoleto', () => {
     expect(pwaOptions.workbox.cleanupOutdatedCaches).toBe(true)
   })
 })
