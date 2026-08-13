@@ -97,13 +97,18 @@ export default function GymAdminUsersPage() {
 
   const submitUser = async (event) => {
     event.preventDefault()
-    // Validación de dígito verificador antes de enviar (el backend re-valida).
-    const canonicalRut = toCanonical(form.rut)
-    if (!canonicalRut) {
-      setFormError('RUT inválido. Revisa el número y el dígito verificador.')
-      return
+    const payload = { ...form }
+    if (form.rut.trim()) {
+      // Validación de dígito verificador antes de enviar (el backend re-valida).
+      const canonicalRut = toCanonical(form.rut)
+      if (!canonicalRut) {
+        setFormError('RUT inválido. Revisa el número y el dígito verificador.')
+        return
+      }
+      payload.rut = canonicalRut
+    } else {
+      delete payload.rut
     }
-    const payload = { ...form, rut: canonicalRut }
     if (!payload.profile_image) {
       delete payload.profile_image
     }
@@ -277,9 +282,8 @@ export default function GymAdminUsersPage() {
             />
           </label>
           <label className="space-y-1 text-sm">
-            <span>RUT</span>
+            <span>RUT (opcional)</span>
             <input
-              required
               value={form.rut}
               onChange={(event) => setForm((prev) => ({ ...prev, rut: formatRut(event.target.value) }))}
               placeholder="12.345.678-5"

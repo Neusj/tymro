@@ -1,7 +1,7 @@
 """RUT en el API de usuarios (CustomUserSerializer vía UserViewSet).
 
 Corte 'por presencia' aprobado en PASO 0:
-- create (POST): RUT obligatorio para roles de organización; se guarda canónico.
+- create (POST): RUT opcional; si viene, se guarda canónico.
 - update (PATCH): si el rut viene en el payload se valida/normaliza; si NO viene,
   el rut existente queda intacto (así el toggle de is_active y otros PATCH
   parciales de sistema no se rompen sobre usuarios con rut NULL).
@@ -41,15 +41,16 @@ def admin_b(make_user, org_b):
 
 # --- create -----------------------------------------------------------------
 
-def test_create_without_rut_returns_400(api_client, admin_a):
+def test_create_without_rut_is_allowed(api_client, admin_a):
     api_client.force_authenticate(admin_a)
     resp = api_client.post(
         '/api/users/',
         {'email': 'nuevo@a.local', 'role': 'student', 'password': PASSWORD},
         format='json',
     )
-    assert resp.status_code == 400
-    assert 'rut' in resp.data
+    assert resp.status_code == 201, resp.data
+    assert resp.data['rut'] is None
+    assert User.objects.get(email='nuevo@a.local').rut is None
 
 
 def test_create_with_valid_rut_stores_canonical(api_client, admin_a):

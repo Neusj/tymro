@@ -366,9 +366,8 @@ class CustomUserSerializer(serializers.ModelSerializer):
     # Email es la clave de login (único por org). 'username' ya NO se expone: es un
     # identificador interno auto-generado (ver CustomUser.save()).
     email = serializers.EmailField(required=True)
-    # RUT: en edición el corte es 'por presencia' (required=False => un PATCH
-    # parcial de sistema, ej. toggle is_active, no lo exige). Si viene, se valida
-    # y normaliza.
+    # RUT: corte 'por presencia' (required=False => un POST/PATCH sin rut no lo
+    # exige). Si viene, se valida y normaliza.
     rut = RutField(required=False)
     # Etiqueta legible del rol (única fuente: los choices de CustomUser.Role vía
     # get_role_display()). Solo lectura: nunca expone la key interna ('gym_admin').
@@ -455,12 +454,6 @@ class CustomUserSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     {'email': f'Ya existe un usuario con ese email en {scope}.'}
                 )
-
-        # RUT: obligatorio en el ALTA manual de usuarios de ORGANIZACIÓN (los
-        # roles de plataforma como superadmin no lo requieren). El importador no
-        # pasa por este serializer y define su propia regla por entidad.
-        if self.instance is None and effective_role in roles.ORG_ROLES and not attrs.get('rut'):
-            raise serializers.ValidationError({'rut': 'El RUT es obligatorio.'})
 
         # Unicidad de RUT POR organización (mensaje 400 limpio en vez del
         # IntegrityError 500 de la constraint). Mismo RUT en otra org es válido;
