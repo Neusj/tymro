@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useSearchParams } from 'react-router-dom'
 import { getPlanById, getPlanMembershipChangeLog, getPlanMemberships, removePlanMembership, updatePlanMembership } from '../api/client'
 import ConfirmDialog from '../components/ConfirmDialog'
 import DashboardHeader from '../components/DashboardHeader'
@@ -78,6 +78,8 @@ const editInitialForm = {
 
 export default function GymAdminPlanMembershipsPage() {
   const { id } = useParams()
+  const [searchParams] = useSearchParams()
+  const studentFilterId = searchParams.get('student_id') || ''
   const [plan, setPlan] = useState(null)
   const [memberships, setMemberships] = useState([])
   const [loading, setLoading] = useState(true)
@@ -118,8 +120,11 @@ export default function GymAdminPlanMembershipsPage() {
     [memberships],
   )
   const displayedMemberships = useMemo(
-    () => (filter === 'active' ? memberships.filter((item) => item.validity_status === 'active') : memberships),
-    [filter, memberships],
+    () => {
+      const base = filter === 'active' ? memberships.filter((item) => item.validity_status === 'active') : memberships
+      return studentFilterId ? base.filter((item) => String(item.user) === String(studentFilterId)) : base
+    },
+    [filter, memberships, studentFilterId],
   )
 
   const removeMembership = async () => {
@@ -307,7 +312,11 @@ export default function GymAdminPlanMembershipsPage() {
           <div>
             <p className="text-sm font-semibold text-brand-white">Membresias</p>
             <p className="text-xs text-brand-muted">
-              {filter === 'active' ? 'Mostrando solo membresias vigentes.' : 'Mostrando el historico completo.'}
+              {studentFilterId
+                ? 'Mostrando membresias del alumno seleccionado.'
+                : filter === 'active'
+                  ? 'Mostrando solo membresias vigentes.'
+                  : 'Mostrando el historico completo.'}
             </p>
           </div>
           <div className="inline-flex rounded-lg border border-brand-line bg-black/20 p-1">

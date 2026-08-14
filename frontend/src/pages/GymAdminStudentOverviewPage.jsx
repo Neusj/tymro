@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { getStudentOverview, studentOverviewDetailsApi, usersApi } from '../api/client'
 import DashboardHeader from '../components/DashboardHeader'
 import EmptyState from '../components/EmptyState'
@@ -113,7 +113,7 @@ function BreakdownList({ items = [], emptyLabel = 'Sin datos' }) {
   )
 }
 
-function MembershipSummaryCard({ membership }) {
+function MembershipSummaryCard({ membership, onManage }) {
   const remaining = membership.unlimited_classes ? 'Ilimitadas' : `${membership.remaining_classes ?? 0} disponibles`
   return (
     <article className="rounded-lg border border-brand-line bg-black/20 p-3">
@@ -129,6 +129,15 @@ function MembershipSummaryCard({ membership }) {
         <PaymentStatusBadge status={membership.payment_status} />
         <EnrollmentFeeNote enrollmentFeeStatus={membership.enrollment_fee_status} />
       </div>
+      {onManage ? (
+        <button
+          type="button"
+          onClick={() => onManage(membership)}
+          className="mt-3 w-full rounded-lg border border-brand-blue/50 bg-brand-blue/10 px-3 py-2 text-xs font-semibold text-brand-white"
+        >
+          Gestionar membresia
+        </button>
+      ) : null}
     </article>
   )
 }
@@ -327,6 +336,7 @@ const DETAIL_TITLES = {
 }
 
 export default function GymAdminStudentOverviewPage() {
+  const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const studentId = searchParams.get('student_id') || ''
   const [students, setStudents] = useState([])
@@ -428,6 +438,10 @@ export default function GymAdminStudentOverviewPage() {
 
   const closeDetail = () => setDetail({ type: '', loading: false, error: '', data: EMPTY_SECTION })
   const activeMemberships = currentSummary.memberships.active_items || []
+  const manageMembership = (membership) => {
+    if (!membership?.plan) return
+    navigate(`/gym-admin/plans/${membership.plan}/memberships?student_id=${studentId}`)
+  }
 
   return (
     <div className="space-y-5">
@@ -553,7 +567,7 @@ export default function GymAdminStudentOverviewPage() {
               {activeMemberships.length ? (
                 <div className="grid gap-3 sm:grid-cols-2">
                   {activeMemberships.map((membership) => (
-                    <MembershipSummaryCard key={membership.id} membership={membership} />
+                    <MembershipSummaryCard key={membership.id} membership={membership} onManage={manageMembership} />
                   ))}
                 </div>
               ) : (

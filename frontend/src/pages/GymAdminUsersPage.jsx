@@ -178,8 +178,18 @@ export default function GymAdminUsersPage() {
         label: 'Acciones',
         mobilePrimary: (row) =>
           canManage(row.role) ? (
-            <button type="button" onClick={() => openEdit(row)} className="rounded-lg border border-brand-blue bg-brand-blue/10 px-3 py-2 text-xs font-semibold text-brand-white">
-              Editar
+            <button
+              type="button"
+              onClick={() => {
+                if (row.role === 'student') {
+                  navigate(`/gym-admin/students/overview?student_id=${row.id}`)
+                } else {
+                  openEdit(row)
+                }
+              }}
+              className="rounded-lg border border-brand-blue bg-brand-blue/10 px-3 py-2 text-xs font-semibold text-brand-white"
+            >
+              {row.role === 'student' ? 'Membresias' : 'Editar'}
             </button>
           ) : null,
         render: (row) =>
@@ -206,7 +216,7 @@ export default function GymAdminUsersPage() {
                   onClick={() => navigate(`/gym-admin/students/overview?student_id=${row.id}`)}
                   className="rounded border border-brand-orange/40 px-2 py-1 text-xs text-amber-200"
                 >
-                  Vista integral
+                  Membresias
                 </button>
               ) : null}
               <button type="button" onClick={() => setDeleting(row)} className="rounded border border-brand-red/40 px-2 py-1 text-xs text-red-200">
@@ -218,7 +228,7 @@ export default function GymAdminUsersPage() {
           ),
       },
     ],
-    [assignableRoles],
+    [assignableRoles, navigate],
   )
 
   return (
