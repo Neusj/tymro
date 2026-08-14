@@ -11,6 +11,7 @@ vi.mock('../api/client', () => ({
     releaseSubstitution: vi.fn(),
     enrollableStudents: vi.fn(),
     enrolledStudents: vi.fn(),
+    reactivate: vi.fn(),
   },
   enrollmentsApi: { create: vi.fn(), cancel: vi.fn() },
 }))
@@ -64,6 +65,7 @@ beforeEach(() => {
   classesApi.coverable.mockResolvedValue([])
   classesApi.claimSubstitution.mockResolvedValue({})
   classesApi.releaseSubstitution.mockResolvedValue({})
+  classesApi.reactivate.mockResolvedValue({})
   classesApi.enrolledStudents.mockResolvedValue([])
   classesApi.enrollableStudents.mockResolvedValue([candidate()])
   window.matchMedia = (query) => ({
@@ -209,5 +211,29 @@ describe('TeacherClassesPage — suplencias disponibles', () => {
     await user.click(await screen.findByRole('button', { name: 'Cubrir clase' }))
 
     await waitFor(() => expect(classesApi.claimSubstitution).toHaveBeenCalledWith(203))
+  })
+})
+
+describe('TeacherClassesPage - reabrir canceladas', () => {
+  it('incluye canceladas en proximas y permite reabrirlas sin restaurar reservas', async () => {
+    const user = userEvent.setup()
+    classesApi.list.mockResolvedValue([{ ...GYM_CLASS, id: 303, status: 'cancelled', enrollments_count: 0 }])
+
+    render(<TeacherClassesPage mode="upcoming" />)
+
+    await waitFor(() => expect(classesApi.byDate).toHaveBeenCalledWith(expect.any(String), {
+      ordering: 'start_datetime',
+      teacher_scope: 'mine',
+      status_in: 'scheduled,in_progress,suspended,cancelled',
+    }))
+    await waitFor(() => expect(shown('BJJ Fundamentos')).toBeGreaterThan(0))
+    await user.click(screen.getAllByRole('button', { name: 'Abrir acciones' })[0])
+    await user.click(await screen.findByRole('button', { name: 'Reabrir clase' }))
+
+    expect(screen.getByText(/Las reservas canceladas no se restauraran automaticamente/)).toBeInTheDocument()
+
+    await user.click(within(screen.getByRole('dialog', { name: 'Reabrir clase' })).getByRole('button', { name: 'Reabrir clase' }))
+
+    await waitFor(() => expect(classesApi.reactivate).toHaveBeenCalledWith(303))
   })
 })

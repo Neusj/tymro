@@ -3312,16 +3312,16 @@ class GymClassViewSet(ModelViewSet):
 
         if not _can_close_or_cancel(user, gym_class):
             raise PermissionDenied('No tienes permisos para reactivar esta clase.')
-        if gym_class.status != GymClass.Status.SUSPENDED:
+        if gym_class.status not in {GymClass.Status.SUSPENDED, GymClass.Status.CANCELLED}:
             return Response(
-                {'detail': 'Solo puedes reactivar clases suspendidas.'},
+                {'detail': 'Solo puedes reactivar clases suspendidas o canceladas.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         now = timezone.now()
         if now >= gym_class.end_datetime:
             return Response(
-                {'detail': 'La clase ya terminó: no se puede reactivar. Usa completar anticipadamente o cancelar.'},
+                {'detail': 'La clase ya terminó: no se puede reactivar.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         new_status = GymClass.Status.IN_PROGRESS if now >= gym_class.start_datetime else GymClass.Status.SCHEDULED
@@ -3331,10 +3331,14 @@ class GymClassViewSet(ModelViewSet):
         gym_class.suspended_at = None
         gym_class.suspended_by = None
         gym_class.reactivation_expected_date = None
+        gym_class.closed_by = None
+        gym_class.closed_at = None
+        gym_class.closure_comment = ''
         gym_class.is_active = True
         gym_class.save(update_fields=[
             'status', 'suspend_reason', 'suspended_at', 'suspended_by',
-            'reactivation_expected_date', 'is_active', 'updated_at',
+            'reactivation_expected_date', 'closed_by', 'closed_at',
+            'closure_comment', 'is_active', 'updated_at',
         ])
 
         return Response(self.get_serializer(gym_class).data)

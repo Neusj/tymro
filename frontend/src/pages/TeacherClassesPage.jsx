@@ -125,7 +125,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
     if (mode === 'history') {
       params.status_in = 'completed,completed_early'
     } else if (mode === 'upcoming') {
-      params.status_in = 'scheduled,in_progress,suspended'
+      params.status_in = 'scheduled,in_progress,suspended,cancelled'
     }
     return params
   }, [mode])
@@ -420,7 +420,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
     }
   }
 
-  // Reactiva una clase suspendida (vuelve a 'scheduled'/'in_progress' según la hora).
+  // Reactiva una clase suspendida o cancelada (vuelve a 'scheduled'/'in_progress' segun la hora).
   const reactivateClass = async () => {
     if (!reactivatingClass?.id) {
       return
@@ -502,6 +502,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
         render: (row) => {
           const canOperate = canOperateClass(row)
           const isSuspended = row.status === 'suspended'
+          const isCancelled = row.status === 'cancelled'
           const isVirtual = isVirtualClass(row)
           return (
             <>
@@ -533,7 +534,17 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
                   </button>
                 </>
               ) : null}
-              {mode === 'upcoming' && !isSuspended ? (
+              {mode === 'upcoming' && isCancelled ? (
+                <button
+                  type="button"
+                  disabled={working || isVirtual}
+                  onClick={() => setReactivatingClass(row)}
+                  className="w-full rounded-lg border border-emerald-500/50 px-2.5 py-1.5 text-left text-xs text-emerald-200 transition hover:border-emerald-400 disabled:opacity-60"
+                >
+                  Reabrir clase
+                </button>
+              ) : null}
+              {mode === 'upcoming' && !isSuspended && !isCancelled ? (
                 <>
                   <button
                     type="button"
@@ -846,9 +857,13 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
 
       <ConfirmDialog
         open={Boolean(reactivatingClass)}
-        title="Reactivar clase"
-        description={`Se reactivara ${reactivatingClass?.name || 'esta clase suspendida'}.`}
-        confirmLabel="Reactivar clase"
+        title={reactivatingClass?.status === 'cancelled' ? 'Reabrir clase' : 'Reactivar clase'}
+        description={
+          reactivatingClass?.status === 'cancelled'
+            ? `Se reabrira ${reactivatingClass?.name || 'esta clase'}. Las reservas canceladas no se restauraran automaticamente; los alumnos deberan volver a inscribirse o reservar si tienen cupos disponibles.`
+            : `Se reactivara ${reactivatingClass?.name || 'esta clase suspendida'}.`
+        }
+        confirmLabel={reactivatingClass?.status === 'cancelled' ? 'Reabrir clase' : 'Reactivar clase'}
         variant="default"
         loading={working}
         onCancel={() => {

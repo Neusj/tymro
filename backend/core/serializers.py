@@ -1262,7 +1262,10 @@ class GymClassSerializer(serializers.ModelSerializer):
         return obj.status in {GymClass.Status.SCHEDULED, GymClass.Status.IN_PROGRESS}
 
     def get_can_reactivate(self, obj):
-        return obj.status == GymClass.Status.SUSPENDED
+        return (
+            obj.status in {GymClass.Status.SUSPENDED, GymClass.Status.CANCELLED}
+            and obj.end_datetime > timezone.now()
+        )
 
     def validate(self, attrs):
         instance = getattr(self, 'instance', None)

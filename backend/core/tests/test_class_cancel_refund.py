@@ -79,6 +79,42 @@ def test_cancel_class_refunds_enrolled_students(api_client, setup):
     assert not ConsumptionLog.objects.filter(class_instance=gym_class).exists()
 
 
+def test_reactivate_cancelled_class_does_not_restore_refunded_enrollments(api_client, setup):
+    gym_class = _future_class(setup)
+    student_plan, enrollment = _enroll_consuming(setup, gym_class)
+
+    _login(api_client, 'admin')
+    cancel = api_client.post(
+        f'/api/classes/{gym_class.id}/cancel/', {'comment': 'Error operativo'}, format='json',
+    )
+    assert cancel.status_code == 200, cancel.content
+
+    # El alumno usa en otra clase el cupo que se le devolvio al cancelar.
+    other_class = _future_class(setup)
+    Enrollment.objects.create(gym_class=other_class, student=setup['student'], status='active')
+    ConsumptionLog.objects.create(user=setup['student'], student_plan=student_plan, class_instance=other_class)
+    student_plan.classes_used = 1
+    student_plan.save(update_fields=['classes_used', 'updated_at'])
+
+    resp = api_client.post(f'/api/classes/{gym_class.id}/reactivate/', {}, format='json')
+    assert resp.status_code == 200, resp.content
+    assert resp.json()['status'] == GymClass.Status.SCHEDULED
+    assert resp.json()['enrollments_count'] == 0
+
+    gym_class.refresh_from_db()
+    student_plan.refresh_from_db()
+    enrollment.refresh_from_db()
+    assert gym_class.status == GymClass.Status.SCHEDULED
+    assert gym_class.is_active is True
+    assert gym_class.closed_at is None
+    assert gym_class.closed_by_id is None
+    assert gym_class.closure_comment == ''
+    assert enrollment.status == 'cancelled'
+    assert student_plan.classes_used == 1
+    assert not ConsumptionLog.objects.filter(class_instance=gym_class).exists()
+    assert ConsumptionLog.objects.filter(class_instance=other_class).exists()
+
+
 def test_bulk_close_cancel_refunds_students(api_client, setup):
     gym_class = _future_class(setup)
     student_plan, enrollment = _enroll_consuming(setup, gym_class)

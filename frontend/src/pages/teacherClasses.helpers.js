@@ -3,6 +3,7 @@
   { value: 'scheduled', label: 'Programada' },
   { value: 'in_progress', label: 'En curso' },
   { value: 'suspended', label: 'Suspendida' },
+  { value: 'cancelled', label: 'Cancelada' },
 ]
 
 export const HISTORY_STATUS_OPTIONS = [
@@ -15,7 +16,6 @@ export const ALL_STATUS_OPTIONS = [
   { value: '', label: 'Todas' },
   ...UPCOMING_STATUS_OPTIONS.filter((option) => option.value),
   ...HISTORY_STATUS_OPTIONS.filter((option) => option.value),
-  { value: 'cancelled', label: 'Cancelada' },
 ]
 
 export function formatDateTime(value) {

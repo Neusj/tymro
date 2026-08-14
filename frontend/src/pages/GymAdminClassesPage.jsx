@@ -69,6 +69,7 @@ export default function GymAdminClassesPage() {
   const [loading, setLoading] = useState(true)
   const [deleting, setDeleting] = useState(null)
   const [singleAction, setSingleAction] = useState(null)
+  const [reactivating, setReactivating] = useState(null)
   const [selectedIds, setSelectedIds] = useState([])
   const [bulkModalOpen, setBulkModalOpen] = useState(false)
   const [working, setWorking] = useState(false)
@@ -195,6 +196,25 @@ export default function GymAdminClassesPage() {
     }
   }
 
+  const reactivateClass = async () => {
+    if (!reactivating?.id) {
+      return
+    }
+
+    setError('')
+    setWorking(true)
+    try {
+      await classesApi.reactivate(reactivating.id)
+      setReactivating(null)
+      await loadData()
+    } catch (apiError) {
+      const detail = apiError?.response?.data
+      setError(detail?.detail || 'No se pudo reabrir la clase.')
+    } finally {
+      setWorking(false)
+    }
+  }
+
   const columns = useMemo(
     () => [
       { key: 'name', label: 'Clase' },
@@ -235,6 +255,7 @@ export default function GymAdminClassesPage() {
         sortable: false,
         render: (row) => {
           const canClose = !['completed', 'cancelled', 'completed_early'].includes(row.status)
+          const canReopen = row.status === 'cancelled'
           const isVirtual = isVirtualClass(row)
           return (
             <>
@@ -288,6 +309,16 @@ export default function GymAdminClassesPage() {
                   >
                     Cancelar
                   </button>
+                  {canReopen ? (
+                    <button
+                      type="button"
+                      disabled={working || isVirtual}
+                      onClick={() => setReactivating(row)}
+                      className="w-full rounded-lg border border-emerald-500/50 px-2.5 py-1.5 text-left text-xs text-emerald-200 transition hover:border-emerald-400 disabled:opacity-60"
+                    >
+                      Reabrir clase
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     disabled={isVirtual}
@@ -436,6 +467,21 @@ export default function GymAdminClassesPage() {
           }
         }}
         onConfirm={closeSingleClass}
+      />
+
+      <ConfirmDialog
+        open={Boolean(reactivating)}
+        title="Reabrir clase"
+        description={`Se reabrira ${reactivating?.name || 'esta clase'}. Las reservas canceladas no se restauraran automaticamente; los alumnos deberan volver a inscribirse o reservar si tienen cupos disponibles.`}
+        confirmLabel="Reabrir clase"
+        variant="default"
+        loading={working}
+        onCancel={() => {
+          if (!working) {
+            setReactivating(null)
+          }
+        }}
+        onConfirm={reactivateClass}
       />
     </div>
   )
