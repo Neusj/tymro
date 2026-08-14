@@ -24,6 +24,23 @@ function formatDateTime(value) {
   })
 }
 
+function formatTime(value) {
+  if (!value) {
+    return '-'
+  }
+  return new Date(value).toLocaleTimeString('es-CL', {
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+function formatTimeRange(start, end) {
+  if (!start) {
+    return '-'
+  }
+  return end ? `${formatTime(start)} - ${formatTime(end)}` : formatTime(start)
+}
+
 const STATUS_OPTIONS = [
   { value: '', label: 'Todos' },
   { value: 'scheduled', label: 'Programada' },
@@ -186,7 +203,7 @@ export default function GymAdminClassesPage() {
       {
         key: 'substitute_display_name',
         label: 'Suplente',
-        mobile: 'secondary',
+        mobile: 'hidden',
         render: (row) => (row.has_substitute ? row.substitute_display_name || row.substitute_name || '-' : <span className="text-brand-muted">Sin suplente</span>),
       },
       { key: 'class_type_name', label: 'Tipo', render: (row) => <ValueBadge kind="class_type" value={row.class_type_name} /> },
@@ -195,7 +212,15 @@ export default function GymAdminClassesPage() {
       // "Clase" chocaria con la columna del nombre de la clase, dos lineas mas arriba. Se resuelve
       // en el rediseno junto con la fusion de la pantalla puntual y la de series.
       { key: 'class_template_name', label: 'Serie', render: (row) => row.class_template_name || '-' },
-      { key: 'start_datetime', label: 'Inicio', render: (row) => formatDateTime(row.start_datetime) },
+      {
+        key: 'start_datetime',
+        label: 'Inicio',
+        mobile: 'secondary',
+        mobileLabel: 'Hora',
+        mobilePriority: 3,
+        render: (row) => formatDateTime(row.start_datetime),
+        mobileRender: (row) => formatTimeRange(row.start_datetime, row.end_datetime),
+      },
       { key: 'end_datetime', label: 'Termino', render: (row) => formatDateTime(row.end_datetime) },
       {
         key: 'capacity',

@@ -22,6 +22,7 @@ import {
   ALL_STATUS_OPTIONS,
   HISTORY_STATUS_OPTIONS,
   UPCOMING_STATUS_OPTIONS,
+  formatTimeRange,
 } from './teacherClasses.helpers'
 
 const initialFilters = {
@@ -474,7 +475,15 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
       { key: 'class_type_name', label: 'Tipo', render: (row) => <ValueBadge kind="class_type" value={row.class_type_name} /> },
       { key: 'discipline_name', label: 'Disciplina', render: (row) => <ValueBadge kind="discipline" value={row.discipline_name} /> },
       { key: 'class_template_name', label: 'Serie', render: (row) => row.class_template_name || '-' },
-      { key: 'start_datetime', label: 'Inicio', render: (row) => formatDateTime(row.start_datetime) },
+      {
+        key: 'start_datetime',
+        label: 'Inicio',
+        mobile: 'secondary',
+        mobileLabel: 'Hora',
+        mobilePriority: 1,
+        render: (row) => formatDateTime(row.start_datetime),
+        mobileRender: (row) => formatTimeRange(row.start_datetime, row.end_datetime),
+      },
       { key: 'end_datetime', label: 'Termino', render: (row) => formatDateTime(row.end_datetime) },
       { key: 'status', label: 'Estado', render: (row) => <ValueBadge kind="class_status" value={row.status} /> },
       {
@@ -583,11 +592,20 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
       { key: 'teacher_name', label: 'Titular' },
       { key: 'branch_name', label: 'Sucursal' },
       { key: 'discipline_name', label: 'Disciplina', render: (row) => <ValueBadge kind="discipline" value={row.discipline_name} /> },
-      { key: 'start_datetime', label: 'Inicio', render: (row) => formatDateTime(row.start_datetime) },
+      {
+        key: 'start_datetime',
+        label: 'Inicio',
+        mobile: 'secondary',
+        mobileLabel: 'Hora',
+        mobilePriority: 1,
+        render: (row) => formatDateTime(row.start_datetime),
+        mobileRender: (row) => formatTimeRange(row.start_datetime, row.end_datetime),
+      },
       { key: 'end_datetime', label: 'Termino', render: (row) => formatDateTime(row.end_datetime) },
       {
         key: 'substitute_display_name',
         label: 'Suplente',
+        mobile: 'hidden',
         render: (row) => (row.has_substitute ? row.substitute_display_name || '-' : <span className="text-brand-muted">Disponible</span>),
       },
       {

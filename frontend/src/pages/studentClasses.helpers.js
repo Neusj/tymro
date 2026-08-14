@@ -29,6 +29,23 @@ export function formatDateTime(value) {
   })
 }
 
+export function formatTime(value) {
+  if (!value) {
+    return '-'
+  }
+  return new Date(value).toLocaleTimeString('es-CL', {
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+export function formatTimeRange(start, end) {
+  if (!start) {
+    return '-'
+  }
+  return end ? `${formatTime(start)} - ${formatTime(end)}` : formatTime(start)
+}
+
 function toOptions(values, defaultLabel = 'Todos') {
   return [{ value: '', label: defaultLabel }, ...Array.from(values).sort((a, b) => a.localeCompare(b, 'es')).map((value) => ({ value, label: value }))]
 }

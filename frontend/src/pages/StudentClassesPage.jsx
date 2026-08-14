@@ -21,6 +21,7 @@ import {
   RESERVATION_MODE_OPTIONS,
   RESERVATION_STATUS_OPTIONS,
   formatDateTime,
+  formatTimeRange,
 } from './studentClasses.helpers'
 
 const initialClassFilters = {
@@ -616,7 +617,15 @@ export default function StudentClassesPage({ mode = 'available' }) {
       { key: 'teacher_name', label: 'Profesor', mobile: 'secondary', mobilePriority: 3 },
       { key: 'discipline_name', label: 'Disciplina', mobile: 'meta', render: (row) => <ValueBadge kind="discipline" value={row.discipline_name} /> },
       { key: 'class_template_name', label: 'Serie', mobile: 'hidden', render: (row) => row.class_template_name || '-' },
-      { key: 'start_datetime', label: 'Inicio', mobile: 'secondary', mobilePriority: 1, render: (row) => formatDateTime(row.start_datetime) },
+      {
+        key: 'start_datetime',
+        label: 'Inicio',
+        mobile: 'secondary',
+        mobileLabel: 'Hora',
+        mobilePriority: 1,
+        render: (row) => formatDateTime(row.start_datetime),
+        mobileRender: (row) => formatTimeRange(row.start_datetime, row.end_datetime),
+      },
       { key: 'end_datetime', label: 'Termino', mobile: 'hidden', render: (row) => formatDateTime(row.end_datetime) },
       { key: 'status', label: 'Estado', mobile: 'meta', render: (row) => <ValueBadge kind="class_status" value={row.status} /> },
       { key: 'capacity', label: 'Cupos', mobile: 'secondary', mobilePriority: 2, render: (row) => `${row.enrollments_count || 0}/${row.capacity}` },
@@ -776,7 +785,15 @@ export default function StudentClassesPage({ mode = 'available' }) {
       { key: 'class_teacher_name', label: 'Profesor', mobile: 'secondary', mobilePriority: 2 },
       { key: 'class_discipline_name', label: 'Disciplina', mobile: 'hidden', render: (row) => <ValueBadge kind="discipline" value={row.class_discipline_name} /> },
       { key: 'class_type_name', label: 'Tipo clase', mobile: 'hidden', render: (row) => <ValueBadge kind="class_type" value={row.class_type_name} /> },
-      { key: 'class_start', label: 'Inicio', mobile: 'secondary', mobilePriority: 1, render: (row) => formatDateTime(row.class_start) },
+      {
+        key: 'class_start',
+        label: 'Inicio',
+        mobile: 'secondary',
+        mobileLabel: 'Hora',
+        mobilePriority: 1,
+        render: (row) => formatDateTime(row.class_start),
+        mobileRender: (row) => formatTimeRange(row.class_start, row.class_end),
+      },
       { key: 'class_end', label: 'Termino', mobile: 'hidden', render: (row) => formatDateTime(row.class_end) },
       {
         key: 'reservation_kind',
@@ -879,7 +896,15 @@ export default function StudentClassesPage({ mode = 'available' }) {
       { key: 'branch_name', label: 'Sucursal', mobile: 'secondary', mobilePriority: 3 },
       { key: 'teacher_name', label: 'Profesor', mobile: 'secondary', mobilePriority: 2 },
       { key: 'discipline_name', label: 'Disciplina', mobile: 'hidden', render: (row) => <ValueBadge kind="discipline" value={row.discipline_name} /> },
-      { key: 'start_datetime', label: 'Inicio', mobile: 'secondary', mobilePriority: 1, render: (row) => formatDateTime(row.start_datetime) },
+      {
+        key: 'start_datetime',
+        label: 'Inicio',
+        mobile: 'secondary',
+        mobileLabel: 'Hora',
+        mobilePriority: 1,
+        render: (row) => formatDateTime(row.start_datetime),
+        mobileRender: (row) => formatTimeRange(row.start_datetime, row.end_datetime),
+      },
       { key: 'end_datetime', label: 'Termino', mobile: 'hidden', render: (row) => formatDateTime(row.end_datetime) },
       { key: 'status', label: 'Estado final', mobile: 'meta', render: (row) => <ValueBadge kind="class_status" value={row.status} /> },
     ],

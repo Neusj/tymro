@@ -37,6 +37,13 @@ function formatTime(value) {
   return value?.slice(0, 5) || '-'
 }
 
+function formatTimeRange(start, end) {
+  if (!start) {
+    return '-'
+  }
+  return end ? `${formatTime(start)} - ${formatTime(end)}` : formatTime(start)
+}
+
 function firstApiError(detail) {
   if (!detail) {
     return null
@@ -339,13 +346,21 @@ export default function GymAdminClassTemplatesPage() {
       {
         key: 'substitute_display_name',
         label: 'Suplente',
-        mobile: 'secondary',
+        mobile: 'hidden',
         render: (row) => (row.has_substitute ? row.substitute_display_name || row.substitute_name || '-' : <span className="text-brand-muted">Sin suplente</span>),
       },
       { key: 'class_type_name', label: 'Tipo', render: (row) => <ValueBadge kind="class_type" value={row.class_type_name} /> },
       { key: 'discipline_name', label: 'Disciplina', render: (row) => <ValueBadge kind="discipline" value={row.discipline_name} /> },
       { key: 'weekday', label: 'Dia', render: (row) => weekdayLabels[row.weekday] || '-' },
-      { key: 'start_time', label: 'Inicio', render: (row) => formatTime(row.start_time) },
+      {
+        key: 'start_time',
+        label: 'Inicio',
+        mobile: 'secondary',
+        mobileLabel: 'Hora',
+        mobilePriority: 1,
+        render: (row) => formatTime(row.start_time),
+        mobileRender: (row) => formatTimeRange(row.start_time, row.end_time),
+      },
       { key: 'end_time', label: 'Termino', render: (row) => formatTime(row.end_time) },
       { key: 'start_date', label: 'Fecha inicio' },
       { key: 'end_date', label: 'Fecha fin', render: (row) => row.end_date || '-' },
