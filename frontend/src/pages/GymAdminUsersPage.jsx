@@ -182,7 +182,7 @@ export default function GymAdminUsersPage() {
               type="button"
               onClick={() => {
                 if (row.role === 'student') {
-                  navigate(`/gym-admin/students/overview?student_id=${row.id}`)
+                  navigate(`/gym-admin/students/${row.id}/memberships`)
                 } else {
                   openEdit(row)
                 }
@@ -213,10 +213,19 @@ export default function GymAdminUsersPage() {
               {row.role === 'student' ? (
                 <button
                   type="button"
-                  onClick={() => navigate(`/gym-admin/students/overview?student_id=${row.id}`)}
+                  onClick={() => navigate(`/gym-admin/students/${row.id}/memberships`)}
                   className="rounded border border-brand-orange/40 px-2 py-1 text-xs text-amber-200"
                 >
                   Membresias
+                </button>
+              ) : null}
+              {row.role === 'student' ? (
+                <button
+                  type="button"
+                  onClick={() => navigate(`/gym-admin/students/overview?student_id=${row.id}`)}
+                  className="rounded border border-brand-line px-2 py-1 text-xs text-brand-muted"
+                >
+                  Vista integral
                 </button>
               ) : null}
               <button type="button" onClick={() => setDeleting(row)} className="rounded border border-brand-red/40 px-2 py-1 text-xs text-red-200">

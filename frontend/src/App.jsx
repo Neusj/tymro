@@ -24,6 +24,7 @@ import AttendanceScreenAutoPage from './pages/AttendanceScreenAutoPage'
 import GymAdminDashboard from './pages/GymAdminDashboard'
 import GymAdminUsersPage from './pages/GymAdminUsersPage'
 import GymAdminStudentOverviewPage from './pages/GymAdminStudentOverviewPage'
+import GymAdminStudentMembershipsPage from './pages/GymAdminStudentMembershipsPage'
 import GymAdminPlanMembershipsPage from './pages/GymAdminPlanMembershipsPage'
 import GymAdminPaymentsSettingsPage from './pages/GymAdminPaymentsSettingsPage'
 import GymAdminPaymentsTransactionsPage from './pages/GymAdminPaymentsTransactionsPage'
@@ -240,6 +241,16 @@ export default function App() {
           <ProtectedRoute allowedRoles={['gym_admin']}>
             <ShellRoute>
               <GymAdminStudentOverviewPage />
+            </ShellRoute>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/gym-admin/students/:studentId/memberships"
+        element={
+          <ProtectedRoute allowedRoles={['gym_admin']}>
+            <ShellRoute>
+              <GymAdminStudentMembershipsPage />
             </ShellRoute>
           </ProtectedRoute>
         }
