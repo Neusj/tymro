@@ -365,7 +365,7 @@ export default function AssignPlanPage() {
               ))}
             </select>
           </label>
-          <label className="space-y-1 text-sm">
+          <label className="min-w-0 space-y-1 text-sm">
             <span>Fecha inicio</span>
             <input
               required
@@ -373,7 +373,7 @@ export default function AssignPlanPage() {
               disabled={working}
               value={form.start_date}
               onChange={(event) => setForm((prev) => ({ ...prev, start_date: event.target.value }))}
-              className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
+              className="w-full min-w-0 max-w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
             />
           </label>
           <div className="rounded-lg border border-brand-line bg-black/20 px-3 py-2 text-sm">

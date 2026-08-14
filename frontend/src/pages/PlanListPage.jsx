@@ -286,6 +286,16 @@ export default function PlanListPage({
         key: 'actions',
         label: 'Acciones',
         sortable: false,
+        mobilePrimary: (row) =>
+          showMembershipsAction ? (
+            <button
+              type="button"
+              onClick={() => navigate(`${membershipsBasePath}/${row.id}/memberships`)}
+              className="rounded-lg border border-brand-blue/50 bg-brand-blue/10 px-3 py-2 text-xs font-semibold text-brand-white"
+            >
+              Membresías
+            </button>
+          ) : null,
         render: (row) => (
           <div className="flex gap-2">
             {showMembershipsAction ? (

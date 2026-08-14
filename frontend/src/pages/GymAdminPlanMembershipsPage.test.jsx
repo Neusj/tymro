@@ -1,14 +1,17 @@
 import { render, screen, waitFor, within } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import userEvent from '@testing-library/user-event'
+import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('../api/client', () => ({
   getPlanById: vi.fn(),
+  getPlanMembershipChangeLog: vi.fn(),
   getPlanMemberships: vi.fn(),
   removePlanMembership: vi.fn(),
+  updatePlanMembership: vi.fn(),
 }))
 
-import { getPlanById, getPlanMemberships } from '../api/client'
+import { getPlanById, getPlanMembershipChangeLog, getPlanMemberships, updatePlanMembership } from '../api/client'
 import GymAdminPlanMembershipsPage from './GymAdminPlanMembershipsPage'
 
 function membership(overrides = {}) {
@@ -36,6 +39,8 @@ beforeEach(() => {
   vi.clearAllMocks()
   getPlanById.mockResolvedValue({ id: 7, name: 'Pack 10' })
   getPlanMemberships.mockResolvedValue([])
+  getPlanMembershipChangeLog.mockResolvedValue([])
+  updatePlanMembership.mockResolvedValue({})
   window.matchMedia = (query) => ({
     matches: query.includes('min-width'),
     addEventListener() {},
@@ -50,7 +55,13 @@ afterEach(() => {
 })
 
 function renderPage() {
-  return render(<MemoryRouter><GymAdminPlanMembershipsPage /></MemoryRouter>)
+  return render(
+    <MemoryRouter initialEntries={['/gym-admin/plans/7/memberships']}>
+      <Routes>
+        <Route path="/gym-admin/plans/:id/memberships" element={<GymAdminPlanMembershipsPage />} />
+      </Routes>
+    </MemoryRouter>,
+  )
 }
 
 function kpi(name) {
@@ -61,6 +72,10 @@ function kpi(name) {
 // DataTable pinta la tabla de escritorio Y las tarjetas móviles a la vez (las alterna por
 // CSS), asi que cada celda aparece dos veces en el DOM: siempre se cuenta, nunca se asume una.
 const shown = (text) => screen.queryAllByText(text).length
+
+async function showAllMemberships() {
+  await userEvent.click(await screen.findByRole('button', { name: 'Todas' }))
+}
 
 describe('GymAdminPlanMembershipsPage — KPI vs columna Estado', () => {
   it('cuenta como activas solo las vigentes, no todo el histórico con is_active', async () => {
@@ -95,6 +110,10 @@ describe('GymAdminPlanMembershipsPage — KPI vs columna Estado', () => {
     await waitFor(() => expect(shown('Ana')).toBeGreaterThan(0))
     expect(within(kpi('Total membresias')).getByText('3')).toBeInTheDocument()
     expect(within(kpi('Membresias activas')).getByText('1')).toBeInTheDocument()
+    expect(shown('Beto')).toBe(0)
+
+    await showAllMemberships()
+    expect(shown('Beto')).toBeGreaterThan(0)
   })
 
   it('no cuenta como activa una membresía por iniciar (is_active ya es true)', async () => {
@@ -110,8 +129,10 @@ describe('GymAdminPlanMembershipsPage — KPI vs columna Estado', () => {
 
     renderPage()
 
-    await waitFor(() => expect(shown('Ana')).toBeGreaterThan(0))
+    await waitFor(() => expect(within(kpi('Membresias activas')).getByText('0')).toBeInTheDocument())
     expect(within(kpi('Membresias activas')).getByText('0')).toBeInTheDocument()
+    await showAllMemberships()
+    expect(shown('Ana')).toBeGreaterThan(0)
     expect(shown('Por iniciar')).toBeGreaterThan(0)
   })
 
@@ -130,6 +151,7 @@ describe('GymAdminPlanMembershipsPage — KPI vs columna Estado', () => {
 
     renderPage()
 
+    await showAllMemberships()
     await waitFor(() => expect(shown('Sin clases disponibles')).toBeGreaterThan(0))
     expect(shown('Inactiva')).toBe(0)
   })
@@ -148,6 +170,7 @@ describe('GymAdminPlanMembershipsPage — KPI vs columna Estado', () => {
 
     renderPage()
 
+    await showAllMemberships()
     await waitFor(() => expect(shown('Vencido')).toBeGreaterThan(0))
     screen.getAllByText('Vencido').forEach((node) => expect(node).toHaveClass('text-red-200'))
   })
@@ -170,5 +193,42 @@ describe('GymAdminPlanMembershipsPage — KPI vs columna Estado', () => {
     expect(shown('30-07-2026')).toBeGreaterThan(0)
     expect(shown('30-06-2026')).toBe(0)
     expect(shown('29-07-2026')).toBe(0)
+  })
+
+  it('permite editar asistencias con motivo y envia la actualizacion auditada', async () => {
+    getPlanMemberships.mockResolvedValue([membership({ classes_used: 2, remaining_classes: 8 })])
+    getPlanMembershipChangeLog.mockResolvedValue([
+      {
+        id: 9,
+        field: 'classes_used',
+        old_value: '1',
+        new_value: '2',
+        reason: 'Ajuste anterior',
+        changed_by_name: 'Admin',
+        created_at: '2026-08-13T12:00:00Z',
+      },
+    ])
+
+    renderPage()
+
+    await waitFor(() => expect(shown('Ana')).toBeGreaterThan(0))
+    await userEvent.click(screen.getAllByRole('button', { name: /editar/i })[0])
+    expect(await screen.findByText('Auditoria')).toBeInTheDocument()
+    expect(await screen.findByText('Ajuste anterior')).toBeInTheDocument()
+
+    await userEvent.clear(screen.getByLabelText('Asistencias usadas'))
+    await userEvent.type(screen.getByLabelText('Asistencias usadas'), '1')
+    await userEvent.type(screen.getByLabelText('Motivo del cambio'), 'Correccion manual')
+    await userEvent.click(screen.getByRole('button', { name: /guardar cambios/i }))
+
+    await waitFor(() => expect(updatePlanMembership).toHaveBeenCalled())
+    expect(updatePlanMembership).toHaveBeenCalledWith(
+      '7',
+      1,
+      expect.objectContaining({
+        classes_used: 1,
+        reason: 'Correccion manual',
+      }),
+    )
   })
 })

@@ -749,6 +749,16 @@ export const removePlanMembership = async (planId, membershipId) => {
   await api.delete(`/plans/${planId}/memberships/${membershipId}/`)
 }
 
+export const updatePlanMembership = async (planId, membershipId, payload) => {
+  const { data } = await api.patch(`/plans/${planId}/memberships/${membershipId}/edit/`, payload)
+  return data
+}
+
+export const getPlanMembershipChangeLog = async (planId, membershipId) => {
+  const { data } = await api.get(`/plans/${planId}/memberships/${membershipId}/change-log/`)
+  return data
+}
+
 export const getMyPlan = async () => {
   const { data } = await api.get('/plans/my-plan/')
   return data

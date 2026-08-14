@@ -38,6 +38,7 @@ from .models import (
     Person,
     RecurringEnrollment,
     StudentPlan,
+    StudentPlanChangeLog,
     TeacherPaymentRecord,
     TeacherPaymentRule,
     TrialFollowupConfiguration,
@@ -2193,6 +2194,81 @@ class StudentPlanSerializer(serializers.ModelSerializer):
         """
         total = sum((item.amount for item in obj.charge_line_items.all()), Decimal('0.00'))
         return str(total)
+
+
+class StudentPlanChangeLogSerializer(serializers.ModelSerializer):
+    changed_by_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = StudentPlanChangeLog
+        fields = [
+            'id',
+            'student_plan',
+            'field',
+            'old_value',
+            'new_value',
+            'reason',
+            'changed_by',
+            'changed_by_name',
+            'created_at',
+        ]
+        read_only_fields = fields
+
+    def get_changed_by_name(self, obj):
+        return _user_display_name(getattr(obj, 'changed_by', None))
+
+
+class StudentPlanAdminUpdateSerializer(serializers.Serializer):
+    start_date = serializers.DateField(required=False)
+    end_date = serializers.DateField(required=False)
+    total_classes = serializers.IntegerField(required=False, min_value=0)
+    unlimited_classes = serializers.BooleanField(required=False)
+    classes_used = serializers.IntegerField(required=False, min_value=0)
+    discount_percentage = serializers.FloatField(required=False, min_value=0, max_value=100)
+    final_price = serializers.FloatField(required=False, min_value=0)
+    enrollment_fee = serializers.DecimalField(required=False, max_digits=10, decimal_places=2, min_value=Decimal('0'))
+    enrollment_fee_paid_at = serializers.DateTimeField(required=False, allow_null=True)
+    enrollment_fee_due_at = serializers.DateField(required=False, allow_null=True)
+    is_active = serializers.BooleanField(required=False)
+    reason = serializers.CharField(max_length=500, trim_whitespace=True)
+
+    EDITABLE_FIELDS = {
+        'start_date',
+        'end_date',
+        'total_classes',
+        'unlimited_classes',
+        'classes_used',
+        'discount_percentage',
+        'final_price',
+        'enrollment_fee',
+        'enrollment_fee_paid_at',
+        'enrollment_fee_due_at',
+        'is_active',
+    }
+
+    def validate_reason(self, value):
+        if not value.strip():
+            raise serializers.ValidationError('Indica el motivo del cambio.')
+        return value.strip()
+
+    def validate(self, attrs):
+        instance = self.context.get('instance')
+        touched = self.EDITABLE_FIELDS.intersection(attrs.keys())
+        if not touched:
+            raise serializers.ValidationError({'detail': 'No hay campos de membresía para actualizar.'})
+
+        start_date = attrs.get('start_date', getattr(instance, 'start_date', None))
+        end_date = attrs.get('end_date', getattr(instance, 'end_date', None))
+        if start_date and end_date and end_date < start_date:
+            raise serializers.ValidationError({'end_date': 'La fecha de término no puede ser menor a la fecha de inicio.'})
+
+        unlimited = attrs.get('unlimited_classes', getattr(instance, 'unlimited_classes', False))
+        total_classes = attrs.get('total_classes', getattr(instance, 'total_classes', 0))
+        classes_used = attrs.get('classes_used', getattr(instance, 'classes_used', 0))
+        if not unlimited and classes_used > total_classes:
+            raise serializers.ValidationError({'classes_used': 'Las clases usadas no pueden superar las clases totales.'})
+
+        return attrs
 
 
 class ChargeLineItemInputSerializer(serializers.Serializer):

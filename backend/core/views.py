@@ -49,6 +49,7 @@ from .models import (
     Person,
     RecurringEnrollment,
     StudentPlan,
+    StudentPlanChangeLog,
     TeacherPaymentRecord,
     TeacherPaymentRule,
     TeacherPayout,
@@ -89,8 +90,10 @@ from .serializers import (
     RecurringEnrollmentSerializer,
     SelfProfileSerializer,
     StudentPlanAssignPaymentSerializer,
+    StudentPlanAdminUpdateSerializer,
     StudentPlanAssignmentQuoteSerializer,
     StudentPlanAssignSerializer,
+    StudentPlanChangeLogSerializer,
     StudentPlanSerializer,
     TeacherPaymentRuleAssignmentsUpdateSerializer,
     TeacherPaymentRecordSerializer,
@@ -5142,6 +5145,22 @@ class MembershipPlanViewSet(ModelViewSet):
         serializer = StudentPlanSerializer(queryset, many=True)
         return Response(serializer.data)
 
+    def _membership_queryset_for_actor(self, plan, user):
+        base = StudentPlan.objects.select_related('user', 'plan').filter(plan_id=plan.id)
+        if _is_superadmin(user):
+            return base
+        if _is_gym_admin(user):
+            return base.filter(organization_id=user.organization_id)
+        raise PermissionDenied('No tienes permisos para gestionar membresias de este plan.')
+
+    @staticmethod
+    def _audit_value(value):
+        if value is None:
+            return ''
+        if hasattr(value, 'isoformat'):
+            return value.isoformat()
+        return str(value)
+
     @action(detail=True, methods=['get'], url_path='memberships')
     def memberships(self, request, pk=None):
         user = request.user
@@ -5179,6 +5198,82 @@ class MembershipPlanViewSet(ModelViewSet):
 
         serializer = StudentPlanSerializer(memberships_queryset, many=True)
         return Response(serializer.data)
+
+    @action(detail=True, methods=['patch'], url_path=r'memberships/(?P<membership_id>[^/.]+)/edit')
+    def update_membership(self, request, pk=None, membership_id=None):
+        user = request.user
+        plan = self.get_object()
+
+        with transaction.atomic():
+            membership = (
+                self._membership_queryset_for_actor(plan, user)
+                .select_for_update()
+                .filter(id=membership_id)
+                .first()
+            )
+            if not membership:
+                return Response({'detail': 'Membresia no encontrada para este plan.'}, status=status.HTTP_404_NOT_FOUND)
+
+            serializer = StudentPlanAdminUpdateSerializer(
+                data=request.data,
+                context={'instance': membership},
+            )
+            serializer.is_valid(raise_exception=True)
+            validated = serializer.validated_data
+            reason = validated['reason']
+            editable_fields = StudentPlanAdminUpdateSerializer.EDITABLE_FIELDS
+            changes = []
+
+            for field in editable_fields:
+                if field not in validated:
+                    continue
+                old_value = getattr(membership, field)
+                new_value = validated[field]
+                if old_value == new_value:
+                    continue
+                changes.append((field, old_value, new_value))
+                setattr(membership, field, new_value)
+
+            if changes:
+                membership.full_clean()
+                membership.save(update_fields=[field for field, _, _ in changes] + ['updated_at'])
+                StudentPlanChangeLog.objects.bulk_create([
+                    StudentPlanChangeLog(
+                        student_plan=membership,
+                        organization=membership.organization,
+                        changed_by=user if getattr(user, 'is_authenticated', False) else None,
+                        field=field,
+                        old_value=self._audit_value(old_value),
+                        new_value=self._audit_value(new_value),
+                        reason=reason,
+                    )
+                    for field, old_value, new_value in changes
+                ])
+
+        membership = (
+            StudentPlan.objects.select_related('user', 'plan')
+            .prefetch_related('origin_transactions', 'manual_payments', 'charge_line_items')
+            .get(id=membership.id)
+        )
+        return Response(StudentPlanSerializer(membership).data)
+
+    @action(detail=True, methods=['get'], url_path=r'memberships/(?P<membership_id>[^/.]+)/change-log')
+    def membership_change_log(self, request, pk=None, membership_id=None):
+        user = request.user
+        plan = self.get_object()
+        membership = (
+            self._membership_queryset_for_actor(plan, user)
+            .filter(id=membership_id)
+            .first()
+        )
+        if not membership:
+            return Response({'detail': 'Membresia no encontrada para este plan.'}, status=status.HTTP_404_NOT_FOUND)
+        logs = (
+            membership.change_logs
+            .select_related('changed_by')
+            .all()
+        )
+        return Response(StudentPlanChangeLogSerializer(logs, many=True).data)
 
     @action(detail=True, methods=['delete'], url_path=r'memberships/(?P<membership_id>[^/.]+)')
     def remove_membership(self, request, pk=None, membership_id=None):

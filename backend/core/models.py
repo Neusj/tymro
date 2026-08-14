@@ -882,6 +882,32 @@ class ConsumptionLog(TimestampedModel):
         return f'Consumo {self.user_id} - {self.class_instance_id}'
 
 
+class StudentPlanChangeLog(TimestampedModel):
+    student_plan = models.ForeignKey(StudentPlan, on_delete=models.CASCADE, related_name='change_logs')
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT, related_name='student_plan_change_logs')
+    changed_by = models.ForeignKey(
+        'accounts.CustomUser',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='student_plan_changes',
+    )
+    field = models.CharField(max_length=80)
+    old_value = models.TextField(blank=True, default='')
+    new_value = models.TextField(blank=True, default='')
+    reason = models.TextField(blank=True, default='')
+
+    class Meta:
+        ordering = ['-created_at', '-id']
+        indexes = [
+            models.Index(fields=['student_plan', 'created_at']),
+            models.Index(fields=['organization', 'created_at']),
+        ]
+
+    def __str__(self):
+        return f'Membresia {self.student_plan_id} · {self.field}'
+
+
 class OrganizationExpiryNotificationConfig(TimestampedModel):
     """Qué avisos de vencimiento manda cada organización. APAGADA por defecto (7.4).
 
