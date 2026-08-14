@@ -5,9 +5,8 @@ export const pwaOptions = {
   // Permite desactivar el service worker (p.ej. en E2E, donde el SW puede
   // servir un shell cacheado y enmascarar cambios). VITE_DISABLE_PWA=1.
   disable: process.env.VITE_DISABLE_PWA === '1',
-  // 'prompt' = cuando hay una nueva versión, el SW queda esperando y la app
-  // muestra un botón "Actualizar". Evita quedarse con una PWA vieja sin obligar
-  // a desinstalar/reinstalar.
+  // 'prompt' conserva el aviso visible de actualizacion. El SW nuevo toma control
+  // al instalarse; el boton aplica una recarga fuerte si el navegador queda pegado.
   registerType: 'prompt',
   // Activos sueltos de public/ que también queremos precachear/exponer.
   includeAssets: ['favicon.svg', 'apple-touch-icon.png'],
@@ -43,7 +42,7 @@ export const pwaOptions = {
     navigateFallbackDenylist: [/^\/api\//, /^\/media\//],
     cleanupOutdatedCaches: true,
     clientsClaim: true,
-    skipWaiting: false,
+    skipWaiting: true,
     runtimeCaching: [
       {
         // API: NetworkFirst → online usa la red; offline muestra lo último

@@ -7,8 +7,8 @@ export default defineConfig({
   plugins: [
     react(),
     // Opciones en src/pwa/pwaOptions.js (importable/testeable). El contrato de
-    // auto-update silencioso (autoUpdate + skipWaiting + clientsClaim) está
-    // cubierto por src/pwa/pwaOptions.test.js.
+    // actualizacion PWA (prompt + skipWaiting + clientsClaim) esta cubierta por
+    // src/pwa/pwaOptions.test.js.
     VitePWA(pwaOptions),
   ],
   server: {

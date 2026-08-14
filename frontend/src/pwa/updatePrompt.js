@@ -44,17 +44,62 @@ export const checkForPwaUpdate = async () => {
   }
 }
 
+const cacheBustedUrl = () => {
+  const url = new URL(window.location.href)
+  url.searchParams.set('tymro_refresh', String(Date.now()))
+  return url.toString()
+}
+
+export const hardReloadPwa = async () => {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  try {
+    if ('caches' in window) {
+      const names = await window.caches.keys()
+      await Promise.all(names.map((name) => window.caches.delete(name)))
+    }
+  } catch (error) {
+    if (import.meta.env.DEV) {
+      console.warn('[PWA] No se pudieron limpiar las caches:', error)
+    }
+  }
+
+  try {
+    if ('serviceWorker' in navigator && typeof navigator.serviceWorker.getRegistrations === 'function') {
+      const registrations = await navigator.serviceWorker.getRegistrations()
+      await Promise.all(registrations.map((item) => item.unregister()))
+    }
+  } catch (error) {
+    if (import.meta.env.DEV) {
+      console.warn('[PWA] No se pudieron desregistrar service workers:', error)
+    }
+  }
+
+  window.location.replace(cacheBustedUrl())
+}
+
 export const applyPwaUpdate = async () => {
-  if (!updateServiceWorker || state.updating) {
+  if (state.updating) {
     return
   }
   state.updating = true
   emit()
   try {
-    await updateServiceWorker(true)
+    await checkForPwaUpdate()
+    if (updateServiceWorker) {
+      try {
+        await updateServiceWorker(true)
+      } catch (error) {
+        if (import.meta.env.DEV) {
+          console.warn('[PWA] No se pudo aplicar updateServiceWorker:', error)
+        }
+      }
+    }
+    await hardReloadPwa()
   } finally {
     state.updating = false
     emit()
   }
 }
-
