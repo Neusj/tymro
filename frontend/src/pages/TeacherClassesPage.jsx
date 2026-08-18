@@ -883,7 +883,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
           selectAllScope="filtered"
           selectedRowIds={selectedIds}
           onSelectedRowIdsChange={setSelectedIds}
-          disablePagination
+          disablePagination={mode !== 'all'}
         />
       </section>
 

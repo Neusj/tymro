@@ -498,7 +498,6 @@ export default function GymAdminClassesPage() {
           selectAllScope="filtered"
           selectedRowIds={selectedIds}
           onSelectedRowIdsChange={setSelectedIds}
-          disablePagination
         />
       </section>
 
