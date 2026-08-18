@@ -320,15 +320,19 @@ export default function GymAdminClassDetailPage() {
           <button
             type="button"
             disabled={attendanceSaving || activeEnrollments.length === 0}
-            onClick={() => {
-              setAttendanceError('')
-              setAttendanceSearch('')
-              setAttendanceOpen(true)
-            }}
-            className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+            className="hidden"
+            aria-hidden="true"
           >
             Tomar asistencia
           </button>
+          <Link
+            to={`/gym-admin/classes/${id}/attendance`}
+            className={`rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white ${
+              activeEnrollments.length === 0 ? 'pointer-events-none opacity-60' : ''
+            }`}
+          >
+            Tomar asistencia
+          </Link>
         </div>
         <p className="mt-2 text-sm text-brand-muted">
           {activeEnrollments.length > 0

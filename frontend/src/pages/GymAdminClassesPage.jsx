@@ -253,6 +253,24 @@ export default function GymAdminClassesPage() {
         key: 'actions',
         label: 'Acciones',
         sortable: false,
+        mobilePrimaryReplacesDetail: true,
+        mobilePrimary: (row) =>
+          isVirtualClass(row) ? (
+            <button
+              type="button"
+              disabled
+              className="rounded-lg border border-brand-line px-3 py-2 text-center text-xs font-semibold text-brand-white opacity-60"
+            >
+              Asistencia
+            </button>
+          ) : (
+            <Link
+              to={`/gym-admin/classes/${row.id}/attendance`}
+              className="block rounded-lg border border-brand-blue/70 bg-brand-blue/15 px-3 py-2 text-center text-xs font-semibold text-brand-white transition hover:border-brand-blue"
+            >
+              Asistencia
+            </Link>
+          ),
         render: (row) => {
           const canClose = !['completed', 'cancelled', 'completed_early'].includes(row.status)
           const canReopen = row.status === 'cancelled'

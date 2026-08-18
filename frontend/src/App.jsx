@@ -21,6 +21,7 @@ import GymAdminAttendanceQrPage from './pages/GymAdminAttendanceQrPage'
 import AssignPlanPage from './pages/AssignPlanPage'
 import AttendanceScreenPage from './pages/AttendanceScreenPage'
 import AttendanceScreenAutoPage from './pages/AttendanceScreenAutoPage'
+import ClassAttendancePage from './pages/ClassAttendancePage'
 import GymAdminDashboard from './pages/GymAdminDashboard'
 import GymAdminUsersPage from './pages/GymAdminUsersPage'
 import GymAdminStudentOverviewPage from './pages/GymAdminStudentOverviewPage'
@@ -318,6 +319,16 @@ export default function App() {
         }
       />
       <Route
+        path="/gym-admin/classes/:id/attendance"
+        element={
+          <ProtectedRoute allowedRoles={['gym_admin', 'manager', 'monitor']}>
+            <ShellRoute>
+              <ClassAttendancePage />
+            </ShellRoute>
+          </ProtectedRoute>
+        }
+      />
+      <Route
         path="/gym-admin/classes/:id"
         element={
           <ProtectedRoute allowedRoles={['gym_admin', 'manager', 'monitor']}>
@@ -598,6 +609,16 @@ export default function App() {
           <ProtectedRoute allowedRoles={['teacher', 'gym_admin']}>
             <ShellRoute>
               <TeacherClassesPage mode="upcoming" />
+            </ShellRoute>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/teacher/classes/:id/attendance"
+        element={
+          <ProtectedRoute allowedRoles={['teacher', 'gym_admin']}>
+            <ShellRoute>
+              <ClassAttendancePage />
             </ShellRoute>
           </ProtectedRoute>
         }

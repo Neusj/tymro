@@ -356,6 +356,10 @@ export const classesApi = {
     const { data } = await api.post(`/classes/${id}/attendance/`, { attendances })
     return data
   },
+  toggleAttendance: async (id, payload) => {
+    const { data } = await api.post(`/classes/${id}/attendance-toggle/`, payload)
+    return data
+  },
   // Historial inmutable de correcciones de asistencia (solo gym_admin/superadmin;
   // el backend responde 403 para otros roles). Lista [{id, attendance, student,
   // student_name, previous_status, new_status, changed_by, changed_by_username,

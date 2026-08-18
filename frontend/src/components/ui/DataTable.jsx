@@ -398,6 +398,7 @@ export default function DataTable({
               const titleColumn = mobileZones.title
               const isSelected = selectableRows && selectedRowIds.includes(rowId)
               const primaryAction = actionColumn?.mobilePrimary?.(row)
+              const primaryReplacesDetail = Boolean(primaryAction && actionColumn?.mobilePrimaryReplacesDetail)
               return (
                 <article
                   key={rowId || `${index}-${row?.name || 'card'}`}
@@ -444,14 +445,16 @@ export default function DataTable({
                   {/* Footer: primary action + detail + overflow menu */}
                   <div className="mt-3.5 flex items-center gap-2 border-t border-brand-line pt-3">
                     {primaryAction ? <div className="flex-1 [&_button]:min-h-11 [&_button]:w-full">{primaryAction}</div> : null}
-                    <button
-                      type="button"
-                      onClick={() => setSelectedDetailRow(row)}
-                      className={`min-h-11 rounded-lg border border-brand-line px-3 py-2 text-xs font-semibold text-brand-white transition hover:border-brand-blue ${primaryAction ? 'shrink-0' : 'flex-1'}`}
-                    >
-                      Ver detalle
-                    </button>
-                    {hasMenuActions && !primaryAction ? (
+                    {!primaryReplacesDetail ? (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedDetailRow(row)}
+                        className={`min-h-11 rounded-lg border border-brand-line px-3 py-2 text-xs font-semibold text-brand-white transition hover:border-brand-blue ${primaryAction ? 'shrink-0' : 'flex-1'}`}
+                      >
+                        Ver detalle
+                      </button>
+                    ) : null}
+                    {hasMenuActions && (!primaryAction || primaryReplacesDetail) ? (
                       <div className="shrink-0 [&_button]:min-h-9 [&_button]:text-xs">
                         <RowActionsDropdown align="left">{renderMenuActions(row)}</RowActionsDropdown>
                       </div>

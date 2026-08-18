@@ -1,4 +1,5 @@
 ﻿import { useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { classesApi, enrollmentsApi } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import BulkActionModal from '../components/BulkActionModal'
@@ -499,6 +500,24 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
         key: 'actions',
         label: 'Acciones',
         sortable: false,
+        mobilePrimaryReplacesDetail: true,
+        mobilePrimary: (row) =>
+          isVirtualClass(row) ? (
+            <button
+              type="button"
+              disabled
+              className="rounded-lg border border-brand-line px-3 py-2 text-center text-xs font-semibold text-brand-white opacity-60"
+            >
+              Asistencia
+            </button>
+          ) : (
+            <Link
+              to={`/teacher/classes/${row.id}/attendance`}
+              className="block rounded-lg border border-brand-blue/70 bg-brand-blue/15 px-3 py-2 text-center text-xs font-semibold text-brand-white transition hover:border-brand-blue"
+            >
+              Asistencia
+            </Link>
+          ),
         render: (row) => {
           const canOperate = canOperateClass(row)
           const isSuspended = row.status === 'suspended'
@@ -506,14 +525,22 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
           const isVirtual = isVirtualClass(row)
           return (
             <>
-              <button
-                type="button"
-                disabled={working || isVirtual}
-                onClick={() => openAttendanceModal(row)}
-                className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue disabled:opacity-60"
-              >
-                {mode === 'history' ? 'Ver asistencia' : 'Tomar asistencia'}
-              </button>
+              {isVirtual ? (
+                <button
+                  type="button"
+                  disabled
+                  className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white opacity-60"
+                >
+                  {mode === 'history' ? 'Ver asistencia' : 'Tomar asistencia'}
+                </button>
+              ) : (
+                <Link
+                  to={`/teacher/classes/${row.id}/attendance`}
+                  className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue"
+                >
+                  {mode === 'history' ? 'Ver asistencia' : 'Tomar asistencia'}
+                </Link>
+              )}
               {mode === 'upcoming' && isSuspended ? (
                 <>
                   <button

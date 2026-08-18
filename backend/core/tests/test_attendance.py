@@ -77,6 +77,32 @@ def test_gym_admin_and_teacher_can_read_enrolled_roster(api_client, gym_setup):
     assert api_client.get(f'/api/classes/{gym_class.id}/enrolled-students/').status_code == 200
 
 
+def test_teacher_can_confirm_attendance_one_student_at_a_time(api_client, gym_setup):
+    gym_class = gym_setup['gym_class']
+    student_ids = list(
+        gym_class.enrollments.filter(status='active').order_by('id').values_list('student_id', flat=True)
+    )
+
+    _login(api_client, 'teacher')
+    first = api_client.post(
+        f'/api/classes/{gym_class.id}/attendance-toggle/',
+        {'student_id': student_ids[0], 'status': Attendance.Status.PRESENT},
+        format='json',
+    )
+    assert first.status_code == 200, first.content
+    assert first.json()['status'] == Attendance.Status.PRESENT
+    assert Attendance.objects.filter(gym_class=gym_class).count() == 1
+    assert not Attendance.objects.filter(gym_class=gym_class, student_id=student_ids[1]).exists()
+
+    second = api_client.post(
+        f'/api/classes/{gym_class.id}/attendance-toggle/',
+        {'student_id': student_ids[1], 'status': Attendance.Status.PRESENT},
+        format='json',
+    )
+    assert second.status_code == 200, second.content
+    assert Attendance.objects.filter(gym_class=gym_class, status=Attendance.Status.PRESENT).count() == 2
+
+
 def test_student_sees_own_attendance_status_in_reservations(api_client, gym_setup):
     student = gym_setup['student']
     gym_class = gym_setup['gym_class']

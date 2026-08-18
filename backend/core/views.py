@@ -3206,6 +3206,86 @@ class GymClassViewSet(ModelViewSet):
         attendances = gym_class.attendances.select_related('student', 'marked_by').all()
         return Response(AttendanceSerializer(attendances, many=True).data)
 
+    @action(detail=True, methods=['post'], url_path='attendance-toggle')
+    def attendance_toggle(self, request, pk=None):
+        gym_class = self.get_object()
+        user = request.user
+
+        if not (
+            _is_superadmin(user)
+            or (roles.is_org_admin(user) and gym_class.organization_id == user.organization_id)
+            or _is_own_class_teacher(user, gym_class)
+        ):
+            raise PermissionDenied('No tienes permisos para registrar asistencia en esta clase.')
+
+        gym_class.refresh_status_from_schedule(save=True)
+
+        if gym_class.status == GymClass.Status.CANCELLED:
+            raise PermissionDenied('No puedes registrar asistencia en una clase cancelada.')
+
+        try:
+            student_id = int(request.data.get('student_id'))
+        except (TypeError, ValueError):
+            raise ValidationError({'student_id': 'Debes indicar un alumno valido.'})
+
+        status_value = request.data.get('status')
+        if status_value not in {Attendance.Status.PRESENT, Attendance.Status.ABSENT}:
+            raise ValidationError({'status': 'La asistencia rapida solo acepta presente o ausente.'})
+
+        if not gym_class.enrollments.filter(student_id=student_id, status='active').exists():
+            raise ValidationError({'student_id': 'El alumno no esta inscrito activo en esta clase.'})
+
+        is_admin_actor = _is_superadmin(user) or (
+            _is_gym_admin(user) and gym_class.organization_id == user.organization_id
+        )
+        if gym_class.is_closed and not is_admin_actor:
+            raise PermissionDenied('Solo un administrador puede corregir una asistencia ya registrada.')
+
+        with transaction.atomic():
+            now = timezone.now()
+            attendance = Attendance.objects.select_for_update().filter(
+                gym_class=gym_class,
+                student_id=student_id,
+            ).first()
+
+            if attendance is None:
+                attendance = Attendance.objects.create(
+                    gym_class=gym_class,
+                    student_id=student_id,
+                    status=status_value,
+                    source=Attendance.Source.MANUAL,
+                    marked_by=user,
+                    marked_at=now,
+                    checked_at=now,
+                )
+            elif attendance.status != status_value:
+                if (
+                    not is_admin_actor
+                    and (
+                        attendance.source != Attendance.Source.MANUAL
+                        or attendance.marked_by_id != user.id
+                    )
+                ):
+                    raise PermissionDenied('Solo un administrador puede corregir una asistencia ya registrada.')
+                previous_status = attendance.status
+                attendance.status = status_value
+                attendance.source = Attendance.Source.MANUAL
+                attendance.marked_by = user
+                attendance.marked_at = now
+                attendance.save(update_fields=['status', 'source', 'marked_by', 'marked_at'])
+                AttendanceChangeLog.objects.create(
+                    attendance=attendance,
+                    previous_status=previous_status,
+                    new_status=status_value,
+                    changed_by=user,
+                    changed_at=now,
+                    organization_id=gym_class.organization_id,
+                    source=Attendance.Source.MANUAL,
+                )
+
+        attendance = Attendance.objects.select_related('student', 'marked_by').get(pk=attendance.pk)
+        return Response(AttendanceSerializer(attendance).data)
+
     @action(detail=True, methods=['get'], url_path='attendance-history')
     def attendance_history(self, request, pk=None):
         gym_class = self.get_object()
