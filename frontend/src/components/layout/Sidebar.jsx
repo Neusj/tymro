@@ -165,7 +165,7 @@ const navByRole = {
       children: [
         // TODO: revisar en detalle la utilidad de las vistas indice de clases antes de volver a mostrarlas.
         // { to: '/gym-admin/classes', label: 'Ver clases' },
-        // { to: '/teacher/classes/all', label: 'Mis clases como profesor' },
+        { to: '/teacher/classes/upcoming', label: 'Mis clases como profesor' },
         { to: '/teacher/classes/coverable', label: 'Clases para cubrir' },
         { to: '/gym-admin/class-templates', label: 'Gestión de clases' },
         { to: '/gym-admin/holidays', label: 'Festivos' },
