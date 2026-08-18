@@ -165,6 +165,7 @@ const navByRole = {
       children: [
         { to: '/gym-admin/classes', label: 'Ver clases' },
         { to: '/teacher/classes/all', label: 'Mis clases como profesor' },
+        { to: '/teacher/classes/coverable', label: 'Clases para cubrir' },
         { to: '/gym-admin/class-templates', label: 'Gestión de clases' },
         { to: '/gym-admin/holidays', label: 'Festivos' },
         { to: '/gym-admin/class-types', label: 'Tipos de clase' },
@@ -226,6 +227,7 @@ const navByRole = {
       children: [
         { to: '/teacher/classes/all', label: 'Ver clases' },
         { to: '/teacher/classes/upcoming', label: 'Próximas clases' },
+        { to: '/teacher/classes/coverable', label: 'Clases para cubrir' },
         { to: '/teacher/classes/history', label: 'Clases realizadas' },
       ],
     },

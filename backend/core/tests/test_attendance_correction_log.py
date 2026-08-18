@@ -2,10 +2,10 @@
 
 Tomar lista (crear un `Attendance` que no existía) sigue abierto a profe/gym_admin/
 superadmin y NO deja rastro: no hay "corrección" que auditar todavía. Corregir un
-`status` ya registrado pasa a ser exclusivo de gym_admin/superadmin (manager queda
-AFUERA: es `is_org_admin` pero este es el corte de ADMIN_WRITE_ROLES, no el operativo) y,
-cuando lo hace un admin, escribe UNA fila de `AttendanceChangeLog` dentro de la MISMA
-transacción que el `save()` del `Attendance` (`core/views.py`, acción `attendance` de
+`status` ya registrado queda abierto para gym_admin/superadmin y para el profe dueno
+hasta 20 minutos despues del fin de la clase (manager queda AFUERA: es `is_org_admin`
+pero este es el corte de ADMIN_WRITE_ROLES/profe operativo) y escribe UNA fila de
+`AttendanceChangeLog` dentro de la MISMA transacción que el `save()` del `Attendance` (`core/views.py`, acción `attendance` de
 `GymClassViewSet`): todo-o-nada, sin oráculo cross-org (queryset scopeado por
 organización → 404, no 403, para un admin ajeno).
 """
@@ -109,11 +109,11 @@ def test_teacher_taking_attendance_for_the_first_time_creates_no_log(api_client,
 
 
 # --------------------------------------------------------------------------------------
-# 2. Profe intenta corregir un registro ya existente: 403, BD intacta, 0 logs.
-#    Variante: payload mixto (una creación + una corrección) también 403, todo-o-nada.
+# 2. Profe dueno corrige dentro de la ventana operativa: 200 y log auditado.
+#    Variante: payload mixto (una creacion + una correccion) tambien es todo-o-nada.
 # --------------------------------------------------------------------------------------
 
-def test_teacher_cannot_correct_an_existing_attendance(api_client, setup):
+def test_teacher_can_correct_an_existing_attendance_within_grace_window(api_client, setup):
     gym_class = setup['gym_class']
     student = setup['student']
     other_student = setup['other_student']
@@ -129,16 +129,21 @@ def test_teacher_cannot_correct_an_existing_attendance(api_client, setup):
         ],
     }, format='json')
 
-    assert resp.status_code == 403, resp.content
+    assert resp.status_code == 200, resp.content
     attendance = Attendance.objects.get(gym_class=gym_class, student=student)
-    assert attendance.status == Attendance.Status.PRESENT
-    assert AttendanceChangeLog.objects.count() == 0
+    assert attendance.status == Attendance.Status.ABSENT
+    assert AttendanceChangeLog.objects.count() == 1
+    log = AttendanceChangeLog.objects.get()
+    assert log.attendance_id == attendance.id
+    assert log.previous_status == Attendance.Status.PRESENT
+    assert log.new_status == Attendance.Status.ABSENT
+    assert log.changed_by_id == setup['teacher'].id
 
 
-def test_teacher_mixed_payload_new_plus_correction_is_all_or_nothing(api_client, setup):
-    """Un alumno con registro previo (corrección) mezclado con un alumno nuevo (creación):
-    el profe no puede colar la creación aprovechando el todo-o-nada -- el rechazo es del
-    request completo, no solo de la corrección."""
+def test_teacher_mixed_payload_new_plus_correction_is_all_or_nothing_within_grace(api_client, setup):
+    """Un alumno con registro previo (correccion) mezclado con un alumno nuevo (creacion):
+    el profe puede guardar ambos dentro de la ventana operativa; si una escritura fallara,
+    el request completo debe revertirse."""
     gym_class = setup['gym_class']
     student = setup['student']
     other_student = setup['other_student']
@@ -154,11 +159,15 @@ def test_teacher_mixed_payload_new_plus_correction_is_all_or_nothing(api_client,
         ],
     }, format='json')
 
-    assert resp.status_code == 403, resp.content
+    assert resp.status_code == 200, resp.content
     attendance = Attendance.objects.get(gym_class=gym_class, student=student)
-    assert attendance.status == Attendance.Status.PRESENT
-    assert not Attendance.objects.filter(gym_class=gym_class, student=other_student).exists()
-    assert AttendanceChangeLog.objects.count() == 0
+    assert attendance.status == Attendance.Status.ABSENT
+    assert Attendance.objects.filter(
+        gym_class=gym_class,
+        student=other_student,
+        status=Attendance.Status.PRESENT,
+    ).exists()
+    assert AttendanceChangeLog.objects.count() == 1
 
 
 def test_manager_cannot_correct_an_existing_attendance(api_client, setup, make_user):

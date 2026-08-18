@@ -13,6 +13,7 @@ import FilterPanel from '../components/FilterPanel'
 import KpiStrip from '../components/KpiStrip'
 import DataTable from '../components/ui/DataTable'
 import ValueBadge from '../components/ui/ValueBadge'
+import { sortClassesByStatusThenTime } from './teacherClasses.helpers'
 
 function formatDateTime(value) {
   if (!value) {
@@ -121,10 +122,12 @@ export default function GymAdminClassesPage() {
     loadData()
   }, [filtersParams, selectedDate])
 
+  const displayedClasses = useMemo(() => sortClassesByStatusThenTime(classes), [classes])
+
   useEffect(() => {
-    const visibleIds = new Set(classes.map((item) => item.id))
+    const visibleIds = new Set(displayedClasses.map((item) => item.id))
     setSelectedIds((prev) => prev.filter((id) => visibleIds.has(id)))
-  }, [classes])
+  }, [displayedClasses])
 
   const removeClass = async () => {
     if (!deleting) {
@@ -253,6 +256,7 @@ export default function GymAdminClassesPage() {
         key: 'actions',
         label: 'Acciones',
         sortable: false,
+        hideActionsInDetail: true,
         mobilePrimaryReplacesDetail: true,
         mobilePrimary: (row) =>
           isVirtualClass(row) ? (
@@ -271,6 +275,65 @@ export default function GymAdminClassesPage() {
               Asistencia
             </Link>
           ),
+        mobileActionsRender: (row) => {
+          const canClose = !['completed', 'cancelled', 'completed_early'].includes(row.status)
+          const canReopen = row.status === 'cancelled'
+          const isVirtual = isVirtualClass(row)
+          return canManage ? (
+            <>
+              {isVirtual ? (
+                <button
+                  type="button"
+                  disabled
+                  className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white opacity-60"
+                >
+                  Editar
+                </button>
+              ) : (
+                <Link
+                  to={`/gym-admin/classes/${row.id}/edit`}
+                  className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue"
+                >
+                  Editar
+                </Link>
+              )}
+              <button
+                type="button"
+                disabled={!canClose || working || isVirtual}
+                onClick={() => requestCloseSingleClass(row, 'complete_early')}
+                className="w-full rounded-lg border border-brand-orange/50 px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-orange disabled:opacity-60"
+              >
+                Cerrar anticipadamente
+              </button>
+              <button
+                type="button"
+                disabled={!canClose || working || isVirtual}
+                onClick={() => requestCloseSingleClass(row, 'cancel')}
+                className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 transition hover:bg-brand-red/10 disabled:opacity-60"
+              >
+                Cancelar
+              </button>
+              {canReopen ? (
+                <button
+                  type="button"
+                  disabled={working || isVirtual}
+                  onClick={() => setReactivating(row)}
+                  className="w-full rounded-lg border border-emerald-500/50 px-2.5 py-1.5 text-left text-xs text-emerald-200 transition hover:border-emerald-400 disabled:opacity-60"
+                >
+                  Reabrir clase
+                </button>
+              ) : null}
+              <button
+                type="button"
+                disabled={isVirtual}
+                onClick={() => setDeleting(row)}
+                className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 transition hover:bg-brand-red/10 disabled:opacity-60"
+              >
+                Eliminar
+              </button>
+            </>
+          ) : null
+        },
         render: (row) => {
           const canClose = !['completed', 'cancelled', 'completed_early'].includes(row.status)
           const canReopen = row.status === 'cancelled'
@@ -429,13 +492,13 @@ export default function GymAdminClassesPage() {
         {error ? <p className="rounded-lg border border-brand-red/50 bg-brand-red/10 px-3 py-2 text-sm text-red-200">{error}</p> : null}
         <DataTable
           columns={columns}
-          data={classes}
+          data={displayedClasses}
           loading={loading}
           selectableRows={canManage}
           selectAllScope="filtered"
           selectedRowIds={selectedIds}
           onSelectedRowIdsChange={setSelectedIds}
-          defaultSort={{ key: 'start_datetime', direction: 'asc' }}
+          disablePagination
         />
       </section>
 

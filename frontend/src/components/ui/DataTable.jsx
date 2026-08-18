@@ -114,6 +114,7 @@ export default function DataTable({
   defaultSort = null,
   selectAllScope = 'page',
   maxBodyHeight,            // ej: '28rem' | '480px' | '60vh'; undefined = comportamiento actual
+  disablePagination = false,
 }) {
   const [query, setQuery] = useState('')
   const [debouncedQuery, setDebouncedQuery] = useState('')
@@ -167,10 +168,14 @@ export default function DataTable({
   }, [columns, filteredData, sortState])
 
   const effectivePageSizeOptions = isCardView ? CARD_PAGE_SIZE_OPTIONS : PAGE_SIZE_OPTIONS
-  const effectivePageSize = effectivePageSizeOptions.includes(pageSize) ? pageSize : effectivePageSizeOptions[0]
+  const effectivePageSize = disablePagination
+    ? Math.max(sortedData.length, 1)
+    : effectivePageSizeOptions.includes(pageSize)
+      ? pageSize
+      : effectivePageSizeOptions[0]
   const totalPages = Math.max(1, Math.ceil(sortedData.length / effectivePageSize))
   const safePage = Math.min(page, totalPages)
-  const paginatedData = sortedData.slice((safePage - 1) * effectivePageSize, safePage * effectivePageSize)
+  const paginatedData = disablePagination ? sortedData : sortedData.slice((safePage - 1) * effectivePageSize, safePage * effectivePageSize)
   const pageRowIds = paginatedData.map((row) => getRowId(row, rowIdKey)).filter((id) => id !== undefined && id !== null)
   const filteredRowIds = sortedData.map((row) => getRowId(row, rowIdKey)).filter((id) => id !== undefined && id !== null)
   const targetRowIds = selectAllScope === 'filtered' ? filteredRowIds : pageRowIds
@@ -272,6 +277,7 @@ export default function DataTable({
   }
 
   const hasMenuActions = Boolean(actionColumn) || (hasCallbacks && !hasInlineActionsColumn)
+  const showActionsInDetail = hasMenuActions && !actionColumn?.hideActionsInDetail
 
   const renderTableCell = (column, row) => {
     const cellContent = column.render ? column.render(row) : formatCellValue(row[column.key])
@@ -399,6 +405,7 @@ export default function DataTable({
               const isSelected = selectableRows && selectedRowIds.includes(rowId)
               const primaryAction = actionColumn?.mobilePrimary?.(row)
               const primaryReplacesDetail = Boolean(primaryAction && actionColumn?.mobilePrimaryReplacesDetail)
+              const mobileMenuActions = actionColumn?.mobileActionsRender?.(row) ?? renderMenuActions(row)
               return (
                 <article
                   key={rowId || `${index}-${row?.name || 'card'}`}
@@ -456,7 +463,18 @@ export default function DataTable({
                     ) : null}
                     {hasMenuActions && (!primaryAction || primaryReplacesDetail) ? (
                       <div className="shrink-0 [&_button]:min-h-9 [&_button]:text-xs">
-                        <RowActionsDropdown align="left">{renderMenuActions(row)}</RowActionsDropdown>
+                        <RowActionsDropdown align="left">
+                          {primaryReplacesDetail ? (
+                            <button
+                              type="button"
+                              onClick={() => setSelectedDetailRow(row)}
+                              className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue"
+                            >
+                              Ver detalle
+                            </button>
+                          ) : null}
+                          {mobileMenuActions}
+                        </RowActionsDropdown>
                       </div>
                     ) : null}
                   </div>
@@ -465,18 +483,20 @@ export default function DataTable({
             })}
           </div>
 
-          <TablePagination
-            page={safePage}
-            totalPages={totalPages}
-            pageSize={effectivePageSize}
-            pageSizeOptions={effectivePageSizeOptions}
-            startItem={startItem}
-            endItem={endItem}
-            totalItems={sortedData.length}
-            onPageSizeChange={setPageSize}
-            onPrevious={() => setPage((prev) => Math.max(1, prev - 1))}
-            onNext={() => setPage((prev) => Math.min(totalPages, prev + 1))}
-          />
+          {!disablePagination ? (
+            <TablePagination
+              page={safePage}
+              totalPages={totalPages}
+              pageSize={effectivePageSize}
+              pageSizeOptions={effectivePageSizeOptions}
+              startItem={startItem}
+              endItem={endItem}
+              totalItems={sortedData.length}
+              onPageSizeChange={setPageSize}
+              onPrevious={() => setPage((prev) => Math.max(1, prev - 1))}
+              onNext={() => setPage((prev) => Math.min(totalPages, prev + 1))}
+            />
+          ) : null}
 
           {selectedDetailRow ? createPortal(
             <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm" onClick={() => setSelectedDetailRow(null)}>
@@ -505,7 +525,7 @@ export default function DataTable({
                     </div>
                   ))}
                 </div>
-                {hasMenuActions ? (
+                {showActionsInDetail ? (
                   <div className="mt-4 space-y-2 border-t border-brand-line pt-4">
                     <p className="text-xs font-semibold uppercase tracking-wide text-brand-dim">Acciones</p>
                     {renderMenuActions(selectedDetailRow)}

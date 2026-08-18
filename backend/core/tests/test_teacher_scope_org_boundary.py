@@ -334,6 +334,18 @@ def test_gym_admin_can_claim_and_operate_substitution_as_teacher(api_client, mak
     assert mine.status_code == 200, mine.content
     assert [row for row in mine.json() if row['id'] == gym_class.id]
 
+    coverable_after_claim = api_client.get('/api/classes/coverable/', {'date': start.date().isoformat()})
+    assert coverable_after_claim.status_code == 200, coverable_after_claim.content
+    assert not [row for row in coverable_after_claim.json() if row['id'] == gym_class.id]
+
+    release = api_client.post(f'/api/classes/{gym_class.id}/release-substitution/', {}, format='json')
+    assert release.status_code == 200, release.content
+    coverable_after_release = api_client.get('/api/classes/coverable/', {'date': start.date().isoformat()})
+    assert [row for row in coverable_after_release.json() if row['id'] == gym_class.id and row['can_claim_substitution']]
+
+    claim_again = api_client.post(f'/api/classes/{gym_class.id}/claim-substitution/', {}, format='json')
+    assert claim_again.status_code == 200, claim_again.content
+
     attendance = api_client.post(f'/api/classes/{gym_class.id}/attendance/', {
         'attendances': [{'student_id': student.id, 'status': 'present'}],
     }, format='json')

@@ -20,6 +20,7 @@ import {
   canOperateClass,
   extractFilterOptions,
   formatDateTime,
+  sortClassesByStatusThenTime,
   ALL_STATUS_OPTIONS,
   HISTORY_STATUS_OPTIONS,
   UPCOMING_STATUS_OPTIONS,
@@ -134,20 +135,19 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
   const loadData = async () => {
     setLoading(true)
     try {
+      if (mode === 'coverable') {
+        const coverable = await classesApi.coverable(selectedDate, { ordering: 'start_datetime' })
+        setClasses([])
+        setCoverableClasses(coverable)
+        return
+      }
       const classesRequest =
         mode === 'all'
           ? classesApi.list(listParams)
           : classesApi.byDate(selectedDate, listParams)
-      const [list, coverable] = await Promise.all([
-        classesRequest,
-        mode === 'upcoming'
-          ? classesApi.coverable(selectedDate, { ordering: 'start_datetime' })
-          : mode === 'all'
-            ? classesApi.coverable(null, { ordering: 'start_datetime' })
-            : Promise.resolve([]),
-      ])
+      const list = await classesRequest
       setClasses(list)
-      setCoverableClasses(coverable)
+      setCoverableClasses([])
     } catch (apiError) {
       setError(firstApiError(apiError?.response?.data, 'No se pudieron cargar las clases.'))
     } finally {
@@ -196,8 +196,9 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
     loadData()
   }, [mode, listParams, selectedDate])
 
-  const { disciplineOptions } = useMemo(() => extractFilterOptions(classes), [classes])
-  const filteredClasses = useMemo(() => applyTeacherClassFilters(classes, filters), [classes, filters])
+  const sourceClasses = mode === 'coverable' ? coverableClasses : classes
+  const { disciplineOptions } = useMemo(() => extractFilterOptions(sourceClasses), [sourceClasses])
+  const filteredClasses = useMemo(() => sortClassesByStatusThenTime(applyTeacherClassFilters(sourceClasses, filters), { descendingTime: mode === 'history' }), [sourceClasses, filters, mode])
   const kpis = useMemo(() => calculateTeacherKpis(filteredClasses, mode), [filteredClasses, mode])
 
   useEffect(() => {
@@ -500,6 +501,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
         key: 'actions',
         label: 'Acciones',
         sortable: false,
+        hideActionsInDetail: true,
         mobilePrimaryReplacesDetail: true,
         mobilePrimary: (row) =>
           isVirtualClass(row) ? (
@@ -518,6 +520,90 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
               Asistencia
             </Link>
           ),
+        mobileActionsRender: (row) => {
+          const canOperate = canOperateClass(row)
+          const isSuspended = row.status === 'suspended'
+          const isCancelled = row.status === 'cancelled'
+          const isVirtual = isVirtualClass(row)
+          return (
+            <>
+              {mode === 'upcoming' && isSuspended ? (
+                <>
+                  <button
+                    type="button"
+                    disabled={working || isVirtual}
+                    onClick={() => setReactivatingClass(row)}
+                    className="w-full rounded-lg border border-emerald-500/50 px-2.5 py-1.5 text-left text-xs text-emerald-200 transition hover:border-emerald-400 disabled:opacity-60"
+                  >
+                    Reactivar clase
+                  </button>
+                  <button
+                    type="button"
+                    disabled={working || isVirtual}
+                    onClick={() => setClassReasonAction({ row, actionName: 'cancel' })}
+                    className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 transition hover:bg-brand-red/10 disabled:opacity-60"
+                  >
+                    Cancelar clase
+                  </button>
+                </>
+              ) : null}
+              {mode === 'upcoming' && isCancelled ? (
+                <button
+                  type="button"
+                  disabled={working || isVirtual}
+                  onClick={() => setReactivatingClass(row)}
+                  className="w-full rounded-lg border border-emerald-500/50 px-2.5 py-1.5 text-left text-xs text-emerald-200 transition hover:border-emerald-400 disabled:opacity-60"
+                >
+                  Reabrir clase
+                </button>
+              ) : null}
+              {mode === 'upcoming' && !isSuspended && !isCancelled ? (
+                <>
+                  <button
+                    type="button"
+                    disabled={!canOperate || working || isVirtual}
+                    onClick={() => openEnrollModal(row)}
+                    className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue disabled:opacity-60"
+                  >
+                    Inscribir alumnos
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!canOperate || working || isVirtual}
+                    onClick={() => openEnrolledModal(row)}
+                    className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue disabled:opacity-60"
+                  >
+                    Ver inscritos
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!canOperate || working || isVirtual}
+                    onClick={() => setSuspendingClass(row)}
+                    className="w-full rounded-lg border border-brand-orange/50 px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-orange disabled:opacity-60"
+                  >
+                    Suspender clase
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!canOperate || working || isVirtual}
+                    onClick={() => setClassReasonAction({ row, actionName: 'complete_early' })}
+                    className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue disabled:opacity-60"
+                  >
+                    Finalizar (cierre anticipado)
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!canOperate || working || isVirtual}
+                    onClick={() => setClassReasonAction({ row, actionName: 'cancel' })}
+                    className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 transition hover:bg-brand-red/10 disabled:opacity-60"
+                  >
+                    Cancelar clase
+                  </button>
+                </>
+              ) : null}
+            </>
+          )
+        },
         render: (row) => {
           const canOperate = canOperateClass(row)
           const isSuspended = row.status === 'suspended'
@@ -640,6 +726,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
         mobileRender: (row) => formatTimeRange(row.start_datetime, row.end_datetime),
       },
       { key: 'end_datetime', label: 'Termino', render: (row) => formatDateTime(row.end_datetime) },
+      { key: 'status', label: 'Estado', render: (row) => <ValueBadge kind="class_status" value={row.status} /> },
       {
         key: 'substitute_display_name',
         label: 'Suplente',
@@ -650,6 +737,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
         key: 'actions',
         label: 'Acciones',
         sortable: false,
+        hideActionsInDetail: true,
         render: (row) => {
           const canReleaseSubstitution =
             row.can_release_substitution ||
@@ -690,17 +778,21 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
   )
 
   const title =
-    mode === 'all'
-      ? 'Teacher · Mis clases'
-      : mode === 'history'
-        ? 'Teacher · Clases realizadas'
-        : 'Teacher · Proximas clases'
+    mode === 'coverable'
+      ? 'Teacher · Clases para cubrir'
+      : mode === 'all'
+        ? 'Teacher · Mis clases'
+        : mode === 'history'
+          ? 'Teacher · Clases realizadas'
+          : 'Teacher · Proximas clases'
   const subtitle =
-    mode === 'all'
-      ? 'Vista completa de tus clases con filtros, asistencia, inscripciones y acciones operativas.'
-      : mode === 'history'
-        ? 'Historico de clases para revisar asistentes y resultados finales.'
-        : 'Operacion diaria de tus clases: inscritos, ocupacion y acciones de suspension/cancelacion.'
+    mode === 'coverable'
+      ? 'Clases disponibles para tomar como suplente en el dia seleccionado.'
+      : mode === 'all'
+        ? 'Vista completa de tus clases con filtros, asistencia, inscripciones y acciones operativas.'
+        : mode === 'history'
+          ? 'Historico de clases para revisar asistentes y resultados finales.'
+          : 'Operacion diaria de tus clases: inscritos, ocupacion y acciones de suspension/cancelacion.'
 
   const filteredEnrollStudents = enrollStudents.filter((student) => {
     const query = enrollSearch.trim().toLowerCase()
@@ -720,6 +812,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
   })
 
   const statusOptions = mode === 'all' ? ALL_STATUS_OPTIONS : mode === 'history' ? HISTORY_STATUS_OPTIONS : UPCOMING_STATUS_OPTIONS
+  const activeColumns = mode === 'coverable' ? coverableColumns : classColumns
 
   return (
     <div className="space-y-6">
@@ -764,6 +857,8 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
           <h2 className="panel-title">
             {mode === 'all'
               ? 'Detalle de clases (filtrado)'
+              : mode === 'coverable'
+                ? 'Clases disponibles para cubrir (filtrado)'
               : mode === 'history'
                 ? 'Detalle de clases realizadas (filtrado)'
                 : 'Detalle de proximas clases (filtrado)'}
@@ -781,30 +876,16 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
         </div>
 
         <DataTable
-          columns={classColumns}
+          columns={activeColumns}
           data={filteredClasses}
           loading={loading}
-          selectableRows
+          selectableRows={mode !== 'coverable'}
           selectAllScope="filtered"
           selectedRowIds={selectedIds}
           onSelectedRowIdsChange={setSelectedIds}
-          defaultSort={{ key: 'start_datetime', direction: mode === 'history' ? 'desc' : 'asc' }}
+          disablePagination
         />
       </section>
-
-      {mode === 'upcoming' || mode === 'all' ? (
-        <section className="space-y-3">
-          <div className="flex items-center justify-between gap-3">
-            <h2 className="panel-title">Clases disponibles para cubrir</h2>
-          </div>
-          <DataTable
-            columns={coverableColumns}
-            data={coverableClasses}
-            loading={loading}
-            defaultSort={{ key: 'start_datetime', direction: 'asc' }}
-          />
-        </section>
-      ) : null}
 
       <BulkActionModal
         open={mode === 'upcoming' && bulkModalOpen}

@@ -165,6 +165,7 @@ QR_CHECKIN_GRANT_TTL_SECONDS = 120
 ATTENDANCE_SCREEN_SESSION_TTL_HOURS = 8
 QR_WINDOW_BEFORE_MINUTES = 10
 QR_WINDOW_AFTER_MINUTES = 15
+ATTENDANCE_EDIT_GRACE_MINUTES = 20
 
 
 def _user_role(user):
@@ -1392,6 +1393,15 @@ def _attendance_window(gym_class):
         gym_class.start_datetime - timedelta(minutes=QR_WINDOW_BEFORE_MINUTES),
         gym_class.start_datetime + timedelta(minutes=QR_WINDOW_AFTER_MINUTES),
     )
+
+
+def _can_teacher_edit_attendance(user, gym_class, now=None):
+    if gym_class.status == GymClass.Status.CANCELLED:
+        return False
+    if not _is_own_class_teacher(user, gym_class):
+        return False
+    now = now or timezone.now()
+    return now <= gym_class.end_datetime + timedelta(minutes=ATTENDANCE_EDIT_GRACE_MINUTES)
 
 
 def _serialize_qr_class(gym_class):
@@ -2762,8 +2772,12 @@ class GymClassViewSet(ModelViewSet):
             if template.id not in materialized_template_ids
         ]
 
+        status_priority = {
+            GymClass.Status.IN_PROGRESS: 0,
+            GymClass.Status.SCHEDULED: 1,
+        }
         combined = [*real_data, *virtual_data]
-        combined.sort(key=lambda item: (item['start_datetime'], str(item['id'])))
+        combined.sort(key=lambda item: (status_priority.get(item.get('status'), 2), item['start_datetime'], str(item['id'])))
         return Response(combined)
 
     def _substitution_conflict_exists(self, *, teacher, gym_class):
@@ -2839,8 +2853,8 @@ class GymClassViewSet(ModelViewSet):
             organization_id=user.organization_id,
             start_datetime__gt=timezone.now(),
             status__in=[GymClass.Status.SCHEDULED, GymClass.Status.IN_PROGRESS],
+            has_substitute=False,
         ).exclude(teacher_id=user.id)
-        queryset = queryset.filter(models.Q(has_substitute=False) | models.Q(substitute_teacher_id=user.id))
         queryset = self._apply_class_common_filters(
             queryset,
             start_date_from=start_date_from,
@@ -3162,11 +3176,12 @@ class GymClassViewSet(ModelViewSet):
         is_admin_actor = _is_superadmin(user) or (
             _is_gym_admin(user) and gym_class.organization_id == user.organization_id
         )
-        if corrections and not is_admin_actor:
+        teacher_can_edit_attendance = _can_teacher_edit_attendance(user, gym_class)
+        if corrections and not (is_admin_actor or teacher_can_edit_attendance):
             # Todo-o-nada: si el payload trae aunque sea UNA corrección y quien lo manda
             # no es admin, se rechaza el request completo antes de escribir nada (un
             # profe no puede colar una corrección mezclada con creaciones legítimas).
-            raise PermissionDenied('Solo un administrador puede corregir una asistencia ya registrada.')
+            raise PermissionDenied('La asistencia solo puede editarse hasta 20 minutos despues de terminada la clase.')
 
         with transaction.atomic():
             now = timezone.now()
@@ -3238,8 +3253,9 @@ class GymClassViewSet(ModelViewSet):
         is_admin_actor = _is_superadmin(user) or (
             _is_gym_admin(user) and gym_class.organization_id == user.organization_id
         )
-        if gym_class.is_closed and not is_admin_actor:
-            raise PermissionDenied('Solo un administrador puede corregir una asistencia ya registrada.')
+        teacher_can_edit_attendance = _can_teacher_edit_attendance(user, gym_class)
+        if gym_class.is_closed and not (is_admin_actor or teacher_can_edit_attendance):
+            raise PermissionDenied('La asistencia solo puede editarse hasta 20 minutos despues de terminada la clase.')
 
         with transaction.atomic():
             now = timezone.now()
@@ -3259,14 +3275,6 @@ class GymClassViewSet(ModelViewSet):
                     checked_at=now,
                 )
             elif attendance.status != status_value:
-                if (
-                    not is_admin_actor
-                    and (
-                        attendance.source != Attendance.Source.MANUAL
-                        or attendance.marked_by_id != user.id
-                    )
-                ):
-                    raise PermissionDenied('Solo un administrador puede corregir una asistencia ya registrada.')
                 previous_status = attendance.status
                 attendance.status = status_value
                 attendance.source = Attendance.Source.MANUAL

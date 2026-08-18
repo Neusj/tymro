@@ -614,6 +614,16 @@ export default function App() {
         }
       />
       <Route
+        path="/teacher/classes/coverable"
+        element={
+          <ProtectedRoute allowedRoles={['teacher', 'gym_admin']}>
+            <ShellRoute>
+              <TeacherClassesPage mode="coverable" />
+            </ShellRoute>
+          </ProtectedRoute>
+        }
+      />
+      <Route
         path="/teacher/classes/:id/attendance"
         element={
           <ProtectedRoute allowedRoles={['teacher', 'gym_admin']}>

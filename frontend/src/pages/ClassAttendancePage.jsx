@@ -7,7 +7,7 @@ import ValueBadge from '../components/ui/ValueBadge'
 import { firstApiError } from '../utils/format'
 import { formatDateTime } from './teacherClasses.helpers'
 
-const CLOSED_STATUSES = new Set(['completed', 'completed_early', 'cancelled'])
+const ATTENDANCE_EDIT_GRACE_MINUTES = 20
 
 function canToggleAttendance(user, gymClass) {
   if (!user || !gymClass || gymClass.status === 'cancelled') {
@@ -17,7 +17,11 @@ function canToggleAttendance(user, gymClass) {
     return true
   }
   if (user.role === 'teacher') {
-    return !CLOSED_STATUSES.has(gymClass.status)
+    const classEnd = new Date(gymClass.end_datetime).getTime()
+    if (Number.isNaN(classEnd)) {
+      return false
+    }
+    return Date.now() <= classEnd + ATTENDANCE_EDIT_GRACE_MINUTES * 60 * 1000
   }
   return false
 }

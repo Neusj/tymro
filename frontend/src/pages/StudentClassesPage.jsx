@@ -23,6 +23,7 @@ import {
   formatDateTime,
   formatTimeRange,
 } from './studentClasses.helpers'
+import { sortClassesByStatusThenTime } from './teacherClasses.helpers'
 
 const initialClassFilters = {
   teacher: '',
@@ -240,9 +241,12 @@ export default function StudentClassesPage({ mode = 'available' }) {
   const reservationFilterOptions = useMemo(() => extractStudentReservationOptions(reservations), [reservations])
   const historyFilterOptions = useMemo(() => extractStudentClassOptions(historyClasses), [historyClasses])
 
-  const filteredAvailable = useMemo(() => applyStudentClassFilters(availableClasses, classFilters), [availableClasses, classFilters])
-  const filteredReservations = useMemo(() => applyStudentReservationFilters(reservations, reservationFilters), [reservations, reservationFilters])
-  const filteredHistory = useMemo(() => applyStudentClassFilters(historyClasses, historyFilters), [historyClasses, historyFilters])
+  const filteredAvailable = useMemo(() => sortClassesByStatusThenTime(applyStudentClassFilters(availableClasses, classFilters)), [availableClasses, classFilters])
+  const filteredReservations = useMemo(
+    () => sortClassesByStatusThenTime(applyStudentReservationFilters(reservations, reservationFilters), { dateKey: 'class_start', statusKey: 'class_status' }),
+    [reservations, reservationFilters],
+  )
+  const filteredHistory = useMemo(() => sortClassesByStatusThenTime(applyStudentClassFilters(historyClasses, historyFilters), { descendingTime: true }), [historyClasses, historyFilters])
   const filteredAvailableForBooking = useMemo(
     () => filteredAvailable.filter((item) => !activeReservationByClass[item.id]),
     [activeReservationByClass, filteredAvailable],
@@ -985,21 +989,18 @@ export default function StudentClassesPage({ mode = 'available' }) {
         subtitle: 'Reserva una clase, selecciona varias o busca proximas clases concretas.',
         columns: availableColumns,
         data: filteredAvailableForBooking,
-        defaultSort: { key: 'start_datetime', direction: 'asc' },
       },
       reservations: {
         title: 'Mis reservas',
         subtitle: 'Gestiona reservas individuales y recurrentes sin confundir sus acciones.',
         columns: reservationColumns,
         data: filteredReservations,
-        defaultSort: { key: 'class_start', direction: 'asc' },
       },
       history: {
         title: 'Historial de clases',
         subtitle: 'Registro de clases finalizadas en tu agenda.',
         columns: historyColumns,
         data: filteredHistory,
-        defaultSort: { key: 'start_datetime', direction: 'desc' },
       },
     }),
     [availableColumns, filteredAvailableForBooking, filteredHistory, filteredReservations, historyColumns, reservationColumns],
@@ -1165,11 +1166,11 @@ export default function StudentClassesPage({ mode = 'available' }) {
           columns={activeView.columns}
           data={activeView.data}
           loading={loading}
-          defaultSort={activeView.defaultSort}
           selectableRows={mode === 'reservations' || mode === 'available'}
           selectedRowIds={mode === 'reservations' ? selectedReservationIds : mode === 'available' ? selectedAvailableIds : []}
           onSelectedRowIdsChange={mode === 'reservations' ? setSelectedReservationIds : mode === 'available' ? setSelectedAvailableIds : undefined}
           selectAllScope="filtered"
+          disablePagination
         />
       </section>
 

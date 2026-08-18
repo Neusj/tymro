@@ -57,6 +57,34 @@ export function formatClassStatus(status) {
   return statusMap[status] || status || '-'
 }
 
+export function classStatusSortRank(status) {
+  if (status === 'in_progress') {
+    return 0
+  }
+  if (status === 'scheduled') {
+    return 1
+  }
+  return 2
+}
+
+export function sortClassesByStatusThenTime(classes, { dateKey = 'start_datetime', statusKey = 'status', descendingTime = false } = {}) {
+  const direction = descendingTime ? -1 : 1
+  return [...classes].sort((left, right) => {
+    const rankDelta = classStatusSortRank(left[statusKey]) - classStatusSortRank(right[statusKey])
+    if (rankDelta !== 0) {
+      return rankDelta
+    }
+    const leftTime = Date.parse(left[dateKey])
+    const rightTime = Date.parse(right[dateKey])
+    const safeLeftTime = Number.isNaN(leftTime) ? Number.MAX_SAFE_INTEGER : leftTime
+    const safeRightTime = Number.isNaN(rightTime) ? Number.MAX_SAFE_INTEGER : rightTime
+    if (safeLeftTime !== safeRightTime) {
+      return direction * (safeLeftTime - safeRightTime)
+    }
+    return String(left.id || '').localeCompare(String(right.id || ''), 'es')
+  })
+}
+
 export function extractFilterOptions(classes) {
   const disciplines = new Set()
 

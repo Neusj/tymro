@@ -103,6 +103,62 @@ def test_teacher_can_confirm_attendance_one_student_at_a_time(api_client, gym_se
     assert Attendance.objects.filter(gym_class=gym_class, status=Attendance.Status.PRESENT).count() == 2
 
 
+def test_teacher_can_edit_attendance_until_20_minutes_after_class_end(api_client, gym_setup):
+    gym_class = gym_setup['gym_class']
+    student = gym_setup['student']
+    end = timezone.now() - timedelta(minutes=10)
+    gym_class.start_datetime = end - timedelta(hours=1)
+    gym_class.end_datetime = end
+    gym_class.status = GymClass.Status.COMPLETED
+    gym_class.save(update_fields=['start_datetime', 'end_datetime', 'status', 'updated_at'])
+    Attendance.objects.create(
+        gym_class=gym_class,
+        student=student,
+        status=Attendance.Status.ABSENT,
+        source=Attendance.Source.SYSTEM,
+        marked_at=end,
+        checked_at=end,
+    )
+
+    _login(api_client, 'teacher')
+    resp = api_client.post(
+        f'/api/classes/{gym_class.id}/attendance-toggle/',
+        {'student_id': student.id, 'status': Attendance.Status.PRESENT},
+        format='json',
+    )
+
+    assert resp.status_code == 200, resp.content
+    assert resp.json()['status'] == Attendance.Status.PRESENT
+
+
+def test_teacher_cannot_edit_attendance_after_20_minute_grace(api_client, gym_setup):
+    gym_class = gym_setup['gym_class']
+    student = gym_setup['student']
+    end = timezone.now() - timedelta(minutes=21)
+    gym_class.start_datetime = end - timedelta(hours=1)
+    gym_class.end_datetime = end
+    gym_class.status = GymClass.Status.COMPLETED
+    gym_class.save(update_fields=['start_datetime', 'end_datetime', 'status', 'updated_at'])
+    Attendance.objects.create(
+        gym_class=gym_class,
+        student=student,
+        status=Attendance.Status.ABSENT,
+        source=Attendance.Source.SYSTEM,
+        marked_at=end,
+        checked_at=end,
+    )
+
+    _login(api_client, 'teacher')
+    resp = api_client.post(
+        f'/api/classes/{gym_class.id}/attendance-toggle/',
+        {'student_id': student.id, 'status': Attendance.Status.PRESENT},
+        format='json',
+    )
+
+    assert resp.status_code == 403
+    assert Attendance.objects.get(gym_class=gym_class, student=student).status == Attendance.Status.ABSENT
+
+
 def test_student_sees_own_attendance_status_in_reservations(api_client, gym_setup):
     student = gym_setup['student']
     gym_class = gym_setup['gym_class']
