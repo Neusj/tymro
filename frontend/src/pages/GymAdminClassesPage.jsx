@@ -4,6 +4,7 @@ import { classesApi, disciplinesApi } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import { canManageOperational } from '../utils/roles'
 import BulkActionModal from '../components/BulkActionModal'
+import ClassEnrollmentModal from '../components/ClassEnrollmentModal'
 import ConfirmDialog from '../components/ConfirmDialog'
 import ConfirmWithReasonDialog from '../components/ConfirmWithReasonDialog'
 import DashboardHeader from '../components/DashboardHeader'
@@ -61,6 +62,10 @@ function isVirtualClass(row) {
   return String(row?.id || '').startsWith('virtual:')
 }
 
+function canManageEnrollments(row) {
+  return !isVirtualClass(row) && row?.status !== 'cancelled'
+}
+
 export default function GymAdminClassesPage() {
   const { user } = useAuth()
   const canManage = canManageOperational(user?.role)
@@ -71,6 +76,8 @@ export default function GymAdminClassesPage() {
   const [deleting, setDeleting] = useState(null)
   const [singleAction, setSingleAction] = useState(null)
   const [reactivating, setReactivating] = useState(null)
+  const [enrollmentClass, setEnrollmentClass] = useState(null)
+  const [enrollmentInitialView, setEnrollmentInitialView] = useState('enroll')
   const [selectedIds, setSelectedIds] = useState([])
   const [bulkModalOpen, setBulkModalOpen] = useState(false)
   const [working, setWorking] = useState(false)
@@ -173,6 +180,16 @@ export default function GymAdminClassesPage() {
       return
     }
     setSingleAction({ gymClass, actionName })
+  }
+
+  const openEnrollmentModal = (gymClass, initialView = 'enroll') => {
+    if (!canManageEnrollments(gymClass)) {
+      setError('No puedes modificar inscripciones en una clase cancelada o proyectada.')
+      return
+    }
+    setError('')
+    setEnrollmentClass(gymClass)
+    setEnrollmentInitialView(initialView)
   }
 
   const closeSingleClass = async (comment) => {
@@ -279,8 +296,25 @@ export default function GymAdminClassesPage() {
           const canClose = !['completed', 'cancelled', 'completed_early'].includes(row.status)
           const canReopen = row.status === 'cancelled'
           const isVirtual = isVirtualClass(row)
+          const enrollmentDisabled = !canManageEnrollments(row)
           return canManage ? (
             <>
+              <button
+                type="button"
+                disabled={enrollmentDisabled || working}
+                onClick={() => openEnrollmentModal(row, 'enroll')}
+                className="w-full rounded-lg border border-brand-blue/60 px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue disabled:opacity-60"
+              >
+                Inscribir alumnos
+              </button>
+              <button
+                type="button"
+                disabled={enrollmentDisabled || working}
+                onClick={() => openEnrollmentModal(row, 'enrolled')}
+                className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue disabled:opacity-60"
+              >
+                Ver inscritos
+              </button>
               {isVirtual ? (
                 <button
                   type="button"
@@ -338,6 +372,7 @@ export default function GymAdminClassesPage() {
           const canClose = !['completed', 'cancelled', 'completed_early'].includes(row.status)
           const canReopen = row.status === 'cancelled'
           const isVirtual = isVirtualClass(row)
+          const enrollmentDisabled = !canManageEnrollments(row)
           return (
             <>
               {isVirtual ? (
@@ -358,6 +393,22 @@ export default function GymAdminClassesPage() {
               )}
               {canManage ? (
                 <>
+                  <button
+                    type="button"
+                    disabled={enrollmentDisabled || working}
+                    onClick={() => openEnrollmentModal(row, 'enroll')}
+                    className="w-full rounded-lg border border-brand-blue/60 px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue disabled:opacity-60"
+                  >
+                    Inscribir alumnos
+                  </button>
+                  <button
+                    type="button"
+                    disabled={enrollmentDisabled || working}
+                    onClick={() => openEnrollmentModal(row, 'enrolled')}
+                    className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue disabled:opacity-60"
+                  >
+                    Ver inscritos
+                  </button>
                   {isVirtual ? (
                     <button
                       type="button"
@@ -562,6 +613,14 @@ export default function GymAdminClassesPage() {
           }
         }}
         onConfirm={reactivateClass}
+      />
+
+      <ClassEnrollmentModal
+        open={Boolean(enrollmentClass)}
+        gymClass={enrollmentClass}
+        initialView={enrollmentInitialView}
+        onClose={() => setEnrollmentClass(null)}
+        onChanged={loadData}
       />
     </div>
   )

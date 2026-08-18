@@ -2,9 +2,11 @@ import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useParams } from 'react-router-dom'
 import { classesApi } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
+import ClassEnrollmentModal from '../components/ClassEnrollmentModal'
 import DashboardHeader from '../components/DashboardHeader'
 import ValueBadge from '../components/ui/ValueBadge'
 import { firstApiError } from '../utils/format'
+import { canManageOperational } from '../utils/roles'
 import { formatDateTime } from './teacherClasses.helpers'
 
 const ATTENDANCE_EDIT_GRACE_MINUTES = 20
@@ -37,6 +39,7 @@ export default function ClassAttendancePage() {
   const [messages, setMessages] = useState({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [enrollmentModalOpen, setEnrollmentModalOpen] = useState(false)
 
   const isTeacherRoute = location.pathname.startsWith('/teacher/')
   const back = isTeacherRoute
@@ -71,6 +74,7 @@ export default function ClassAttendancePage() {
   }, [id])
 
   const canToggle = canToggleAttendance(user, gymClass)
+  const canManageEnrollments = canManageOperational(user?.role) && gymClass?.status !== 'cancelled'
   const presentCount = useMemo(
     () => students.filter((student) => attendanceMap[student.student_id] === 'present').length,
     [attendanceMap, students],
@@ -122,6 +126,17 @@ export default function ClassAttendancePage() {
             : 'Cargando clase...'
         }
         back={back}
+        extra={
+          canManageEnrollments ? (
+            <button
+              type="button"
+              onClick={() => setEnrollmentModalOpen(true)}
+              className="btn-primary"
+            >
+              Inscribir alumnos
+            </button>
+          ) : null
+        }
       />
 
       {error ? <p className="rounded-lg border border-brand-red/50 bg-brand-red/10 px-3 py-2 text-sm text-red-200">{error}</p> : null}
@@ -198,6 +213,14 @@ export default function ClassAttendancePage() {
           )
         })}
       </section>
+
+      <ClassEnrollmentModal
+        open={enrollmentModalOpen}
+        gymClass={gymClass}
+        initialView="enroll"
+        onClose={() => setEnrollmentModalOpen(false)}
+        onChanged={loadData}
+      />
     </div>
   )
 }
