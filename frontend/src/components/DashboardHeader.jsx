@@ -9,6 +9,7 @@ export default function DashboardHeader({ title, subtitle, extra, back }) {
           {back ? (
             <Link
               to={back.to}
+              state={back.state}
               aria-label={back.label || 'Volver'}
               className="mb-2 inline-flex min-h-9 items-center gap-1.5 rounded-lg text-sm font-medium text-brand-muted transition hover:text-brand-orange"
             >

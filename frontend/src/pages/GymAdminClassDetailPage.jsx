@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useLocation, useParams } from 'react-router-dom'
 import { classesApi, enrollmentsApi, usersApi } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import ConfirmDialog from '../components/ConfirmDialog'
@@ -42,6 +42,8 @@ function substitutionSourceLabel(source) {
 
 export default function GymAdminClassDetailPage() {
   const { id } = useParams()
+  const location = useLocation()
+  const backTo = location.state?.classListBackTo
   const { user } = useAuth()
   const canManage = canManageOperational(user?.role)
   const [gymClass, setGymClass] = useState(null)
@@ -249,15 +251,15 @@ export default function GymAdminClassDetailPage() {
       <DashboardHeader
         title="Detalle de clase"
         subtitle={gymClass ? `${gymClass.name} · ${gymClass.branch_name}` : 'Cargando clase...'}
-        back={{ to: '/gym-admin/classes', label: 'Clases' }}
+        back={{ to: backTo?.pathname ? `${backTo.pathname}${backTo.search || ''}` : '/gym-admin/classes', label: 'Volver', state: location.state }}
         extra={
           canManage ? (
             <div className="flex gap-2">
               <button type="button" onClick={() => setModalOpen(true)} className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white">
                 Inscribir alumno
               </button>
-              <Link to={`/gym-admin/classes/${id}/edit`} className="rounded-xl border border-brand-line px-4 py-2 text-sm font-semibold text-brand-muted">
-                Editar clase
+              <Link to={`/gym-admin/classes/${id}/edit`} state={location.state} className="rounded-xl border border-brand-line px-4 py-2 text-sm font-semibold text-brand-muted">
+                Editar
               </Link>
             </div>
           ) : null
@@ -320,19 +322,11 @@ export default function GymAdminClassDetailPage() {
           <button
             type="button"
             disabled={attendanceSaving || activeEnrollments.length === 0}
-            className="hidden"
-            aria-hidden="true"
+            onClick={() => setAttendanceOpen(true)}
+            className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
           >
             Tomar asistencia
           </button>
-          <Link
-            to={`/gym-admin/classes/${id}/attendance`}
-            className={`rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white ${
-              activeEnrollments.length === 0 ? 'pointer-events-none opacity-60' : ''
-            }`}
-          >
-            Tomar asistencia
-          </Link>
         </div>
         <p className="mt-2 text-sm text-brand-muted">
           {activeEnrollments.length > 0

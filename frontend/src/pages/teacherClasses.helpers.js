@@ -85,6 +85,19 @@ export function sortClassesByStatusThenTime(classes, { dateKey = 'start_datetime
   })
 }
 
+export function sortClassesByStartTime(classes, { dateKey = 'start_datetime' } = {}) {
+  return [...classes].sort((left, right) => {
+    const leftTime = Date.parse(left[dateKey])
+    const rightTime = Date.parse(right[dateKey])
+    const safeLeftTime = Number.isNaN(leftTime) ? Number.MAX_SAFE_INTEGER : leftTime
+    const safeRightTime = Number.isNaN(rightTime) ? Number.MAX_SAFE_INTEGER : rightTime
+    if (safeLeftTime !== safeRightTime) {
+      return safeLeftTime - safeRightTime
+    }
+    return String(left.id || '').localeCompare(String(right.id || ''), 'es')
+  })
+}
+
 export function extractFilterOptions(classes) {
   const disciplines = new Set()
 

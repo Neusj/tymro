@@ -84,7 +84,7 @@ function compareSort(a, b) {
 //  - first column -> title
 //  - status/kind-like columns -> meta chip next to the title
 //  - the next two columns -> labeled secondary lines
-//  - everything else -> only inside "Ver detalle"
+//  - everything else -> only inside "Detalle"
 function resolveMobileZone(column, index) {
   if (column.mobile) {
     return column.mobile
@@ -406,7 +406,7 @@ export default function DataTable({
               const primaryAction = actionColumn?.mobilePrimary?.(row)
               const primaryReplacesDetail = Boolean(primaryAction && actionColumn?.mobilePrimaryReplacesDetail)
               const mobileDetailAction = actionColumn?.mobileDetailAction
-              const mobileDetailLabel = actionColumn?.mobileDetailLabel || 'Ver detalle'
+              const mobileDetailLabel = actionColumn?.mobileDetailLabel || 'Detalle'
               const mobileMenuActions = actionColumn?.mobileActionsRender?.(row) ?? renderMenuActions(row)
               return (
                 <article
@@ -472,7 +472,7 @@ export default function DataTable({
                               onClick={() => setSelectedDetailRow(row)}
                               className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue"
                             >
-                              Ver detalle
+                              {mobileDetailLabel}
                             </button>
                           ) : null}
                           {mobileMenuActions}

@@ -1,5 +1,5 @@
-﻿import { useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+﻿import { useEffect, useMemo, useRef, useState } from 'react'
+import { Link, useLocation } from 'react-router-dom'
 import { classesApi, enrollmentsApi } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import BulkActionModal from '../components/BulkActionModal'
@@ -20,6 +20,7 @@ import {
   canOperateClass,
   extractFilterOptions,
   formatDateTime,
+  sortClassesByStartTime,
   sortClassesByStatusThenTime,
   ALL_STATUS_OPTIONS,
   HISTORY_STATUS_OPTIONS,
@@ -85,16 +86,19 @@ function PlanStatusBadge({ student }) {
 }
 
 export default function TeacherClassesPage({ mode = 'upcoming' }) {
+  const location = useLocation()
   const { user } = useAuth()
+  const initialClassListState = location.state?.classListState || {}
+  const didInitializeMode = useRef(false)
   const [classes, setClasses] = useState([])
   const [coverableClasses, setCoverableClasses] = useState([])
-  const [selectedDate, setSelectedDate] = useState(todayIsoDate())
+  const [selectedDate, setSelectedDate] = useState(() => initialClassListState.selectedDate || todayIsoDate())
   const [loading, setLoading] = useState(true)
   const [working, setWorking] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
 
-  const [filters, setFilters] = useState(initialFilters)
+  const [filters, setFilters] = useState(() => initialClassListState.filters || initialFilters)
   const [selectedIds, setSelectedIds] = useState([])
   const [bulkModalOpen, setBulkModalOpen] = useState(false)
   const [claimingClass, setClaimingClass] = useState(null)
@@ -196,10 +200,18 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
   useEffect(() => {
     setError('')
     setNotice('')
-    setFilters(initialFilters)
     setSelectedIds([])
     loadData()
   }, [mode, listParams, selectedDate])
+
+  useEffect(() => {
+    if (!didInitializeMode.current) {
+      didInitializeMode.current = true
+      return
+    }
+    setFilters(initialFilters)
+    setSelectedIds([])
+  }, [mode])
 
   const sourceClasses = useMemo(
     () => (mode === 'coverable'
@@ -208,8 +220,15 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
     [classes, coverableClasses, mode],
   )
   const { disciplineOptions } = useMemo(() => extractFilterOptions(sourceClasses), [sourceClasses])
-  const filteredClasses = useMemo(() => sortClassesByStatusThenTime(applyTeacherClassFilters(sourceClasses, filters), { descendingTime: mode === 'history' }), [sourceClasses, filters, mode])
+  const filteredClasses = useMemo(() => {
+    const filtered = applyTeacherClassFilters(sourceClasses, filters)
+    return mode === 'all' ? sortClassesByStatusThenTime(filtered) : sortClassesByStartTime(filtered)
+  }, [sourceClasses, filters, mode])
   const kpis = useMemo(() => calculateTeacherKpis(filteredClasses, mode), [filteredClasses, mode])
+  const classListRouteState = useMemo(() => ({
+    classListState: { selectedDate, filters },
+    classListBackTo: { pathname: location.pathname, search: location.search },
+  }), [filters, location.pathname, location.search, selectedDate])
 
   useEffect(() => {
     const filteredIds = new Set(filteredClasses.map((item) => item.id))
@@ -540,6 +559,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
           ) : (
             <Link
               to={`/teacher/classes/${row.id}/attendance`}
+              state={classListRouteState}
               className="block rounded-lg border border-brand-blue/70 bg-brand-blue/15 px-3 py-2 text-center text-xs font-semibold text-brand-white transition hover:border-brand-blue"
             >
               Asistencia
@@ -671,6 +691,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
               ) : (
                 <Link
                   to={`/teacher/classes/${row.id}/attendance`}
+                  state={classListRouteState}
                   className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue"
                 >
                   {mode === 'history' ? 'Ver asistencia' : 'Tomar asistencia'}
@@ -767,7 +788,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
     ]
 
     return base
-  }, [mode, working, user?.id])
+  }, [classListRouteState, mode, working, user?.id])
 
   const coverableColumns = useMemo(
     () => [

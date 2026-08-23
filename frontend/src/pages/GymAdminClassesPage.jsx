@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import { classesApi, disciplinesApi } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import { canManageOperational } from '../utils/roles'
@@ -14,7 +14,7 @@ import FilterPanel from '../components/FilterPanel'
 import KpiStrip from '../components/KpiStrip'
 import DataTable from '../components/ui/DataTable'
 import ValueBadge from '../components/ui/ValueBadge'
-import { sortClassesByStatusThenTime } from './teacherClasses.helpers'
+import { sortClassesByStartTime } from './teacherClasses.helpers'
 
 function formatDateTime(value) {
   if (!value) {
@@ -67,10 +67,12 @@ function canManageEnrollments(row) {
 }
 
 export default function GymAdminClassesPage({ embedded = false } = {}) {
+  const location = useLocation()
   const { user } = useAuth()
+  const initialClassListState = location.state?.classListState || {}
   const canManage = canManageOperational(user?.role)
   const [classes, setClasses] = useState([])
-  const [selectedDate, setSelectedDate] = useState(todayIsoDate())
+  const [selectedDate, setSelectedDate] = useState(() => initialClassListState.selectedDate || todayIsoDate())
   const [disciplines, setDisciplines] = useState([])
   const [loading, setLoading] = useState(true)
   const [deleting, setDeleting] = useState(null)
@@ -82,9 +84,9 @@ export default function GymAdminClassesPage({ embedded = false } = {}) {
   const [bulkModalOpen, setBulkModalOpen] = useState(false)
   const [working, setWorking] = useState(false)
   const [error, setError] = useState('')
-  const [activeStatus, setActiveStatus] = useState('')
-  const [activeDiscipline, setActiveDiscipline] = useState('')
-  const [activeSubstitute, setActiveSubstitute] = useState('')
+  const [activeStatus, setActiveStatus] = useState(() => initialClassListState.activeStatus || '')
+  const [activeDiscipline, setActiveDiscipline] = useState(() => initialClassListState.activeDiscipline || '')
+  const [activeSubstitute, setActiveSubstitute] = useState(() => initialClassListState.activeSubstitute || '')
 
   const disciplineOptions = useMemo(
     () => [
@@ -129,7 +131,11 @@ export default function GymAdminClassesPage({ embedded = false } = {}) {
     loadData()
   }, [filtersParams, selectedDate])
 
-  const displayedClasses = useMemo(() => sortClassesByStatusThenTime(classes), [classes])
+  const displayedClasses = useMemo(() => sortClassesByStartTime(classes), [classes])
+  const classListRouteState = useMemo(() => ({
+    classListState: { selectedDate, activeStatus, activeDiscipline, activeSubstitute },
+    classListBackTo: { pathname: location.pathname, search: location.search },
+  }), [activeDiscipline, activeStatus, activeSubstitute, location.pathname, location.search, selectedDate])
 
   useEffect(() => {
     const visibleIds = new Set(displayedClasses.map((item) => item.id))
@@ -287,6 +293,7 @@ export default function GymAdminClassesPage({ embedded = false } = {}) {
           ) : (
             <Link
               to={`/gym-admin/classes/${row.id}/attendance`}
+              state={classListRouteState}
               className="block rounded-lg border border-brand-blue/70 bg-brand-blue/15 px-3 py-2 text-center text-xs font-semibold text-brand-white transition hover:border-brand-blue"
             >
               Asistencia
@@ -326,6 +333,7 @@ export default function GymAdminClassesPage({ embedded = false } = {}) {
               ) : (
                 <Link
                   to={`/gym-admin/classes/${row.id}/edit`}
+                  state={classListRouteState}
                   className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue"
                 >
                   Editar
@@ -386,6 +394,7 @@ export default function GymAdminClassesPage({ embedded = false } = {}) {
               ) : (
                 <Link
                   to={`/gym-admin/classes/${row.id}`}
+                  state={classListRouteState}
                   className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue"
                 >
                   Detalle
@@ -420,6 +429,7 @@ export default function GymAdminClassesPage({ embedded = false } = {}) {
                   ) : (
                     <Link
                       to={`/gym-admin/classes/${row.id}/edit`}
+                      state={classListRouteState}
                       className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue"
                     >
                       Editar
@@ -466,7 +476,7 @@ export default function GymAdminClassesPage({ embedded = false } = {}) {
         },
       },
     ],
-    [working, canManage],
+    [classListRouteState, working, canManage],
   )
 
   const totals = useMemo(() => {
@@ -547,6 +557,7 @@ export default function GymAdminClassesPage({ embedded = false } = {}) {
           selectAllScope="filtered"
           selectedRowIds={selectedIds}
           onSelectedRowIdsChange={setSelectedIds}
+          disablePagination
         />
       </section>
 

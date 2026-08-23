@@ -41,9 +41,10 @@ export default function ClassAttendancePage() {
   const [enrollmentModalOpen, setEnrollmentModalOpen] = useState(false)
 
   const isTeacherRoute = location.pathname.startsWith('/teacher/')
+  const backTo = location.state?.classListBackTo
   const back = isTeacherRoute
-    ? { to: '/teacher/classes/upcoming', label: 'Mis clases' }
-    : { to: '/gym-admin/classes', label: 'Clases' }
+    ? { to: backTo?.pathname ? `${backTo.pathname}${backTo.search || ''}` : '/teacher/classes/upcoming', label: 'Volver', state: location.state }
+    : { to: backTo?.pathname ? `${backTo.pathname}${backTo.search || ''}` : '/gym-admin/classes', label: 'Volver', state: location.state }
 
   const loadData = async () => {
     setLoading(true)

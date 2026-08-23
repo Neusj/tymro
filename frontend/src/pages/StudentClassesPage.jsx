@@ -23,7 +23,7 @@ import {
   formatDateTime,
   formatTimeRange,
 } from './studentClasses.helpers'
-import { sortClassesByStatusThenTime } from './teacherClasses.helpers'
+import { sortClassesByStartTime } from './teacherClasses.helpers'
 
 const initialClassFilters = {
   teacher: '',
@@ -165,7 +165,7 @@ export default function StudentClassesPage({ mode = 'available' }) {
     try {
       const [scheduledClasses, completedClasses, myReservations, myRecurring, myMemberships] = await Promise.allSettled([
         classesApi.byDate(date, { status_in: 'scheduled,in_progress,cancelled', ordering: 'start_datetime' }),
-        classesApi.byDate(date, { mine: true, status_in: 'completed,completed_early', ordering: '-start_datetime' }),
+        classesApi.byDate(date, { mine: true, status_in: 'completed,completed_early', ordering: 'start_datetime' }),
         enrollmentsApi.my(),
         recurringEnrollmentsApi.my(),
         getMyMemberships(),
@@ -241,12 +241,12 @@ export default function StudentClassesPage({ mode = 'available' }) {
   const reservationFilterOptions = useMemo(() => extractStudentReservationOptions(reservations), [reservations])
   const historyFilterOptions = useMemo(() => extractStudentClassOptions(historyClasses), [historyClasses])
 
-  const filteredAvailable = useMemo(() => sortClassesByStatusThenTime(applyStudentClassFilters(availableClasses, classFilters)), [availableClasses, classFilters])
+  const filteredAvailable = useMemo(() => sortClassesByStartTime(applyStudentClassFilters(availableClasses, classFilters)), [availableClasses, classFilters])
   const filteredReservations = useMemo(
-    () => sortClassesByStatusThenTime(applyStudentReservationFilters(reservations, reservationFilters), { dateKey: 'class_start', statusKey: 'class_status' }),
+    () => sortClassesByStartTime(applyStudentReservationFilters(reservations, reservationFilters), { dateKey: 'class_start' }),
     [reservations, reservationFilters],
   )
-  const filteredHistory = useMemo(() => sortClassesByStatusThenTime(applyStudentClassFilters(historyClasses, historyFilters), { descendingTime: true }), [historyClasses, historyFilters])
+  const filteredHistory = useMemo(() => sortClassesByStartTime(applyStudentClassFilters(historyClasses, historyFilters)), [historyClasses, historyFilters])
   const filteredAvailableForBooking = useMemo(
     () => filteredAvailable.filter((item) => !activeReservationByClass[item.id]),
     [activeReservationByClass, filteredAvailable],
@@ -637,7 +637,7 @@ export default function StudentClassesPage({ mode = 'available' }) {
         key: 'actions',
         label: 'Acciones',
         sortable: false,
-        // Compact contextual button shown directly on the mobile card; full options stay in "Ver detalle".
+        // Compact contextual button shown directly on the mobile card; full options stay in "Detalle".
         mobilePrimary: (row) => {
           const activeReservation = activeReservationByClass[row.id]
           if (activeReservation) {

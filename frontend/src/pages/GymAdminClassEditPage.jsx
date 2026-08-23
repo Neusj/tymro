@@ -1,5 +1,5 @@
 ﻿import { useEffect, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { branchesApi, classTypesApi, classesApi, disciplinesApi, usersApi } from '../api/client'
 import { teacherEligibleRoleParam } from '../utils/roles'
 import DashboardHeader from '../components/DashboardHeader'
@@ -64,6 +64,7 @@ function parseApiError(detail) {
 export default function GymAdminClassEditPage() {
   const { id } = useParams()
   const navigate = useNavigate()
+  const location = useLocation()
   const [form, setForm] = useState(initialForm)
   const [branches, setBranches] = useState([])
   const [teachers, setTeachers] = useState([])
@@ -131,7 +132,7 @@ export default function GymAdminClassEditPage() {
         discipline: Number(form.discipline),
         capacity: Number(form.capacity),
       })
-      navigate(`/gym-admin/classes/${id}`)
+      navigate(`/gym-admin/classes/${id}`, { state: location.state })
     } catch (apiError) {
       setError(parseApiError(apiError?.response?.data))
     } finally {
@@ -144,10 +145,10 @@ export default function GymAdminClassEditPage() {
       <DashboardHeader
         title="Gym Admin · Editar Clase"
         subtitle="Actualiza profesor, horario, tipo y cupos de la clase."
-        back={{ to: `/gym-admin/classes/${id}`, label: 'Detalle' }}
+        back={{ to: `/gym-admin/classes/${id}`, label: 'Volver', state: location.state }}
         extra={
-          <Link to={`/gym-admin/classes/${id}`} className="rounded-xl border border-brand-line px-4 py-2 text-sm font-semibold text-brand-muted">
-            Ver detalle
+          <Link to={`/gym-admin/classes/${id}`} state={location.state} className="rounded-xl border border-brand-line px-4 py-2 text-sm font-semibold text-brand-muted">
+            Detalle
           </Link>
         }
       />

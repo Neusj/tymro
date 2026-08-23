@@ -2809,12 +2809,8 @@ class GymClassViewSet(ModelViewSet):
             if template.id not in materialized_template_ids
         ]
 
-        status_priority = {
-            GymClass.Status.IN_PROGRESS: 0,
-            GymClass.Status.SCHEDULED: 1,
-        }
         combined = [*real_data, *virtual_data]
-        combined.sort(key=lambda item: (status_priority.get(item.get('status'), 2), item['start_datetime'], str(item['id'])))
+        combined.sort(key=lambda item: (item['start_datetime'], str(item['id'])))
         return Response(combined)
 
     def _substitution_conflict_exists(self, *, teacher, gym_class):
