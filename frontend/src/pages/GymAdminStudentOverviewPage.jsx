@@ -135,7 +135,7 @@ function MembershipSummaryCard({ membership }) {
   )
 }
 
-function StudentAutocomplete({ selectedStudent, onSelect }) {
+function StudentAutocomplete({ onSelect }) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState([])
   const [loading, setLoading] = useState(false)
@@ -220,13 +220,6 @@ function StudentAutocomplete({ selectedStudent, onSelect }) {
           autoComplete="off"
         />
       </label>
-      {selectedStudent ? (
-        <div className="rounded-lg border border-brand-line bg-black/20 px-3 py-2 text-xs">
-          <span className="text-brand-muted">Seleccionado: </span>
-          <span className="font-semibold text-brand-white">{studentName(selectedStudent)}</span>
-          {selectedStudent.email ? <span className="text-brand-muted"> - {selectedStudent.email}</span> : null}
-        </div>
-      ) : null}
       {open && query ? (
         <div className="overflow-hidden rounded-xl border border-brand-line bg-brand-panel shadow-float">
           {!canSearch ? (
@@ -561,16 +554,16 @@ export default function GymAdminStudentOverviewPage() {
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <h1 className="truncate text-xl font-semibold text-brand-white">{data?.student?.name || 'Elegir alumno'}</h1>
+              <h1 className="truncate text-xl font-semibold text-brand-white">{selectedStudent ? studentName(selectedStudent) : 'Elegir alumno'}</h1>
               {data ? (
                 <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${data.student.is_active ? 'border-emerald-500/40 text-emerald-200' : 'border-brand-red/40 text-red-200'}`}>
                   {data.student.is_active ? 'Activo' : 'Inactivo'}
                 </span>
               ) : null}
             </div>
-            {data ? (
+            {selectedStudent ? (
               <p className="mt-1 text-sm text-brand-muted">
-                {data.student.email || 'Sin email'}{data.student.phone ? ` - ${data.student.phone}` : ''} - {data.student.branch_name || 'Sin sucursal'}
+                {selectedStudent.email || 'Sin email'}{selectedStudent.phone ? ` - ${selectedStudent.phone}` : ''} - {selectedStudent.branch_name || 'Sin sucursal'}
               </p>
             ) : (
               <p className="mt-1 text-sm text-brand-muted">Selecciona un alumno para cargar su resumen.</p>
@@ -578,7 +571,7 @@ export default function GymAdminStudentOverviewPage() {
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2 lg:w-[520px]">
-            <StudentAutocomplete selectedStudent={selectedStudent} onSelect={selectStudent} />
+            <StudentAutocomplete onSelect={selectStudent} />
 
             <label className="block space-y-1 text-sm">
               <span>Periodo</span>
