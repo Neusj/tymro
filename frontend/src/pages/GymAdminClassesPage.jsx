@@ -483,16 +483,12 @@ export default function GymAdminClassesPage() {
   return (
     <div className="space-y-6">
       <DashboardHeader
-        title="Gym Admin · Clases"
-        subtitle="Gestion operativa de clases con filtros, KPIs y acciones seguras."
+        title="Gym Admin · Clases generadas"
+        subtitle="Revisión operativa de instancias, asistencia, inscritos y acciones administrativas."
         extra={
           canManage ? (
-            // TODO unificacion: desvio temporal. "Crear clase" ahora lleva a la pantalla de series
-            // recurrentes (/gym-admin/class-templates), que es la unica que soporta multi-dia. La
-            // pantalla puntual (/gym-admin/classes/create) queda inerte pero viva: se decide en el
-            // rediseno si se elimina o se fusiona con la de series.
             <Link to="/gym-admin/class-templates" className="btn-primary">
-              Crear clase
+              Gestión de clases
             </Link>
           ) : null
         }

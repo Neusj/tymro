@@ -11,7 +11,7 @@ const navByRole = {
     { to: '/gym-admin/dashboard', label: 'Dashboard' },
     { to: '/gym-admin/users', label: 'Usuarios' },
     { to: '/gym-admin/branches', label: 'Sucursales' },
-    { to: '/gym-admin/classes', label: 'Clases' },
+    { to: '/gym-admin/class-templates', label: 'Gestión de clases' },
     { to: '/gym-admin/class-types', label: 'Tipos' },
   ],
   teacher: [

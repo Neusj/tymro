@@ -163,11 +163,9 @@ const navByRole = {
       label: 'Clases',
       icon: <ClassesIcon />,
       children: [
-        // TODO: revisar en detalle la utilidad de las vistas indice de clases antes de volver a mostrarlas.
-        { to: '/gym-admin/classes', label: 'Todas las clases' },
-        { to: '/teacher/classes/upcoming', label: 'Mis clases como profesor' },
-        { to: '/teacher/classes/coverable', label: 'Clases para cubrir' },
         { to: '/gym-admin/class-templates', label: 'Gestión de clases' },
+        { to: '/teacher/classes/upcoming', label: 'Mis clases' },
+        { to: '/teacher/classes/coverable', label: 'Clases por cubrir' },
         { to: '/gym-admin/holidays', label: 'Festivos' },
         { to: '/gym-admin/class-types', label: 'Tipos de clase' },
         { to: '/gym-admin/disciplines', label: 'Disciplinas' },
@@ -224,14 +222,11 @@ const navByRole = {
     { type: 'item', to: '/teacher/dashboard', label: 'Dashboard', icon: <DashboardIcon /> },
     {
       type: 'group',
-      label: 'Mis clases',
+      label: 'Clases',
       icon: <ClassesIcon />,
       children: [
-        // TODO: revisar en detalle la utilidad de esta vista indice antes de volver a mostrarla.
-        // { to: '/teacher/classes/all', label: 'Ver clases' },
-        { to: '/teacher/classes/upcoming', label: 'Próximas clases' },
-        { to: '/teacher/classes/coverable', label: 'Clases para cubrir' },
-        { to: '/teacher/classes/history', label: 'Clases realizadas' },
+        { to: '/teacher/classes/upcoming', label: 'Mis clases' },
+        { to: '/teacher/classes/coverable', label: 'Clases por cubrir' },
       ],
     },
   ],
@@ -270,8 +265,6 @@ const navByRole = {
       label: 'Clases',
       icon: <ClassesIcon />,
       children: [
-        // TODO: revisar en detalle la utilidad de esta vista indice antes de volver a mostrarla.
-        // { to: '/gym-admin/classes', label: 'Ver clases' },
         { to: '/gym-admin/class-templates', label: 'Gestión de clases' },
         { to: '/gym-admin/holidays', label: 'Festivos' },
         { to: '/gym-admin/class-types', label: 'Tipos de clase' },
@@ -286,8 +279,6 @@ const navByRole = {
       label: 'Clases',
       icon: <ClassesIcon />,
       children: [
-        // TODO: revisar en detalle la utilidad de esta vista indice antes de volver a mostrarla.
-        // { to: '/gym-admin/classes', label: 'Ver clases' },
         { to: '/gym-admin/holidays', label: 'Festivos' },
         { to: '/gym-admin/class-types', label: 'Tipos de clase' },
         { to: '/gym-admin/disciplines', label: 'Disciplinas' },

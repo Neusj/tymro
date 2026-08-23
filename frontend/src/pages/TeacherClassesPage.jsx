@@ -92,12 +92,14 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
   const [loading, setLoading] = useState(true)
   const [working, setWorking] = useState(false)
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
 
   const [filters, setFilters] = useState(initialFilters)
   const [selectedIds, setSelectedIds] = useState([])
   const [bulkModalOpen, setBulkModalOpen] = useState(false)
   const [claimingClass, setClaimingClass] = useState(null)
   const [releasingClass, setReleasingClass] = useState(null)
+  const [detailClass, setDetailClass] = useState(null)
   const [classReasonAction, setClassReasonAction] = useState(null)
   const [suspendingClass, setSuspendingClass] = useState(null)
   const [reactivatingClass, setReactivatingClass] = useState(null)
@@ -161,8 +163,10 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
     }
     setWorking(true)
     setError('')
+    setNotice('')
     try {
       await classesApi.claimSubstitution(claimingClass.id)
+      setNotice(`${claimingClass.name || 'La clase'} fue tomada como suplencia y ahora aparece en Mis clases.`)
       setClaimingClass(null)
       await loadData()
     } catch (apiError) {
@@ -178,8 +182,10 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
     }
     setWorking(true)
     setError('')
+    setNotice('')
     try {
       await classesApi.releaseSubstitution(releasingClass.id)
+      setNotice(`${releasingClass.name || 'La clase'} volvio a quedar disponible para cubrir.`)
       setReleasingClass(null)
       await loadData()
     } catch (apiError) {
@@ -191,12 +197,18 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
 
   useEffect(() => {
     setError('')
+    setNotice('')
     setFilters(initialFilters)
     setSelectedIds([])
     loadData()
   }, [mode, listParams, selectedDate])
 
-  const sourceClasses = mode === 'coverable' ? coverableClasses : classes
+  const sourceClasses = useMemo(
+    () => (mode === 'coverable'
+      ? coverableClasses.filter((row) => row.can_claim_substitution && !row.has_substitute)
+      : classes),
+    [classes, coverableClasses, mode],
+  )
   const { disciplineOptions } = useMemo(() => extractFilterOptions(sourceClasses), [sourceClasses])
   const filteredClasses = useMemo(() => sortClassesByStatusThenTime(applyTeacherClassFilters(sourceClasses, filters), { descendingTime: mode === 'history' }), [sourceClasses, filters, mode])
   const kpis = useMemo(() => calculateTeacherKpis(filteredClasses, mode), [filteredClasses, mode])
@@ -478,6 +490,21 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
       { key: 'discipline_name', label: 'Disciplina', render: (row) => <ValueBadge kind="discipline" value={row.discipline_name} /> },
       { key: 'class_template_name', label: 'Serie', render: (row) => row.class_template_name || '-' },
       {
+        key: 'teacher_assignment',
+        label: 'Rol',
+        mobile: 'meta',
+        render: (row) =>
+          row.has_substitute && String(row.substitute_teacher || '') === String(user?.id || '') ? (
+            <span className="inline-flex rounded-full border border-brand-orange/50 bg-brand-orange/10 px-2 py-0.5 text-[11px] font-semibold text-brand-orange">
+              Suplencia
+            </span>
+          ) : (
+            <span className="inline-flex rounded-full border border-brand-line px-2 py-0.5 text-[11px] font-semibold text-brand-muted">
+              Titular
+            </span>
+          ),
+      },
+      {
         key: 'start_datetime',
         label: 'Inicio',
         mobile: 'secondary',
@@ -708,7 +735,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
     ]
 
     return base
-  }, [mode, working])
+  }, [mode, working, user?.id])
 
   const coverableColumns = useMemo(
     () => [
@@ -737,7 +764,17 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
         key: 'actions',
         label: 'Acciones',
         sortable: false,
-        hideActionsInDetail: true,
+        mobilePrimary: (row) =>
+          row.can_claim_substitution ? (
+            <button
+              type="button"
+              disabled={working}
+              onClick={() => setClaimingClass(row)}
+              className="rounded-lg border border-brand-orange bg-brand-orange px-3 py-2 text-center text-xs font-semibold text-white transition hover:border-brand-orange/80 hover:bg-brand-orange/90 disabled:opacity-60"
+            >
+              Cubrir esta clase
+            </button>
+          ) : null,
         render: (row) => {
           const canReleaseSubstitution =
             row.can_release_substitution ||
@@ -748,14 +785,23 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
             )
           if (row.can_claim_substitution) {
             return (
-              <button
-                type="button"
-                disabled={working}
-                onClick={() => setClaimingClass(row)}
-                className="w-full rounded-lg border border-brand-orange/60 px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-orange disabled:opacity-60"
-              >
-                Cubrir esta clase
-              </button>
+              <>
+                <button
+                  type="button"
+                  disabled={working}
+                  onClick={() => setClaimingClass(row)}
+                  className="w-full rounded-lg border border-brand-orange bg-brand-orange px-2.5 py-2 text-left text-xs font-semibold text-white transition hover:border-brand-orange/80 hover:bg-brand-orange/90 disabled:opacity-60"
+                >
+                  Cubrir esta clase
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDetailClass(row)}
+                  className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue"
+                >
+                  Ver detalles
+                </button>
+              </>
             )
           }
           if (canReleaseSubstitution) {
@@ -779,12 +825,12 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
 
   const title =
     mode === 'coverable'
-      ? 'Teacher · Clases para cubrir'
+      ? 'Teacher · Clases por cubrir'
       : mode === 'all'
         ? 'Teacher · Mis clases'
         : mode === 'history'
           ? 'Teacher · Clases realizadas'
-          : 'Teacher · Proximas clases'
+          : 'Teacher · Mis clases'
   const subtitle =
     mode === 'coverable'
       ? 'Clases disponibles para tomar como suplente en el dia seleccionado.'
@@ -792,7 +838,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
         ? 'Vista completa de tus clases con filtros, asistencia, inscripciones y acciones operativas.'
         : mode === 'history'
           ? 'Historico de clases para revisar asistentes y resultados finales.'
-          : 'Operacion diaria de tus clases: inscritos, ocupacion y acciones de suspension/cancelacion.'
+          : 'Clases asignadas a ti y clases que aceptaste cubrir como suplente.'
 
   const filteredEnrollStudents = enrollStudents.filter((student) => {
     const query = enrollSearch.trim().toLowerCase()
@@ -819,6 +865,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
       <DashboardHeader title={title} subtitle={subtitle} />
 
       {error ? <p className="rounded-lg border border-brand-red/50 bg-brand-red/10 px-3 py-2 text-sm text-red-200">{error}</p> : null}
+      {notice ? <p className="rounded-lg border border-brand-blue/40 bg-brand-blue/10 px-3 py-2 text-sm text-brand-white">{notice}</p> : null}
 
       {mode === 'all' ? null : <DaySelector value={selectedDate} onChange={setSelectedDate} />}
 
@@ -858,10 +905,10 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
             {mode === 'all'
               ? 'Detalle de clases (filtrado)'
               : mode === 'coverable'
-                ? 'Clases disponibles para cubrir (filtrado)'
+                ? 'Clases por cubrir (filtrado)'
               : mode === 'history'
                 ? 'Detalle de clases realizadas (filtrado)'
-                : 'Detalle de proximas clases (filtrado)'}
+                : 'Detalle de mis clases (filtrado)'}
           </h2>
           {mode === 'upcoming' ? (
             <button
@@ -929,6 +976,30 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
         onCancel={() => setReleasingClass(null)}
         onConfirm={releaseSubstitution}
       />
+
+      <FormModal
+        open={Boolean(detailClass)}
+        title={detailClass ? `Detalles · ${detailClass.name}` : 'Detalles'}
+        onClose={() => setDetailClass(null)}
+      >
+        <div className="divide-y divide-brand-line text-sm">
+          {[
+            ['Profesor titular', detailClass?.teacher_name],
+            ['Sucursal', detailClass?.branch_name],
+            ['Disciplina', detailClass?.discipline_name],
+            ['Tipo', detailClass?.class_type_name],
+            ['Inicio', formatDateTime(detailClass?.start_datetime)],
+            ['Termino', formatDateTime(detailClass?.end_datetime)],
+            ['Estado', detailClass?.status],
+            ['Cupos', detailClass ? `${detailClass.enrollments_count || 0}/${detailClass.capacity}` : '-'],
+          ].map(([label, value]) => (
+            <div key={label} className="flex items-start justify-between gap-4 py-2.5">
+              <p className="shrink-0 text-xs font-semibold uppercase tracking-wide text-brand-dim">{label}</p>
+              <p className="min-w-0 text-right text-brand-white">{value || '-'}</p>
+            </div>
+          ))}
+        </div>
+      </FormModal>
 
       <ConfirmWithReasonDialog
         open={Boolean(classReasonAction)}

@@ -582,7 +582,7 @@ export default function App() {
         path="/teacher"
         element={
           <ProtectedRoute allowedRoles={['teacher', 'gym_admin']}>
-            <Navigate to="/teacher/classes/all" replace />
+            <Navigate to="/teacher/classes/upcoming" replace />
           </ProtectedRoute>
         }
       />
@@ -600,7 +600,7 @@ export default function App() {
         path="/teacher/classes"
         element={
           <ProtectedRoute allowedRoles={['teacher', 'gym_admin']}>
-            <Navigate to="/teacher/classes/all" replace />
+            <Navigate to="/teacher/classes/upcoming" replace />
           </ProtectedRoute>
         }
       />
@@ -608,9 +608,7 @@ export default function App() {
         path="/teacher/classes/all"
         element={
           <ProtectedRoute allowedRoles={['teacher', 'gym_admin']}>
-            <ShellRoute>
-              <TeacherClassesPage mode="all" />
-            </ShellRoute>
+            <Navigate to="/teacher/classes/upcoming" replace />
           </ProtectedRoute>
         }
       />
@@ -658,7 +656,7 @@ export default function App() {
         path="/teacher/payments"
         element={
           <ProtectedRoute allowedRoles={['teacher']}>
-            <Navigate to="/teacher/classes/all" replace />
+            <Navigate to="/teacher/classes/upcoming" replace />
           </ProtectedRoute>
         }
       />

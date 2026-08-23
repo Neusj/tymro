@@ -196,7 +196,7 @@ export default function GymAdminDisciplinesPage() {
       <DashboardHeader
         title="Gym Admin · Disciplinas"
         subtitle="Gestiona disciplinas como BJJ, Box, etc. para métricas futuras."
-        back={{ to: '/gym-admin/classes', label: 'Clases' }}
+        back={{ to: '/gym-admin/class-templates', label: 'Gestión de clases' }}
       />
 
       {canManage ? (

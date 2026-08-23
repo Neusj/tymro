@@ -196,7 +196,7 @@ export default function GymAdminClassTypesPage() {
       <DashboardHeader
         title="Gym Admin · Tipos de Clase"
         subtitle="Gestiona tipos de clase de tu organización."
-        back={{ to: '/gym-admin/classes', label: 'Clases' }}
+        back={{ to: '/gym-admin/class-templates', label: 'Gestión de clases' }}
       />
 
       {canManage ? (

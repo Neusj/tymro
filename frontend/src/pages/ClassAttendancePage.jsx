@@ -42,7 +42,7 @@ export default function ClassAttendancePage() {
 
   const isTeacherRoute = location.pathname.startsWith('/teacher/')
   const back = isTeacherRoute
-    ? { to: '/teacher/classes/all', label: 'Clases' }
+    ? { to: '/teacher/classes/upcoming', label: 'Mis clases' }
     : { to: '/gym-admin/classes', label: 'Clases' }
 
   const loadData = async () => {

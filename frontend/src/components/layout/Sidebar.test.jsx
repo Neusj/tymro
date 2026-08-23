@@ -34,13 +34,14 @@ describe('Sidebar — menú de Reportes (gym_admin)', () => {
 })
 
 describe('Sidebar — menú de profesor', () => {
-  it('oculta "Mis pagos" y muestra la vista completa de clases', async () => {
+  it('oculta "Mis pagos" y muestra los dos flujos docentes', async () => {
     renderSidebar({ role: 'teacher' })
     const user = userEvent.setup()
 
-    await user.click(screen.getByRole('button', { name: 'Mis clases' }))
+    await user.click(screen.getByRole('button', { name: 'Clases' }))
 
-    expect(screen.getByRole('link', { name: 'Ver clases' })).toHaveAttribute('href', '/teacher/classes/all')
+    expect(screen.getByRole('link', { name: 'Mis clases' })).toHaveAttribute('href', '/teacher/classes/upcoming')
+    expect(screen.getByRole('link', { name: 'Clases por cubrir' })).toHaveAttribute('href', '/teacher/classes/coverable')
     expect(screen.queryByRole('link', { name: 'Mis pagos' })).not.toBeInTheDocument()
     expect(screen.queryByText('Mis pagos')).not.toBeInTheDocument()
   })

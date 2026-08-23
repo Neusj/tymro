@@ -158,7 +158,7 @@ export default function GymAdminHolidaysPage() {
 
   return (
     <div className="space-y-6">
-      <DashboardHeader title="Gym Admin · Festivos" subtitle="Los festivos activos bloquean generacion de clases. Puedes gestionar base del sistema y excepciones manuales." back={{ to: '/gym-admin/classes', label: 'Clases' }} />
+      <DashboardHeader title="Gym Admin · Festivos" subtitle="Los festivos activos bloquean generacion de clases. Puedes gestionar base del sistema y excepciones manuales." back={{ to: '/gym-admin/class-templates', label: 'Gestión de clases' }} />
 
       {canManage ? (
         <section ref={formSectionRef} className="card-surface p-5">

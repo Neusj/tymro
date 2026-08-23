@@ -32,6 +32,6 @@ setup('1. Login válido del profesor entra a sus clases (y guarda la sesión)', 
   }
 
   await expect(page).toHaveURL(/\/teacher\/classes\/upcoming/)
-  await expect(page.getByRole('heading', { name: 'Teacher · Proximas clases' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Teacher · Mis clases' })).toBeVisible()
   await page.context().storageState({ path: STORAGE })
 })

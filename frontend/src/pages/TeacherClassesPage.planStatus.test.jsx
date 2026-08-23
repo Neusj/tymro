@@ -1,5 +1,6 @@
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { MemoryRouter } from 'react-router-dom'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('../api/client', () => ({
@@ -84,9 +85,15 @@ afterEach(() => {
 // DataTable pinta la tabla de escritorio Y las tarjetas móviles a la vez (las alterna por
 // CSS), asi que cada celda y cada acción aparecen dos veces en el DOM.
 const shown = (text) => screen.queryAllByText(text).length
+const renderTeacherClassesPage = (mode) =>
+  render(
+    <MemoryRouter>
+      <TeacherClassesPage mode={mode} />
+    </MemoryRouter>,
+  )
 
 async function openEnrollModal() {
-  render(<TeacherClassesPage mode="upcoming" />)
+  renderTeacherClassesPage('upcoming')
   await waitFor(() => expect(shown('BJJ Fundamentos')).toBeGreaterThan(0))
   // Las acciones de fila viven detrás del engranaje de DataTable (RowActionsDropdown).
   await userEvent.click(screen.getAllByRole('button', { name: 'Abrir acciones' })[0])
@@ -147,7 +154,7 @@ describe('TeacherClassesPage — badge de plan en el roster', () => {
 
 describe('TeacherClassesPage - vista completa', () => {
   it('lista todas las clases del profesor sin filtrar por dia', async () => {
-    render(<TeacherClassesPage mode="all" />)
+    renderTeacherClassesPage('all')
 
     await waitFor(() => expect(shown('BJJ Fundamentos')).toBeGreaterThan(0))
 
@@ -161,8 +168,7 @@ describe('TeacherClassesPage - vista completa', () => {
 })
 
 describe('TeacherClassesPage — suplencias disponibles', () => {
-  it('permite quitar la suplencia tomada por el usuario desde el mismo boton de accion', async () => {
-    const user = userEvent.setup()
+  it('muestra solo clases disponibles para cubrir', async () => {
     classesApi.list.mockResolvedValue([])
     classesApi.coverable.mockResolvedValue([
       {
@@ -177,14 +183,11 @@ describe('TeacherClassesPage — suplencias disponibles', () => {
       },
     ])
 
-    render(<TeacherClassesPage mode="upcoming" />)
+    renderTeacherClassesPage('coverable')
 
-    await waitFor(() => expect(shown('Boxeo')).toBeGreaterThan(0))
-    await user.click(screen.getAllByRole('button', { name: 'Abrir acciones' })[0])
-    await user.click(await screen.findByRole('button', { name: 'Quitar suplencia' }))
-    await user.click(await screen.findByRole('button', { name: 'Quitar suplencia' }))
-
-    await waitFor(() => expect(classesApi.releaseSubstitution).toHaveBeenCalledWith(202))
+    await waitFor(() => expect(classesApi.coverable).toHaveBeenCalled())
+    expect(shown('Boxeo')).toBe(0)
+    expect(screen.queryByRole('button', { name: 'Quitar suplencia' })).not.toBeInTheDocument()
   })
 
   it('mantiene la accion de cubrir cuando la clase sigue disponible', async () => {
@@ -203,11 +206,10 @@ describe('TeacherClassesPage — suplencias disponibles', () => {
       },
     ])
 
-    render(<TeacherClassesPage mode="upcoming" />)
+    renderTeacherClassesPage('coverable')
 
     await waitFor(() => expect(shown('Kick Boxing')).toBeGreaterThan(0))
-    await user.click(screen.getAllByRole('button', { name: 'Abrir acciones' })[0])
-    await user.click(await screen.findByRole('button', { name: 'Cubrir esta clase' }))
+    await user.click(screen.getAllByRole('button', { name: 'Cubrir esta clase' })[0])
     await user.click(await screen.findByRole('button', { name: 'Cubrir clase' }))
 
     await waitFor(() => expect(classesApi.claimSubstitution).toHaveBeenCalledWith(203))
@@ -219,7 +221,7 @@ describe('TeacherClassesPage - reabrir canceladas', () => {
     const user = userEvent.setup()
     classesApi.list.mockResolvedValue([{ ...GYM_CLASS, id: 303, status: 'cancelled', enrollments_count: 0 }])
 
-    render(<TeacherClassesPage mode="upcoming" />)
+    renderTeacherClassesPage('upcoming')
 
     await waitFor(() => expect(classesApi.byDate).toHaveBeenCalledWith(expect.any(String), {
       ordering: 'start_datetime',

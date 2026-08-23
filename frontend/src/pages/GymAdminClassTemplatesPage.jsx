@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { advanceClassWindowsApi, branchesApi, classTemplatesApi, classTypesApi, disciplinesApi, usersApi } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import BulkActionModal from '../components/BulkActionModal'
 import ConfirmDialog from '../components/ConfirmDialog'
 import DashboardHeader from '../components/DashboardHeader'
+import FormModal from '../components/FormModal'
 import DataTable from '../components/ui/DataTable'
 import MultiSelectDropdown from '../components/ui/MultiSelectDropdown'
 import ValueBadge from '../components/ui/ValueBadge'
@@ -90,6 +92,7 @@ export default function GymAdminClassTemplatesPage() {
   const [workingId, setWorkingId] = useState(null)
   const [bulkWorking, setBulkWorking] = useState(false)
   const [bulkModalOpen, setBulkModalOpen] = useState(false)
+  const [formOpen, setFormOpen] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [confirmingAdvance, setConfirmingAdvance] = useState(false)
@@ -98,7 +101,6 @@ export default function GymAdminClassTemplatesPage() {
   // Marca en rojo el selector de dias tras un submit sin dias. El <select> nativo se autovalida
   // con "required"; un dropdown propio no, asi que el estado invalido es explicito.
   const [weekdaysInvalid, setWeekdaysInvalid] = useState(false)
-  const formSectionRef = useRef(null)
   const firstFieldRef = useRef(null)
 
   const loadData = async () => {
@@ -133,9 +135,24 @@ export default function GymAdminClassTemplatesPage() {
 
   const focusForm = () => {
     window.setTimeout(() => {
-      formSectionRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
-      firstFieldRef.current?.focus?.({ preventScroll: true })
+      firstFieldRef.current?.focus?.()
     }, 0)
+  }
+
+  const openCreateForm = () => {
+    setError('')
+    setNotice('')
+    resetForm()
+    setFormOpen(true)
+    focusForm()
+  }
+
+  const closeForm = () => {
+    if (saving) {
+      return
+    }
+    setFormOpen(false)
+    resetForm()
   }
 
   const startEdit = (row) => {
@@ -143,6 +160,7 @@ export default function GymAdminClassTemplatesPage() {
     setNotice('')
     setWeekdaysInvalid(false)
     setEditingId(row.id)
+    setFormOpen(true)
     setForm({
       name: row.name || '',
       description: row.description || '',
@@ -211,6 +229,7 @@ export default function GymAdminClassTemplatesPage() {
         }
       }
       resetForm()
+      setFormOpen(false)
       await loadData()
     } catch (apiError) {
       setError(firstApiError(apiError?.response?.data))
@@ -425,12 +444,35 @@ export default function GymAdminClassTemplatesPage() {
   return (
     <div className="space-y-6">
       <DashboardHeader
-        title="Gym Admin · Crear Clase"
-        subtitle="Programa una nueva clase con profesor, tipo y cupos. Se repite cada semana en los dias que elijas y las clases se generan automaticamente desde hoy."
-        back={{ to: '/gym-admin/classes', label: 'Clases' }}
+        title="Gym Admin · Gestión de clases"
+        subtitle="Administra clases programadas, generación de instancias y acciones operativas."
+        extra={
+          <div className="flex flex-wrap justify-end gap-2">
+            <button type="button" onClick={() => setConfirmingAdvance(true)} className="btn-ghost">
+              Actualizar clases
+            </button>
+            <Link to="/gym-admin/classes" className="btn-ghost">
+              Ver clases generadas
+            </Link>
+            <button type="button" onClick={openCreateForm} className="btn-primary">
+              Crear clase
+            </button>
+          </div>
+        }
       />
 
-      <section ref={formSectionRef} className="card-surface p-5 space-y-3">
+      {!formOpen && error ? <p className="rounded-lg border border-brand-red/50 bg-brand-red/10 px-3 py-2 text-sm text-red-200">{error}</p> : null}
+      {!formOpen && notice ? <p className="rounded-lg border border-brand-blue/40 bg-brand-blue/10 px-3 py-2 text-sm text-brand-white">{notice}</p> : null}
+
+      <FormModal
+        open={formOpen}
+        title={editingId ? 'Editar clase' : 'Crear clase'}
+        onClose={closeForm}
+        closeDisabled={saving}
+        size="lg"
+        variant="drawer"
+      >
+      <section className="space-y-3">
         <h2 className="panel-title">{editingId ? 'Editar clase' : 'Crear clase'}</h2>
         {editingId ? (
           <p className="rounded-lg border border-brand-orange/40 bg-brand-orange/10 px-3 py-2 text-sm text-brand-white">
@@ -635,7 +677,7 @@ export default function GymAdminClassTemplatesPage() {
           </div>
           <div className="md:col-span-2 flex justify-end gap-2">
             {editingId ? (
-              <button type="button" onClick={resetForm} className="btn-ghost">
+              <button type="button" onClick={closeForm} className="btn-ghost">
                 Cancelar edicion
               </button>
             ) : null}
@@ -647,6 +689,7 @@ export default function GymAdminClassTemplatesPage() {
         {error ? <p className="rounded-lg border border-brand-red/50 bg-brand-red/10 px-3 py-2 text-sm text-red-200">{error}</p> : null}
         {notice ? <p className="rounded-lg border border-brand-blue/40 bg-brand-blue/10 px-3 py-2 text-sm text-brand-white">{notice}</p> : null}
       </section>
+      </FormModal>
 
       <section className="space-y-3">
         <div className="flex items-center justify-between gap-3">

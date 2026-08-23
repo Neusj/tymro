@@ -22,7 +22,7 @@ test.beforeAll(async () => {
 test.describe('11. Clases del profesor (ver, filtros, historial)', () => {
   test('próximas clases muestra mis clases y los KPIs', async ({ page }) => {
     await page.goto('/teacher/classes/upcoming')
-    await expect(page.getByRole('heading', { name: 'Teacher · Proximas clases' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Teacher · Mis clases' })).toBeVisible()
 
     // KPIs visibles (KpiStrip desktop).
     await expect(page.getByText('Total clases')).toBeVisible()
