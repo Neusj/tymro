@@ -207,7 +207,7 @@ describe('TeacherClassesPage — suplencias disponibles', () => {
 
     await waitFor(() => expect(classesApi.coverable).toHaveBeenCalled())
     expect(shown('Boxeo')).toBe(0)
-    expect(screen.queryByRole('button', { name: 'Quitar suplencia' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Dejar de cubrir' })).not.toBeInTheDocument()
   })
 
   it('mantiene la accion de cubrir cuando la clase sigue disponible', async () => {
@@ -229,10 +229,59 @@ describe('TeacherClassesPage — suplencias disponibles', () => {
     renderTeacherClassesPage('coverable')
 
     await waitFor(() => expect(shown('Kick Boxing')).toBeGreaterThan(0))
-    await user.click(screen.getAllByRole('button', { name: 'Cubrir esta clase' })[0])
-    await user.click(await screen.findByRole('button', { name: 'Cubrir clase' }))
+    await user.click(screen.getAllByRole('button', { name: 'Cubrir' })[0])
+    await user.click(within(await screen.findByRole('dialog', { name: 'Cubrir' })).getByRole('button', { name: 'Cubrir' }))
 
     await waitFor(() => expect(classesApi.claimSubstitution).toHaveBeenCalledWith(203))
+  })
+
+  it('abre el detalle directo desde clases por cubrir', async () => {
+    const user = userEvent.setup()
+    classesApi.list.mockResolvedValue([])
+    classesApi.coverable.mockResolvedValue([
+      {
+        ...GYM_CLASS,
+        id: 204,
+        name: 'Muay Thai',
+        teacher_name: 'Prof. Matias',
+        has_substitute: false,
+        substitute_display_name: '',
+        can_claim_substitution: true,
+        can_release_substitution: false,
+      },
+    ])
+
+    renderTeacherClassesPage('coverable')
+
+    await waitFor(() => expect(shown('Muay Thai')).toBeGreaterThan(0))
+    const detailButtons = screen.getAllByRole('button', { name: 'Detalle' })
+    await user.click(detailButtons[detailButtons.length - 1])
+
+    expect(await screen.findByRole('dialog', { name: /Detalles · Muay Thai/ })).toBeInTheDocument()
+  })
+
+  it('permite dejar de cubrir una suplencia tomada desde mis clases', async () => {
+    const user = userEvent.setup()
+    classesApi.list.mockResolvedValue([
+      {
+        ...GYM_CLASS,
+        id: 205,
+        name: 'Boxeo tomado',
+        has_substitute: true,
+        substitute_teacher: 777,
+        substitute_display_name: 'Yo Profesor',
+        can_release_substitution: true,
+      },
+    ])
+
+    renderTeacherClassesPage('upcoming')
+
+    await waitFor(() => expect(shown('Boxeo tomado')).toBeGreaterThan(0))
+    await user.click(screen.getAllByRole('button', { name: 'Abrir acciones' })[0])
+    await user.click(await screen.findByRole('button', { name: 'Dejar de cubrir' }))
+    await user.click(within(screen.getByRole('dialog', { name: 'Dejar de cubrir' })).getByRole('button', { name: 'Dejar de cubrir' }))
+
+    await waitFor(() => expect(classesApi.releaseSubstitution).toHaveBeenCalledWith(205))
   })
 })
 

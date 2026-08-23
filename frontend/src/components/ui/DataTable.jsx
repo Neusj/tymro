@@ -405,6 +405,8 @@ export default function DataTable({
               const isSelected = selectableRows && selectedRowIds.includes(rowId)
               const primaryAction = actionColumn?.mobilePrimary?.(row)
               const primaryReplacesDetail = Boolean(primaryAction && actionColumn?.mobilePrimaryReplacesDetail)
+              const mobileDetailAction = actionColumn?.mobileDetailAction
+              const mobileDetailLabel = actionColumn?.mobileDetailLabel || 'Ver detalle'
               const mobileMenuActions = actionColumn?.mobileActionsRender?.(row) ?? renderMenuActions(row)
               return (
                 <article
@@ -455,10 +457,10 @@ export default function DataTable({
                     {!primaryReplacesDetail ? (
                       <button
                         type="button"
-                        onClick={() => setSelectedDetailRow(row)}
+                        onClick={() => (mobileDetailAction ? mobileDetailAction(row) : setSelectedDetailRow(row))}
                         className={`min-h-11 rounded-lg border border-brand-line px-3 py-2 text-xs font-semibold text-brand-white transition hover:border-brand-blue ${primaryAction ? 'shrink-0' : 'flex-1'}`}
                       >
-                        Ver detalle
+                        {mobileDetailLabel}
                       </button>
                     ) : null}
                     {hasMenuActions && (!primaryAction || primaryReplacesDetail) ? (

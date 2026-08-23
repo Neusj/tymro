@@ -550,8 +550,25 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
           const isSuspended = row.status === 'suspended'
           const isCancelled = row.status === 'cancelled'
           const isVirtual = isVirtualClass(row)
+          const canReleaseSubstitution =
+            row.can_release_substitution ||
+            (
+              row.has_substitute &&
+              String(row.substitute_teacher || '') === String(user?.id || '') &&
+              ['scheduled', 'in_progress'].includes(row.status)
+            )
           return (
             <>
+              {mode === 'upcoming' && canReleaseSubstitution ? (
+                <button
+                  type="button"
+                  disabled={working || isVirtual}
+                  onClick={() => setReleasingClass(row)}
+                  className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-red hover:text-red-100 disabled:opacity-60"
+                >
+                  Dejar de cubrir
+                </button>
+              ) : null}
               {mode === 'upcoming' && isSuspended ? (
                 <>
                   <button
@@ -634,6 +651,13 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
           const isSuspended = row.status === 'suspended'
           const isCancelled = row.status === 'cancelled'
           const isVirtual = isVirtualClass(row)
+          const canReleaseSubstitution =
+            row.can_release_substitution ||
+            (
+              row.has_substitute &&
+              String(row.substitute_teacher || '') === String(user?.id || '') &&
+              ['scheduled', 'in_progress'].includes(row.status)
+            )
           return (
             <>
               {isVirtual ? (
@@ -652,6 +676,16 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
                   {mode === 'history' ? 'Ver asistencia' : 'Tomar asistencia'}
                 </Link>
               )}
+              {mode === 'upcoming' && canReleaseSubstitution ? (
+                <button
+                  type="button"
+                  disabled={working || isVirtual}
+                  onClick={() => setReleasingClass(row)}
+                  className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-red hover:text-red-100 disabled:opacity-60"
+                >
+                  Dejar de cubrir
+                </button>
+              ) : null}
               {mode === 'upcoming' && isSuspended ? (
                 <>
                   <button
@@ -762,6 +796,8 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
         key: 'actions',
         label: 'Acciones',
         sortable: false,
+        mobileDetailAction: (row) => setDetailClass(row),
+        mobileDetailLabel: 'Detalle',
         mobilePrimary: (row) =>
           row.can_claim_substitution ? (
             <button
@@ -770,7 +806,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
               onClick={() => setClaimingClass(row)}
               className="rounded-lg border border-brand-orange bg-brand-orange px-3 py-2 text-center text-xs font-semibold text-white transition hover:border-brand-orange/80 hover:bg-brand-orange/90 disabled:opacity-60"
             >
-              Cubrir esta clase
+              Cubrir
             </button>
           ) : null,
         render: (row) => {
@@ -790,14 +826,14 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
                   onClick={() => setClaimingClass(row)}
                   className="w-full rounded-lg border border-brand-orange bg-brand-orange px-2.5 py-2 text-left text-xs font-semibold text-white transition hover:border-brand-orange/80 hover:bg-brand-orange/90 disabled:opacity-60"
                 >
-                  Cubrir esta clase
+                  Cubrir
                 </button>
                 <button
                   type="button"
                   onClick={() => setDetailClass(row)}
                   className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue"
                 >
-                  Ver detalles
+                  Detalle
                 </button>
               </>
             )
@@ -810,7 +846,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
                 onClick={() => setReleasingClass(row)}
                 className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-red hover:text-red-100 disabled:opacity-60"
               >
-                Quitar suplencia
+                Dejar de cubrir
               </button>
             )
           }
@@ -957,9 +993,9 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
 
       <ConfirmDialog
         open={Boolean(claimingClass)}
-        title="Cubrir esta clase"
+        title="Cubrir"
         description={`Tomaras ${claimingClass?.name || 'esta clase'} como suplente. El profesor titular se mantiene.`}
-        confirmLabel="Cubrir clase"
+        confirmLabel="Cubrir"
         loading={working}
         onCancel={() => setClaimingClass(null)}
         onConfirm={claimSubstitution}
@@ -967,9 +1003,9 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
 
       <ConfirmDialog
         open={Boolean(releasingClass)}
-        title="Quitar suplencia"
+        title="Dejar de cubrir"
         description={`Dejaras de cubrir ${releasingClass?.name || 'esta clase'} y volvera a quedar disponible para otros profesores.`}
-        confirmLabel="Quitar suplencia"
+        confirmLabel="Dejar de cubrir"
         loading={working}
         onCancel={() => setReleasingClass(null)}
         onConfirm={releaseSubstitution}
