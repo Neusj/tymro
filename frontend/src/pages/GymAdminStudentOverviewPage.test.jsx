@@ -124,7 +124,7 @@ describe('GymAdminStudentOverviewPage', () => {
 
     renderPage()
 
-    await waitFor(() => expect(screen.getByText('Ana Perez')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getAllByText('Ana Perez').length).toBeGreaterThan(0))
     expect(screen.getByText('Pack 10')).toBeInTheDocument()
     expect(screen.getByText('Pagado')).toBeInTheDocument()
     expect(screen.getAllByText('5').length).toBeGreaterThan(0)
@@ -155,7 +155,7 @@ describe('GymAdminStudentOverviewPage', () => {
 
     renderPage()
 
-    await waitFor(() => expect(screen.getByText('Ana Perez')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getAllByText('Ana Perez').length).toBeGreaterThan(0))
     fireEvent.change(screen.getByLabelText('Periodo'), { target: { value: '90d' } })
 
     await waitFor(() => expect(getStudentOverview).toHaveBeenLastCalledWith('42', { period: '90d' }))
@@ -167,10 +167,99 @@ describe('GymAdminStudentOverviewPage', () => {
 
     renderPage()
 
-    await waitFor(() => expect(screen.getByText('Ana Perez')).toBeInTheDocument())
-    fireEvent.change(screen.getByLabelText('Alumno'), { target: { value: '55' } })
+    await waitFor(() => expect(screen.getAllByText('Ana Perez').length).toBeGreaterThan(0))
+    fireEvent.change(screen.getByLabelText('Buscar alumno'), { target: { value: 'Beto' } })
+    fireEvent.click(await screen.findByRole('button', { name: /Beto/i }))
 
     await waitFor(() => expect(getStudentOverview).toHaveBeenLastCalledWith('55', { period: '30d' }))
+  })
+
+  it.each([
+    ['nombre', 'Jav'],
+    ['apellido', 'Neus'],
+    ['correo', 'javier@test.local'],
+    ['nombre completo', 'Javier Neus'],
+  ])('busca alumnos server-side por %s', async (_label, query) => {
+    usersApi.list.mockResolvedValue([{ id: 55, first_name: 'Javier', last_name: 'Neus', username: 'jneus', email: 'javier@test.local' }])
+
+    renderPage('/gym-admin/students/overview')
+
+    fireEvent.change(screen.getByLabelText('Buscar alumno'), { target: { value: query } })
+
+    await waitFor(() =>
+      expect(usersApi.list).toHaveBeenLastCalledWith({
+        role: 'student,gym_admin',
+        search: query,
+        limit: 15,
+      }),
+    )
+    expect(await screen.findByText('Javier Neus')).toBeInTheDocument()
+    expect(screen.getByText('javier@test.local')).toBeInTheDocument()
+  })
+
+  it('no consulta con menos de dos caracteres y muestra cero resultados cuando aplica', async () => {
+    usersApi.list.mockResolvedValue([])
+
+    renderPage('/gym-admin/students/overview')
+
+    fireEvent.change(screen.getByLabelText('Buscar alumno'), { target: { value: 'J' } })
+    expect(screen.getByText('Escribe al menos 2 caracteres.')).toBeInTheDocument()
+    expect(usersApi.list).not.toHaveBeenCalled()
+
+    fireEvent.change(screen.getByLabelText('Buscar alumno'), { target: { value: 'Jx' } })
+    await waitFor(() => expect(usersApi.list).toHaveBeenCalledTimes(1))
+    expect(await screen.findByText('Sin resultados')).toBeInTheDocument()
+  })
+
+  it('muestra varios resultados y permite seleccionar el correcto', async () => {
+    usersApi.list.mockResolvedValue([
+      { id: 55, first_name: 'Javier', last_name: 'Neus', username: 'jneus', email: 'javier@test.local' },
+      { id: 56, first_name: 'Javier', last_name: 'Rojas', username: 'jrojas', email: 'javier.rojas@test.local' },
+    ])
+    getStudentOverview.mockResolvedValue(overview())
+
+    renderPage('/gym-admin/students/overview')
+
+    fireEvent.change(screen.getByLabelText('Buscar alumno'), { target: { value: 'Javier' } })
+
+    expect(await screen.findByText('Javier Neus')).toBeInTheDocument()
+    expect(screen.getByText('javier.rojas@test.local')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /Javier Rojas/i }))
+
+    await waitFor(() => expect(getStudentOverview).toHaveBeenCalledWith('56', { period: '30d' }))
+  })
+
+  it('ignora una respuesta lenta si ya hay una busqueda mas nueva', async () => {
+    let resolveJav
+    let resolveNeus
+    usersApi.list.mockImplementation(({ search }) => {
+      if (search === 'Jav') {
+        return new Promise((resolve) => {
+          resolveJav = resolve
+        })
+      }
+      if (search === 'Neus') {
+        return new Promise((resolve) => {
+          resolveNeus = resolve
+        })
+      }
+      return Promise.resolve([])
+    })
+
+    renderPage('/gym-admin/students/overview')
+
+    fireEvent.change(screen.getByLabelText('Buscar alumno'), { target: { value: 'Jav' } })
+    await waitFor(() => expect(usersApi.list).toHaveBeenCalledWith(expect.objectContaining({ search: 'Jav' })))
+
+    fireEvent.change(screen.getByLabelText('Buscar alumno'), { target: { value: 'Neus' } })
+    await waitFor(() => expect(usersApi.list).toHaveBeenCalledWith(expect.objectContaining({ search: 'Neus' })))
+
+    resolveNeus([{ id: 55, first_name: 'Javier', last_name: 'Neus', username: 'jneus', email: 'javier@test.local' }])
+    expect(await screen.findByText('Javier Neus')).toBeInTheDocument()
+
+    resolveJav([{ id: 57, first_name: 'Javiera', last_name: 'Lenta', username: 'jlenta', email: 'lenta@test.local' }])
+    await waitFor(() => expect(screen.queryByText('Javiera Lenta')).not.toBeInTheDocument())
   })
 
   it('abre detalle de reservas bajo demanda sin recargar overview completo', async () => {
@@ -192,7 +281,7 @@ describe('GymAdminStudentOverviewPage', () => {
 
     renderPage()
 
-    await waitFor(() => expect(screen.getByText('Ana Perez')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getAllByText('Ana Perez').length).toBeGreaterThan(0))
     fireEvent.click(screen.getByRole('button', { name: 'Ver reservas' }))
 
     await waitFor(() =>

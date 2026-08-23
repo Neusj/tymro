@@ -13,6 +13,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.mail import send_mail
 from django.db import models, transaction
 from django.db.models import ProtectedError, RestrictedError
+from django.db.models.functions import Concat
 from django.utils import timezone
 from django.utils.dateparse import parse_date
 from django.utils.encoding import force_bytes, force_str
@@ -2131,6 +2132,55 @@ class UserViewSet(ModelViewSet):
     queryset = User.objects.select_related('organization', 'branch').all()
     serializer_class = CustomUserSerializer
 
+    def _apply_user_search(self, queryset):
+        raw_search = str(self.request.query_params.get('search') or '').strip()
+        if not raw_search:
+            return queryset.order_by('first_name', 'last_name', 'email', 'id')
+
+        full_name = Concat('first_name', models.Value(' '), 'last_name')
+        queryset = queryset.annotate(full_name_search=full_name)
+
+        base_filter = (
+            models.Q(first_name__icontains=raw_search)
+            | models.Q(last_name__icontains=raw_search)
+            | models.Q(email__icontains=raw_search)
+            | models.Q(username__icontains=raw_search)
+            | models.Q(full_name_search__icontains=raw_search)
+        )
+        for token in [item for item in raw_search.split() if item]:
+            base_filter &= (
+                models.Q(first_name__icontains=token)
+                | models.Q(last_name__icontains=token)
+                | models.Q(email__icontains=token)
+                | models.Q(username__icontains=token)
+                | models.Q(full_name_search__icontains=token)
+            )
+
+        return queryset.filter(base_filter).annotate(
+            search_rank=models.Case(
+                models.When(email__iexact=raw_search, then=models.Value(0)),
+                models.When(username__iexact=raw_search, then=models.Value(1)),
+                models.When(full_name_search__iexact=raw_search, then=models.Value(2)),
+                models.When(email__istartswith=raw_search, then=models.Value(3)),
+                models.When(full_name_search__istartswith=raw_search, then=models.Value(4)),
+                models.When(first_name__istartswith=raw_search, then=models.Value(5)),
+                models.When(last_name__istartswith=raw_search, then=models.Value(6)),
+                default=models.Value(20),
+                output_field=models.IntegerField(),
+            ),
+        ).order_by('search_rank', 'first_name', 'last_name', 'email', 'id')
+
+    def _apply_list_limit(self, queryset):
+        raw_limit = self.request.query_params.get('limit')
+        if raw_limit in (None, ''):
+            return queryset
+        try:
+            limit = int(raw_limit)
+        except (TypeError, ValueError):
+            limit = 20
+        limit = max(1, min(limit, 50))
+        return queryset[:limit]
+
     def get_queryset(self):
         user = self.request.user
         queryset = self.queryset
@@ -2152,7 +2202,7 @@ class UserViewSet(ModelViewSet):
 
             if role_values:
                 queryset = queryset.filter(role__in=role_values)
-            return queryset
+            return self._apply_list_limit(self._apply_user_search(queryset))
 
         # gym_admin/manager (escritura) y monitor (solo lectura) ven su organización.
         if (roles.is_org_admin(user) or _is_monitor(user)) and user.organization_id:
@@ -2160,10 +2210,10 @@ class UserViewSet(ModelViewSet):
             queryset = queryset.filter(organization_id=user.organization_id)
             if role_values:
                 queryset = queryset.filter(role__in=role_values)
-            return queryset
+            return self._apply_list_limit(self._apply_user_search(queryset))
 
         if _is_teacher(user) or _is_student(user) or _is_monitor(user):
-            return queryset.filter(id=user.id)
+            return self._apply_list_limit(self._apply_user_search(queryset.filter(id=user.id)))
         return queryset.none()
 
     def list(self, request, *args, **kwargs):

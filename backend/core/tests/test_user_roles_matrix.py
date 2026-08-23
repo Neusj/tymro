@@ -329,6 +329,37 @@ def test_monitor_lists_own_org_users_readonly(api_client, make_user, org, other_
     assert foreign_teacher.id not in ids
 
 
+def test_user_list_searches_students_server_side_and_limits_results(api_client, make_user, org, other_org):
+    _auth_as(api_client, make_user, org, 'gym_admin')
+    javier = make_user('javier_neus', organization=org, role='student', email='javier.neus@test.local')
+    javier.first_name = 'Javier'
+    javier.last_name = 'Neus'
+    javier.save(update_fields=['first_name', 'last_name'])
+    javiera = make_user('javiera_rojas', organization=org, role='student', email='javiera.rojas@test.local')
+    javiera.first_name = 'Javiera'
+    javiera.last_name = 'Rojas'
+    javiera.save(update_fields=['first_name', 'last_name'])
+    foreign = make_user('javier_foreign', organization=other_org, role='student', email='javier.foreign@test.local')
+    foreign.first_name = 'Javier'
+    foreign.last_name = 'Ajeno'
+    foreign.save(update_fields=['first_name', 'last_name'])
+
+    full_name = api_client.get('/api/users/', {'role': 'student,gym_admin', 'search': 'Javier Neus', 'limit': 15})
+    assert full_name.status_code == 200
+    full_name_ids = [item['id'] for item in full_name.data]
+    assert full_name_ids == [javier.id]
+
+    email = api_client.get('/api/users/', {'role': 'student,gym_admin', 'search': 'javiera.rojas', 'limit': 15})
+    assert email.status_code == 200
+    email_ids = [item['id'] for item in email.data]
+    assert email_ids == [javiera.id]
+
+    limited = api_client.get('/api/users/', {'role': 'student,gym_admin', 'search': 'Jav', 'limit': 1})
+    assert limited.status_code == 200
+    assert len(limited.data) == 1
+    assert foreign.id not in [item['id'] for item in limited.data]
+
+
 def test_monitor_can_retrieve_own_org_users_but_not_cross_org(api_client, make_user, org, other_org):
     actor = _auth_as(api_client, make_user, org, 'monitor')
     own = make_user('some_teacher', organization=org, role='teacher')

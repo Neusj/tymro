@@ -11,6 +11,9 @@ import { formatDate, todayLocalISO } from '../utils/format'
 import { studentSubjectRoleParam } from '../utils/roles'
 
 const PAGE_SIZE = 100
+const STUDENT_SEARCH_DEBOUNCE_MS = 300
+const STUDENT_SEARCH_MIN_CHARS = 2
+const STUDENT_SEARCH_LIMIT = 15
 const PERIOD_OPTIONS = [
   { value: '30d', label: '30 dias' },
   { value: '90d', label: '90 dias' },
@@ -40,9 +43,8 @@ function toList(data) {
   return []
 }
 
-function studentLabel(item) {
-  const fullName = `${item.first_name || ''} ${item.last_name || ''}`.trim() || item.username
-  return item.email ? `${fullName} - ${item.email}` : fullName
+function studentName(item = {}) {
+  return item.name || `${item.first_name || ''} ${item.last_name || ''}`.trim() || item.username || 'Alumno'
 }
 
 function formatDateTime(value) {
@@ -130,6 +132,131 @@ function MembershipSummaryCard({ membership }) {
         <EnrollmentFeeNote enrollmentFeeStatus={membership.enrollment_fee_status} />
       </div>
     </article>
+  )
+}
+
+function StudentAutocomplete({ selectedStudent, onSelect }) {
+  const [query, setQuery] = useState('')
+  const [results, setResults] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [open, setOpen] = useState(false)
+  const requestIdRef = useRef(0)
+  const lastSubmittedRef = useRef('')
+  const trimmedQuery = query.trim()
+  const canSearch = trimmedQuery.length >= STUDENT_SEARCH_MIN_CHARS
+
+  useEffect(() => {
+    if (!canSearch) {
+      requestIdRef.current += 1
+      lastSubmittedRef.current = ''
+      setResults([])
+      setLoading(false)
+      setError('')
+      return
+    }
+
+    const requestId = requestIdRef.current + 1
+    requestIdRef.current = requestId
+    setOpen(true)
+    setLoading(true)
+    setError('')
+
+    const timer = window.setTimeout(() => {
+      if (lastSubmittedRef.current === trimmedQuery) {
+        setLoading(false)
+        return
+      }
+      lastSubmittedRef.current = trimmedQuery
+      usersApi
+        .list({
+          role: studentSubjectRoleParam,
+          search: trimmedQuery,
+          limit: STUDENT_SEARCH_LIMIT,
+        })
+        .then((response) => {
+          if (requestIdRef.current !== requestId) return
+          setResults(toList(response))
+        })
+        .catch((apiError) => {
+          if (requestIdRef.current !== requestId) return
+          setResults([])
+          setError(extractApiErrorMessage(apiError, 'No se pudo buscar alumnos.'))
+        })
+        .finally(() => {
+          if (requestIdRef.current === requestId) {
+            setLoading(false)
+          }
+        })
+    }, STUDENT_SEARCH_DEBOUNCE_MS)
+
+    return () => {
+      window.clearTimeout(timer)
+    }
+  }, [canSearch, trimmedQuery])
+
+  const pickStudent = (student) => {
+    onSelect(student)
+    setQuery('')
+    setResults([])
+    setError('')
+    setOpen(false)
+  }
+
+  return (
+    <div className="space-y-2">
+      <label className="block space-y-1 text-sm">
+        <span>Buscar alumno</span>
+        <input
+          type="search"
+          value={query}
+          onChange={(event) => {
+            setQuery(event.target.value)
+            setOpen(true)
+          }}
+          onFocus={() => setOpen(true)}
+          placeholder="Nombre, apellido o email"
+          className="field"
+          autoComplete="off"
+        />
+      </label>
+      {selectedStudent ? (
+        <div className="rounded-lg border border-brand-line bg-black/20 px-3 py-2 text-xs">
+          <span className="text-brand-muted">Seleccionado: </span>
+          <span className="font-semibold text-brand-white">{studentName(selectedStudent)}</span>
+          {selectedStudent.email ? <span className="text-brand-muted"> - {selectedStudent.email}</span> : null}
+        </div>
+      ) : null}
+      {open && query ? (
+        <div className="overflow-hidden rounded-xl border border-brand-line bg-brand-panel shadow-float">
+          {!canSearch ? (
+            <p className="px-3 py-2 text-xs text-brand-muted">Escribe al menos {STUDENT_SEARCH_MIN_CHARS} caracteres.</p>
+          ) : loading ? (
+            <p className="px-3 py-2 text-xs text-brand-muted">Buscando...</p>
+          ) : error ? (
+            <p className="px-3 py-2 text-xs text-red-200">{error}</p>
+          ) : results.length === 0 ? (
+            <p className="px-3 py-2 text-xs text-brand-muted">Sin resultados</p>
+          ) : (
+            <ul className="max-h-72 overflow-y-auto py-1">
+              {results.map((student) => (
+                <li key={student.id}>
+                  <button
+                    type="button"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => pickStudent(student)}
+                    className="block w-full px-3 py-2 text-left transition hover:bg-brand-soft focus:bg-brand-soft focus:outline-none"
+                  >
+                    <span className="block truncate text-sm font-semibold text-brand-white">{studentName(student)}</span>
+                    <span className="block truncate text-xs text-brand-muted">{student.email || 'Sin email'}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ) : null}
+    </div>
   )
 }
 
@@ -329,9 +456,7 @@ const DETAIL_TITLES = {
 export default function GymAdminStudentOverviewPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const studentId = searchParams.get('student_id') || ''
-  const [students, setStudents] = useState([])
-  const [studentsLoading, setStudentsLoading] = useState(true)
-  const [studentsError, setStudentsError] = useState('')
+  const [selectedStudentPreview, setSelectedStudentPreview] = useState(null)
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -340,14 +465,6 @@ export default function GymAdminStudentOverviewPage() {
   const [customEnd, setCustomEnd] = useState(todayLocalISO())
   const [detail, setDetail] = useState({ type: '', loading: false, error: '', data: EMPTY_SECTION })
   const detailPanelRef = useRef(null)
-
-  useEffect(() => {
-    usersApi
-      .list({ role: studentSubjectRoleParam })
-      .then((response) => setStudents(toList(response)))
-      .catch((apiError) => setStudentsError(extractApiErrorMessage(apiError, 'No se pudo cargar la lista de alumnos.')))
-      .finally(() => setStudentsLoading(false))
-  }, [])
 
   const overviewParams = useMemo(() => {
     const params = { period }
@@ -372,6 +489,7 @@ export default function GymAdminStudentOverviewPage() {
   useEffect(() => {
     setDetail({ type: '', loading: false, error: '', data: EMPTY_SECTION })
     if (!studentId) {
+      setSelectedStudentPreview(null)
       setData(null)
       setError('')
       return
@@ -380,7 +498,9 @@ export default function GymAdminStudentOverviewPage() {
     load(studentId, overviewParams).finally(() => setLoading(false))
   }, [studentId, overviewParams, load])
 
-  const selectStudent = (value) => {
+  const selectStudent = (student) => {
+    const value = student?.id ? String(student.id) : ''
+    setSelectedStudentPreview(student || null)
     const next = new URLSearchParams(searchParams)
     if (value) next.set('student_id', value)
     else next.delete('student_id')
@@ -388,6 +508,7 @@ export default function GymAdminStudentOverviewPage() {
   }
 
   const currentSummary = data?.summary || buildFallbackSummary(data)
+  const selectedStudent = data?.student || selectedStudentPreview
   useEffect(() => {
     if (!detail.type || !detailPanelRef.current) return
     window.setTimeout(() => {
@@ -457,20 +578,7 @@ export default function GymAdminStudentOverviewPage() {
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2 lg:w-[520px]">
-            <label className="block space-y-1 text-sm">
-              <span>Alumno</span>
-              <select
-                disabled={studentsLoading}
-                value={studentId}
-                onChange={(event) => selectStudent(event.target.value)}
-                className="field"
-              >
-                <option value="">Seleccionar alumno</option>
-                {students.map((item) => (
-                  <option key={item.id} value={item.id}>{studentLabel(item)}</option>
-                ))}
-              </select>
-            </label>
+            <StudentAutocomplete selectedStudent={selectedStudent} onSelect={selectStudent} />
 
             <label className="block space-y-1 text-sm">
               <span>Periodo</span>
@@ -509,8 +617,6 @@ export default function GymAdminStudentOverviewPage() {
             </label>
           </div>
         ) : null}
-
-        {studentsError ? <p className="mt-3 text-xs text-red-200">{studentsError}</p> : null}
 
         {!studentId ? (
           <div className="mt-5">
