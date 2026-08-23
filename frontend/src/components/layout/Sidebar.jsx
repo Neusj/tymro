@@ -163,9 +163,9 @@ const navByRole = {
       label: 'Clases',
       icon: <ClassesIcon />,
       children: [
-        { to: '/gym-admin/class-templates', label: 'Gestión de clases' },
         { to: '/teacher/classes/upcoming', label: 'Mis clases' },
         { to: '/teacher/classes/coverable', label: 'Clases por cubrir' },
+        { to: '/gym-admin/class-templates', label: 'Gestión de clases' },
         { to: '/gym-admin/holidays', label: 'Festivos' },
         { to: '/gym-admin/class-types', label: 'Tipos de clase' },
         { to: '/gym-admin/disciplines', label: 'Disciplinas' },

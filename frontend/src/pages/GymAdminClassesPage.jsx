@@ -66,7 +66,7 @@ function canManageEnrollments(row) {
   return !isVirtualClass(row) && row?.status !== 'cancelled'
 }
 
-export default function GymAdminClassesPage() {
+export default function GymAdminClassesPage({ embedded = false } = {}) {
   const { user } = useAuth()
   const canManage = canManageOperational(user?.role)
   const [classes, setClasses] = useState([])
@@ -482,6 +482,7 @@ export default function GymAdminClassesPage() {
 
   return (
     <div className="space-y-6">
+      {!embedded ? (
       <DashboardHeader
         title="Gym Admin · Clases generadas"
         subtitle="Revisión operativa de instancias, asistencia, inscritos y acciones administrativas."
@@ -493,6 +494,7 @@ export default function GymAdminClassesPage() {
           ) : null
         }
       />
+      ) : null}
 
       <DaySelector value={selectedDate} onChange={setSelectedDate} />
 

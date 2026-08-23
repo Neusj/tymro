@@ -165,6 +165,26 @@ describe('TeacherClassesPage - vista completa', () => {
     expect(classesApi.byDate).not.toHaveBeenCalled()
     expect(screen.getByText(/Mis clases/)).toBeInTheDocument()
   })
+
+  it('lista clases pasadas completadas en mis clases por fecha', async () => {
+    classesApi.list.mockResolvedValue([
+      {
+        ...GYM_CLASS,
+        id: 404,
+        status: 'completed',
+        start_datetime: new Date(Date.now() - DAY).toISOString(),
+        end_datetime: new Date(Date.now() - DAY + 3600000).toISOString(),
+      },
+    ])
+
+    renderTeacherClassesPage('upcoming')
+
+    await waitFor(() => expect(classesApi.byDate).toHaveBeenCalledWith(expect.any(String), {
+      ordering: 'start_datetime',
+      teacher_scope: 'mine',
+    }))
+    await waitFor(() => expect(shown('BJJ Fundamentos')).toBeGreaterThan(0))
+  })
 })
 
 describe('TeacherClassesPage — suplencias disponibles', () => {
@@ -226,7 +246,6 @@ describe('TeacherClassesPage - reabrir canceladas', () => {
     await waitFor(() => expect(classesApi.byDate).toHaveBeenCalledWith(expect.any(String), {
       ordering: 'start_datetime',
       teacher_scope: 'mine',
-      status_in: 'scheduled,in_progress,suspended,cancelled',
     }))
     await waitFor(() => expect(shown('BJJ Fundamentos')).toBeGreaterThan(0))
     await user.click(screen.getAllByRole('button', { name: 'Abrir acciones' })[0])

@@ -128,8 +128,6 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
     }
     if (mode === 'history') {
       params.status_in = 'completed,completed_early'
-    } else if (mode === 'upcoming') {
-      params.status_in = 'scheduled,in_progress,suspended,cancelled'
     }
     return params
   }, [mode])
@@ -857,7 +855,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
     return text.includes(query)
   })
 
-  const statusOptions = mode === 'all' ? ALL_STATUS_OPTIONS : mode === 'history' ? HISTORY_STATUS_OPTIONS : UPCOMING_STATUS_OPTIONS
+  const statusOptions = mode === 'all' || mode === 'upcoming' ? ALL_STATUS_OPTIONS : mode === 'history' ? HISTORY_STATUS_OPTIONS : UPCOMING_STATUS_OPTIONS
   const activeColumns = mode === 'coverable' ? coverableColumns : classColumns
 
   return (

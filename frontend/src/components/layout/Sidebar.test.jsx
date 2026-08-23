@@ -46,3 +46,21 @@ describe('Sidebar — menú de profesor', () => {
     expect(screen.queryByText('Mis pagos')).not.toBeInTheDocument()
   })
 })
+
+describe('Sidebar — menú de Clases (gym_admin)', () => {
+  it('ordena Mis clases, Clases por cubrir y Gestion de clases', async () => {
+    renderSidebar({ role: 'gym_admin' })
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'Clases' }))
+
+    const classLinks = screen
+      .getAllByRole('link')
+      .filter((link) => ['Mis clases', 'Clases por cubrir', 'Gestión de clases'].includes(link.textContent))
+
+    expect(classLinks.map((link) => link.textContent)).toEqual(['Mis clases', 'Clases por cubrir', 'Gestión de clases'])
+    expect(screen.getByRole('link', { name: 'Mis clases' })).toHaveAttribute('href', '/teacher/classes/upcoming')
+    expect(screen.getByRole('link', { name: 'Clases por cubrir' })).toHaveAttribute('href', '/teacher/classes/coverable')
+    expect(screen.getByRole('link', { name: 'Gestión de clases' })).toHaveAttribute('href', '/gym-admin/class-templates')
+  })
+})

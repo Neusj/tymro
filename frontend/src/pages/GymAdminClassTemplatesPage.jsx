@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
-import { advanceClassWindowsApi, branchesApi, classTemplatesApi, classTypesApi, disciplinesApi, usersApi } from '../api/client'
+import { branchesApi, classTemplatesApi, classTypesApi, disciplinesApi, usersApi } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import BulkActionModal from '../components/BulkActionModal'
 import ConfirmDialog from '../components/ConfirmDialog'
@@ -10,6 +9,7 @@ import DataTable from '../components/ui/DataTable'
 import MultiSelectDropdown from '../components/ui/MultiSelectDropdown'
 import ValueBadge from '../components/ui/ValueBadge'
 import { canManageAdmin, teacherEligibleRoleParam } from '../utils/roles'
+import GymAdminClassesPage from './GymAdminClassesPage'
 
 const initialForm = {
   name: '',
@@ -93,11 +93,10 @@ export default function GymAdminClassTemplatesPage() {
   const [bulkWorking, setBulkWorking] = useState(false)
   const [bulkModalOpen, setBulkModalOpen] = useState(false)
   const [formOpen, setFormOpen] = useState(false)
+  const [activeTab, setActiveTab] = useState('classes')
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
-  const [confirmingAdvance, setConfirmingAdvance] = useState(false)
   const [deletingTemplate, setDeletingTemplate] = useState(null)
-  const [advancingWindows, setAdvancingWindows] = useState(false)
   // Marca en rojo el selector de dias tras un submit sin dias. El <select> nativo se autovalida
   // con "required"; un dropdown propio no, asi que el estado invalido es explicito.
   const [weekdaysInvalid, setWeekdaysInvalid] = useState(false)
@@ -143,6 +142,7 @@ export default function GymAdminClassTemplatesPage() {
     setError('')
     setNotice('')
     resetForm()
+    setActiveTab('schedule')
     setFormOpen(true)
     focusForm()
   }
@@ -160,6 +160,7 @@ export default function GymAdminClassTemplatesPage() {
     setNotice('')
     setWeekdaysInvalid(false)
     setEditingId(row.id)
+    setActiveTab('schedule')
     setFormOpen(true)
     setForm({
       name: row.name || '',
@@ -253,39 +254,6 @@ export default function GymAdminClassTemplatesPage() {
     }
   }
 
-  const generateInstances = async (row) => {
-    setWorkingId(row.id)
-    setError('')
-    setNotice('')
-    try {
-      const data = await classTemplatesApi.generate(row.id, {
-        from_date: row.start_date,
-        until_date: row.end_date || null,
-      })
-      setNotice(`Generacion completada: ${data.created_count || 0} nuevas clases.`)
-      await loadData()
-    } catch (apiError) {
-      setError(firstApiError(apiError?.response?.data))
-    } finally {
-      setWorkingId(null)
-    }
-  }
-
-  const reactivateFutureCancelled = async (row) => {
-    setWorkingId(row.id)
-    setError('')
-    setNotice('')
-    try {
-      const data = await classTemplatesApi.reactivateFutureCancelled(row.id)
-      setNotice(`Reactivacion completada: ${data.reactivated_count || 0} clases futuras reactivadas.`)
-      await loadData()
-    } catch (apiError) {
-      setError(firstApiError(apiError?.response?.data))
-    } finally {
-      setWorkingId(null)
-    }
-  }
-
   const deleteTemplate = async () => {
     if (!deletingTemplate?.id) {
       return
@@ -333,29 +301,6 @@ export default function GymAdminClassTemplatesPage() {
     }
   }
 
-  const runAdvanceClassWindows = async () => {
-    setAdvancingWindows(true)
-    setError('')
-    setNotice('')
-    try {
-      const data = await advanceClassWindowsApi.run()
-      const created = data.instances_created || 0
-      const pruned = data.pruned_count || 0
-      const warningsText = data.errors?.length ? `, con ${data.errors.length} avisos` : ''
-      setNotice(`Se generaron ${created} clases, se eliminaron ${pruned} clases vacías${warningsText}.`)
-      await loadData()
-    } catch (apiError) {
-      setError(firstApiError(apiError?.response?.data))
-    } finally {
-      // Incondicional (éxito Y error): el ConfirmDialog es un portal full-viewport con backdrop
-      // opaco que tapa el banner de error de la página. Si solo cerrara en el path de éxito, un
-      // 403 (org suspendida a mitad de sesión) dejaría al admin mirando el diálogo sin feedback
-      // visible, creyendo que no pasó nada. Mismo patrón que
-      // GymAdminPaymentsSettingsPage.handleDisconnect (setConfirmingDisconnect en finally).
-      setConfirmingAdvance(false)
-      setAdvancingWindows(false)
-    }
-  }
 
   const columns = useMemo(
     () => [
@@ -403,26 +348,10 @@ export default function GymAdminClassTemplatesPage() {
             <button
               type="button"
               disabled={workingId === row.id}
-              onClick={() => generateInstances(row)}
-              className="w-full rounded-lg border border-brand-blue px-2.5 py-1.5 text-left text-xs text-brand-white disabled:opacity-60"
-            >
-              Generar clases
-            </button>
-            <button
-              type="button"
-              disabled={workingId === row.id}
               onClick={() => toggleTemplate(row)}
               className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white disabled:opacity-60"
             >
               {row.is_active ? 'Desactivar' : 'Activar'}
-            </button>
-            <button
-              type="button"
-              disabled={workingId === row.id}
-              onClick={() => reactivateFutureCancelled(row)}
-              className="w-full rounded-lg border border-brand-orange/60 px-2.5 py-1.5 text-left text-xs text-brand-white disabled:opacity-60"
-            >
-              Reactivar futuras canceladas
             </button>
             {canDeleteSeries ? (
               <button
@@ -445,21 +374,38 @@ export default function GymAdminClassTemplatesPage() {
     <div className="space-y-6">
       <DashboardHeader
         title="Gym Admin · Gestión de clases"
-        subtitle="Administra clases programadas, generación de instancias y acciones operativas."
+        subtitle="Consulta clases reales por fecha y administra la programación semanal."
         extra={
           <div className="flex flex-wrap justify-end gap-2">
-            <button type="button" onClick={() => setConfirmingAdvance(true)} className="btn-ghost">
-              Actualizar clases
-            </button>
-            <Link to="/gym-admin/classes" className="btn-ghost">
-              Ver clases generadas
-            </Link>
             <button type="button" onClick={openCreateForm} className="btn-primary">
               Crear clase
             </button>
           </div>
         }
       />
+
+      <div className="flex flex-wrap gap-2 border-b border-brand-line">
+        {[
+          { value: 'classes', label: 'Clases' },
+          { value: 'schedule', label: 'Programación' },
+        ].map((tab) => (
+          <button
+            key={tab.value}
+            type="button"
+            onClick={() => setActiveTab(tab.value)}
+            aria-current={activeTab === tab.value ? 'true' : undefined}
+            className={`min-h-10 border-b-2 px-3 text-sm font-semibold transition ${
+              activeTab === tab.value
+                ? 'border-brand-orange text-brand-white'
+                : 'border-transparent text-brand-muted hover:text-brand-white'
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === 'classes' ? <GymAdminClassesPage embedded /> : null}
 
       {!formOpen && error ? <p className="rounded-lg border border-brand-red/50 bg-brand-red/10 px-3 py-2 text-sm text-red-200">{error}</p> : null}
       {!formOpen && notice ? <p className="rounded-lg border border-brand-blue/40 bg-brand-blue/10 px-3 py-2 text-sm text-brand-white">{notice}</p> : null}
@@ -472,7 +418,7 @@ export default function GymAdminClassTemplatesPage() {
         size="lg"
         variant="drawer"
       >
-      <section className="space-y-3">
+        <section className="space-y-3">
         <h2 className="panel-title">{editingId ? 'Editar clase' : 'Crear clase'}</h2>
         {editingId ? (
           <p className="rounded-lg border border-brand-orange/40 bg-brand-orange/10 px-3 py-2 text-sm text-brand-white">
@@ -688,10 +634,11 @@ export default function GymAdminClassTemplatesPage() {
         </form>
         {error ? <p className="rounded-lg border border-brand-red/50 bg-brand-red/10 px-3 py-2 text-sm text-red-200">{error}</p> : null}
         {notice ? <p className="rounded-lg border border-brand-blue/40 bg-brand-blue/10 px-3 py-2 text-sm text-brand-white">{notice}</p> : null}
-      </section>
+        </section>
       </FormModal>
 
-      <section className="space-y-3">
+      {activeTab === 'schedule' ? (
+        <section className="space-y-3">
         <div className="flex items-center justify-between gap-3">
           <h2 className="panel-title">Clases programadas</h2>
           <button
@@ -713,7 +660,8 @@ export default function GymAdminClassTemplatesPage() {
           onSelectedRowIdsChange={setSelectedIds}
           defaultSort={{ key: 'start_date', direction: 'asc' }}
         />
-      </section>
+        </section>
+      ) : null}
 
       <BulkActionModal
         open={bulkModalOpen}
@@ -723,28 +671,16 @@ export default function GymAdminClassTemplatesPage() {
         actions={[
           { value: 'activate', label: 'Activar clases', description: 'Reanuda la clase para futuras generaciones.' },
           { value: 'deactivate', label: 'Desactivar clases', description: 'Detiene nuevas generaciones sin borrar historico.' },
-          { value: 'cancel_future_instances', label: 'Cancelar clases futuras', description: 'Cancela instancias futuras ya generadas.' },
-          { value: 'reactivate_future_cancelled', label: 'Reactivar futuras canceladas', description: 'Intenta reactivar futuras canceladas validando seguridad.' },
-          { value: 'generate_pending', label: 'Generar rango pendiente', description: 'Genera clases faltantes dentro del rango sin duplicar.' },
           ...(canDeleteSeries
             ? [{ value: 'delete', label: 'Eliminar clases seguras', description: 'Elimina solo clases sin actividad bloqueante.' }]
             : []),
         ]}
-        requiresCommentActions={['cancel_future_instances']}
-        defaultAction="generate_pending"
+        requiresCommentActions={[]}
+        defaultAction="activate"
         onClose={() => setBulkModalOpen(false)}
         onConfirm={runBulkAction}
       />
 
-      <ConfirmDialog
-        open={confirmingAdvance}
-        title="Actualizar clases"
-        description="Esto va a generar las clases próximas y eliminar las clases vacías vencidas. ¿Continuar?"
-        confirmLabel="Sí, actualizar"
-        loading={advancingWindows}
-        onConfirm={runAdvanceClassWindows}
-        onCancel={() => setConfirmingAdvance(false)}
-      />
 
       <ConfirmDialog
         open={Boolean(deletingTemplate)}
