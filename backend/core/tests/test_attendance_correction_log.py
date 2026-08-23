@@ -3,7 +3,7 @@
 Tomar lista (crear un `Attendance` que no existía) sigue abierto a profe/gym_admin/
 superadmin y NO deja rastro: no hay "corrección" que auditar todavía. Corregir un
 `status` ya registrado queda abierto para gym_admin/superadmin y para el profe dueno
-hasta 20 minutos despues del fin de la clase (manager queda AFUERA: es `is_org_admin`
+hasta el limite configurado de su organizacion despues del fin de la clase (manager queda AFUERA: es `is_org_admin`
 pero este es el corte de ADMIN_WRITE_ROLES/profe operativo) y escribe UNA fila de
 `AttendanceChangeLog` dentro de la MISMA transacción que el `save()` del `Attendance` (`core/views.py`, acción `attendance` de
 `GymClassViewSet`): todo-o-nada, sin oráculo cross-org (queryset scopeado por

@@ -9,8 +9,6 @@ import { firstApiError } from '../utils/format'
 import { canManageOperational } from '../utils/roles'
 import { formatDateTime } from './teacherClasses.helpers'
 
-const ATTENDANCE_EDIT_GRACE_MINUTES = 20
-
 function canToggleAttendance(user, gymClass) {
   if (!user || !gymClass || gymClass.status === 'cancelled') {
     return false
@@ -20,10 +18,11 @@ function canToggleAttendance(user, gymClass) {
   }
   if (user.role === 'teacher') {
     const classEnd = new Date(gymClass.end_datetime).getTime()
-    if (Number.isNaN(classEnd)) {
+    const limitMinutes = Number(gymClass.teacher_attendance_edit_limit_minutes)
+    if (Number.isNaN(classEnd) || !Number.isFinite(limitMinutes) || limitMinutes < 0) {
       return false
     }
-    return Date.now() <= classEnd + ATTENDANCE_EDIT_GRACE_MINUTES * 60 * 1000
+    return Date.now() <= classEnd + limitMinutes * 60 * 1000
   }
   return false
 }
@@ -87,7 +86,10 @@ export default function ClassAttendancePage() {
     }
 
     const currentStatus = attendanceMap[student.student_id] || 'absent'
-    const nextStatus = currentStatus === 'present' ? 'absent' : 'present'
+    if (currentStatus === 'present') {
+      return
+    }
+    const nextStatus = 'present'
     const previousStatus = currentStatus
 
     setSavingStudentId(student.student_id)
@@ -198,7 +200,7 @@ export default function ClassAttendancePage() {
                 <button
                   type="button"
                   aria-pressed={present}
-                  disabled={!canToggle || savingStudentId !== null}
+                  disabled={!canToggle || savingStudentId !== null || present}
                   onClick={() => toggleStudent(student)}
                   className={`min-h-11 shrink-0 rounded-lg border px-4 py-2 text-sm font-semibold transition disabled:opacity-60 ${
                     present
@@ -206,7 +208,7 @@ export default function ClassAttendancePage() {
                       : 'border-brand-blue/70 bg-brand-blue/15 text-brand-white hover:border-brand-blue'
                   }`}
                 >
-                  {saving ? 'Guardando...' : 'Confirmar'}
+                  {saving ? 'Guardando...' : present ? 'Confirmado' : 'Confirmar'}
                 </button>
               </div>
             </article>

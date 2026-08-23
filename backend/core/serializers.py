@@ -33,6 +33,7 @@ from .models import (
     MembershipPlan,
     Organization,
     OrganizationExpiryNotificationConfig,
+    DEFAULT_TEACHER_ATTENDANCE_EDIT_LIMIT_MINUTES,
     PaymentAccount,
     PaymentTransaction,
     Person,
@@ -211,6 +212,7 @@ class OrganizationSerializer(serializers.ModelSerializer):
             'trial_validity_days',
             'class_generation_window_days',
             'max_reservation_window_days',
+            'teacher_attendance_edit_limit_minutes',
             'class_pruning_grace_days',
             'annual_enrollment_fee',
             'branches_count',
@@ -759,6 +761,23 @@ class OrganizationReservationWindowConfigSerializer(serializers.ModelSerializer)
         fields = ['max_reservation_window_days']
 
 
+class OrganizationAttendanceEditConfigSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Organization
+        fields = ['teacher_attendance_edit_limit_minutes']
+
+    def validate_teacher_attendance_edit_limit_minutes(self, value):
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            raise serializers.ValidationError('Ingresa un numero entero.')
+        if value < 0:
+            raise serializers.ValidationError('El valor debe ser mayor o igual a 0.')
+        if value > 1440:
+            raise serializers.ValidationError('El valor debe ser menor o igual a 1440.')
+        return value
+
+
 class DisciplineSerializer(serializers.ModelSerializer):
     class Meta:
         model = Discipline
@@ -1130,6 +1149,7 @@ class GymClassSerializer(serializers.ModelSerializer):
     is_suspended = serializers.SerializerMethodField()
     can_suspend = serializers.SerializerMethodField()
     can_reactivate = serializers.SerializerMethodField()
+    teacher_attendance_edit_limit_minutes = serializers.SerializerMethodField()
 
     class Meta:
         model = GymClass
@@ -1180,6 +1200,7 @@ class GymClassSerializer(serializers.ModelSerializer):
             'enrollments_count',
             'attendances_count',
             'present_attendances_count',
+            'teacher_attendance_edit_limit_minutes',
         ]
         extra_kwargs = {
             'organization': {'required': False},
@@ -1198,6 +1219,13 @@ class GymClassSerializer(serializers.ModelSerializer):
 
     def get_teacher_name(self, obj):
         return _user_display_name(obj.teacher)
+
+    def get_teacher_attendance_edit_limit_minutes(self, obj):
+        organization = getattr(obj, 'organization', None)
+        value = getattr(organization, 'teacher_attendance_edit_limit_minutes', None)
+        if value is None:
+            value = DEFAULT_TEACHER_ATTENDANCE_EDIT_LIMIT_MINUTES
+        return max(0, int(value))
 
     def get_substitute_teacher_name(self, obj):
         return _user_display_name(getattr(obj, 'substitute_teacher', None))

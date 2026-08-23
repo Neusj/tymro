@@ -37,6 +37,7 @@ from .models import (
     Branch,
     ClassTemplate,
     ClassType,
+    DEFAULT_TEACHER_ATTENDANCE_EDIT_LIMIT_MINUTES,
     Discipline,
     Enrollment,
     GymClass,
@@ -76,6 +77,7 @@ from .serializers import (
     ManualPaymentCreateSerializer,
     ManualPaymentSerializer,
     OrganizationEnrollmentFeeConfigSerializer,
+    OrganizationAttendanceEditConfigSerializer,
     OrganizationExpiryNotificationConfigSerializer,
     OrganizationReservationWindowConfigSerializer,
     OrganizationSerializer,
@@ -165,7 +167,6 @@ QR_CHECKIN_GRANT_TTL_SECONDS = 120
 ATTENDANCE_SCREEN_SESSION_TTL_HOURS = 8
 QR_WINDOW_BEFORE_MINUTES = 10
 QR_WINDOW_AFTER_MINUTES = 15
-ATTENDANCE_EDIT_GRACE_MINUTES = 20
 
 
 def _user_role(user):
@@ -1401,7 +1402,24 @@ def _can_teacher_edit_attendance(user, gym_class, now=None):
     if not _is_own_class_teacher(user, gym_class):
         return False
     now = now or timezone.now()
-    return now <= gym_class.end_datetime + timedelta(minutes=ATTENDANCE_EDIT_GRACE_MINUTES)
+    return now <= gym_class.end_datetime + timedelta(minutes=_teacher_attendance_edit_limit_minutes(gym_class))
+
+
+def _teacher_attendance_edit_limit_minutes(gym_class):
+    organization = getattr(gym_class, 'organization', None)
+    value = getattr(organization, 'teacher_attendance_edit_limit_minutes', None)
+    if value is None:
+        value = DEFAULT_TEACHER_ATTENDANCE_EDIT_LIMIT_MINUTES
+    try:
+        minutes = int(value)
+    except (TypeError, ValueError):
+        minutes = DEFAULT_TEACHER_ATTENDANCE_EDIT_LIMIT_MINUTES
+    return max(0, minutes)
+
+
+def _teacher_attendance_edit_limit_message(gym_class):
+    minutes = _teacher_attendance_edit_limit_minutes(gym_class)
+    return f'La asistencia solo puede editarse hasta {minutes} minutos despues de terminada la clase.'
 
 
 def _serialize_qr_class(gym_class):
@@ -1909,6 +1927,25 @@ class OrganizationViewSet(ModelViewSet):
             return Response(OrganizationReservationWindowConfigSerializer(organization).data)
 
         serializer = OrganizationReservationWindowConfigSerializer(
+            organization, data=request.data, partial=True,
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['get', 'put'], url_path='attendance-edit-config')
+    def attendance_edit_config(self, request, pk=None):
+        """Tiempo limite para que el profesor edite asistencia."""
+        organization = Organization.objects.filter(pk=pk).first()
+        if organization is None:
+            raise NotFound('Organización no encontrada.')
+        if not _can_manage_org_resource(request.user, organization.id):
+            raise PermissionDenied('No tienes permisos para gestionar esta configuración.')
+
+        if request.method == 'GET':
+            return Response(OrganizationAttendanceEditConfigSerializer(organization).data)
+
+        serializer = OrganizationAttendanceEditConfigSerializer(
             organization, data=request.data, partial=True,
         )
         serializer.is_valid(raise_exception=True)
@@ -3181,7 +3218,7 @@ class GymClassViewSet(ModelViewSet):
             # Todo-o-nada: si el payload trae aunque sea UNA corrección y quien lo manda
             # no es admin, se rechaza el request completo antes de escribir nada (un
             # profe no puede colar una corrección mezclada con creaciones legítimas).
-            raise PermissionDenied('La asistencia solo puede editarse hasta 20 minutos despues de terminada la clase.')
+            raise PermissionDenied(_teacher_attendance_edit_limit_message(gym_class))
 
         with transaction.atomic():
             now = timezone.now()
@@ -3255,7 +3292,7 @@ class GymClassViewSet(ModelViewSet):
         )
         teacher_can_edit_attendance = _can_teacher_edit_attendance(user, gym_class)
         if gym_class.is_closed and not (is_admin_actor or teacher_can_edit_attendance):
-            raise PermissionDenied('La asistencia solo puede editarse hasta 20 minutos despues de terminada la clase.')
+            raise PermissionDenied(_teacher_attendance_edit_limit_message(gym_class))
 
         with transaction.atomic():
             now = timezone.now()

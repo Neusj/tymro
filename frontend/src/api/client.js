@@ -532,6 +532,17 @@ export const reservationWindowConfigApi = {
   },
 }
 
+export const attendanceEditConfigApi = {
+  get: async (orgId) => {
+    const { data } = await api.get(`/organizations/${orgId}/attendance-edit-config/`)
+    return data
+  },
+  update: async (orgId, payload) => {
+    const { data } = await api.put(`/organizations/${orgId}/attendance-edit-config/`, payload)
+    return data
+  },
+}
+
 export const recurringEnrollmentsApi = {
   list: async (params = {}) => {
     const { data } = await api.get('/recurring-enrollments/', { params })

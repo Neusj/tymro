@@ -14,6 +14,7 @@ import GymAdminTrialFollowupPage from './pages/GymAdminTrialFollowupPage'
 import GymAdminExpiryNotificationConfigPage from './pages/GymAdminExpiryNotificationConfigPage'
 import GymAdminEnrollmentFeeConfigPage from './pages/GymAdminEnrollmentFeeConfigPage'
 import GymAdminReservationWindowConfigPage from './pages/GymAdminReservationWindowConfigPage'
+import GymAdminAttendanceEditConfigPage from './pages/GymAdminAttendanceEditConfigPage'
 import GymAdminTeacherPaymentConfigPage from './pages/GymAdminTeacherPaymentConfigPage'
 import GymAdminImportPage from './pages/GymAdminImportPage'
 import GymAdminBranchesPage from './pages/GymAdminBranchesPage'
@@ -497,6 +498,16 @@ export default function App() {
           <ProtectedRoute allowedRoles={['gym_admin']}>
             <ShellRoute>
               <GymAdminReservationWindowConfigPage />
+            </ShellRoute>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/gym-admin/settings/attendance-edit"
+        element={
+          <ProtectedRoute allowedRoles={['gym_admin']}>
+            <ShellRoute>
+              <GymAdminAttendanceEditConfigPage />
             </ShellRoute>
           </ProtectedRoute>
         }

@@ -13,6 +13,9 @@ import string
 from .fields import EncryptedTextField
 
 
+DEFAULT_TEACHER_ATTENDANCE_EDIT_LIMIT_MINUTES = 30
+
+
 # P4 — doble identidad del administrador.
 #
 # `CustomUser.role` es una opción ÚNICA y el par (email, RUT) es único por organización:
@@ -128,6 +131,11 @@ class Organization(TimestampedModel):
         default=21,
         validators=[MinValueValidator(1), MaxValueValidator(366)],
         help_text='Días hacia adelante en que se puede reservar una clase.',
+    )
+    teacher_attendance_edit_limit_minutes = models.PositiveIntegerField(
+        default=DEFAULT_TEACHER_ATTENDANCE_EDIT_LIMIT_MINUTES,
+        validators=[MaxValueValidator(1440)],
+        help_text='Minutos tras el fin de la clase en que el profesor puede editar asistencia.',
     )
     # Colchón de poda: cuántos días tiene que llevar TERMINADA una clase vacía para que el
     # job advance_class_windows la borre. Margen para backfill tardío (pasar lista el lunes
