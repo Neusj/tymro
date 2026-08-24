@@ -230,6 +230,7 @@ const navByRole = {
         { to: '/gym-admin/settings/student-discount', label: 'Descuento estudiante' },
         { to: '/gym-admin/settings/reservation-window', label: 'Anticipacion reservas' },
         { to: '/gym-admin/settings/attendance-edit', label: 'Edicion asistencia' },
+        { to: '/gym-admin/settings/personalized-classes', label: 'Clases personalizadas' },
         { to: '/gym-admin/settings/teacher-payment', label: 'Pago al profesor' },
       ],
     },

@@ -16,6 +16,7 @@ import GymAdminEnrollmentFeeConfigPage from './pages/GymAdminEnrollmentFeeConfig
 import GymAdminStudentDiscountConfigPage from './pages/GymAdminStudentDiscountConfigPage'
 import GymAdminReservationWindowConfigPage from './pages/GymAdminReservationWindowConfigPage'
 import GymAdminAttendanceEditConfigPage from './pages/GymAdminAttendanceEditConfigPage'
+import GymAdminPersonalizedClassesConfigPage from './pages/GymAdminPersonalizedClassesConfigPage'
 import GymAdminTeacherPaymentConfigPage from './pages/GymAdminTeacherPaymentConfigPage'
 import GymAdminImportPage from './pages/GymAdminImportPage'
 import GymAdminBranchesPage from './pages/GymAdminBranchesPage'
@@ -530,6 +531,16 @@ export default function App() {
           <ProtectedRoute allowedRoles={['gym_admin']}>
             <ShellRoute>
               <GymAdminAttendanceEditConfigPage />
+            </ShellRoute>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/gym-admin/settings/personalized-classes"
+        element={
+          <ProtectedRoute allowedRoles={['gym_admin']}>
+            <ShellRoute>
+              <GymAdminPersonalizedClassesConfigPage />
             </ShellRoute>
           </ProtectedRoute>
         }

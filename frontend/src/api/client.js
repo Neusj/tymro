@@ -240,6 +240,10 @@ export const organizationsApi = {
     const { data } = await api.post(`/organizations/${id}/set-public-registration/`, { enabled })
     return data
   },
+  setPersonalizedClasses: async (id, enabled) => {
+    const { data } = await api.post(`/organizations/${id}/set-personalized-classes/`, { enabled })
+    return data
+  },
 }
 
 export const branchesApi = {

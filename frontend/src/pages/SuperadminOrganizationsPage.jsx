@@ -22,6 +22,7 @@ const initialForm = {
   primary_color: '',
   secondary_color: '',
   logo: null,
+  personalized_classes_enabled: false,
 }
 
 // Sugerencia de subdominio desde el slug, replicando la normalización del backend
@@ -99,6 +100,7 @@ export default function SuperadminOrganizationsPage() {
       logo: null,
       is_active: Boolean(organization.is_active),
       public_registration_enabled: Boolean(organization.public_registration_enabled),
+      personalized_classes_enabled: Boolean(organization.personalized_classes_enabled),
     })
     setSubdomainTouched(true)
     setError('')
@@ -304,6 +306,22 @@ export default function SuperadminOrganizationsPage() {
                   Permitir registro público (clase de prueba / QR)
                   <span className="mt-0.5 block text-xs text-brand-muted">
                     Si está apagado, el link/QR de clase de prueba no funciona.
+                  </span>
+                </span>
+              </label>
+              <label className="flex items-start gap-3 text-sm">
+                <input
+                  type="checkbox"
+                  checked={Boolean(form.personalized_classes_enabled)}
+                  onChange={(event) =>
+                    setForm((prev) => ({ ...prev, personalized_classes_enabled: event.target.checked }))
+                  }
+                  className="mt-1 h-4 w-4 shrink-0"
+                />
+                <span>
+                  Habilitar clases personalizadas
+                  <span className="mt-0.5 block text-xs text-brand-muted">
+                    Muestra el menu de clase personalizada y permite registro por QR.
                   </span>
                 </span>
               </label>

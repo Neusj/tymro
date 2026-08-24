@@ -2167,6 +2167,15 @@ class OrganizationViewSet(ModelViewSet):
         organization.save(update_fields=['public_registration_enabled', 'updated_at'])
         return Response(self.get_serializer(organization).data)
 
+    @action(detail=True, methods=['post'], url_path='set-personalized-classes')
+    def set_personalized_classes(self, request, pk=None):
+        organization = self.get_object()
+        if not _can_manage_org_resource(request.user, organization.id):
+            raise PermissionDenied('No puedes cambiar las clases personalizadas de esta organización.')
+        organization.personalized_classes_enabled = _parse_bool(request.data.get('enabled'), default=True)
+        organization.save(update_fields=['personalized_classes_enabled', 'updated_at'])
+        return Response(self.get_serializer(organization).data)
+
     @action(detail=True, methods=['get', 'put'], url_path='trial-followup-config')
     def trial_followup_config(self, request, pk=None):
         """Config del email de seguimiento de clases de prueba de la organización.

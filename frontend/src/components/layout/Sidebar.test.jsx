@@ -111,3 +111,17 @@ describe('Sidebar — flujo personal del gym_admin', () => {
     expect(screen.getByRole('link', { name: 'Asignar plan' })).toHaveAttribute('href', '/gym-admin/plans/assign')
   })
 })
+
+describe('Sidebar - configuracion de clases personalizadas', () => {
+  it('muestra el acceso para activar el flujo desde la UI', async () => {
+    renderSidebar({ role: 'gym_admin' })
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'Configuraciones' }))
+
+    expect(screen.getByRole('link', { name: 'Clases personalizadas' })).toHaveAttribute(
+      'href',
+      '/gym-admin/settings/personalized-classes',
+    )
+  })
+})

@@ -253,3 +253,21 @@ def test_feature_flag_blocks_teacher_qr(api_client, setup):
     api_client.force_authenticate(user=setup['teacher_a'])
     response = api_client.post(QR_URL, {}, format='json')
     assert response.status_code == 403
+
+
+def test_gym_admin_can_toggle_personalized_classes_from_ui_endpoint(api_client, setup, make_user):
+    admin = make_user('personalized-admin', organization=setup['org'], role='gym_admin')
+    setup['org'].personalized_classes_enabled = False
+    setup['org'].save(update_fields=['personalized_classes_enabled'])
+
+    api_client.force_authenticate(user=admin)
+    response = api_client.post(
+        f"/api/organizations/{setup['org'].id}/set-personalized-classes/",
+        {'enabled': True},
+        format='json',
+    )
+
+    assert response.status_code == 200, response.content
+    setup['org'].refresh_from_db()
+    assert setup['org'].personalized_classes_enabled is True
+    assert response.json()['personalized_classes_enabled'] is True
