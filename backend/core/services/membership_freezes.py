@@ -180,10 +180,7 @@ def complete_membership_freeze(*, freeze, actual_end_date, actor=None, reason=''
             code='freeze_already_completed',
         )
     if actual_end_date < freeze.start_date:
-        raise MembershipFreezeError(
-            'La fecha real de término no puede ser anterior al inicio.',
-            code='invalid_freeze_period',
-        )
+        actual_end_date = freeze.start_date
     if actual_end_date > freeze.planned_end_date:
         actual_end_date = freeze.planned_end_date
 

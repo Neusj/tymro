@@ -3,6 +3,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('../api/client', () => ({
+  freezePlanMembership: vi.fn(),
   getStudentOverview: vi.fn(),
   studentOverviewDetailsApi: {
     reservations: vi.fn(),
@@ -11,6 +12,7 @@ vi.mock('../api/client', () => ({
     memberships: vi.fn(),
     recurringReservations: vi.fn(),
   },
+  unfreezePlanMembership: vi.fn(),
   usersApi: { list: vi.fn() },
 }))
 

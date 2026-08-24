@@ -384,6 +384,7 @@ def _membership_summary(memberships):
     active = [
         {
             'id': item.get('id'),
+            'plan': item.get('plan'),
             'plan_name': item.get('plan_name'),
             'start_date': item.get('start_date'),
             'end_date': item.get('end_date'),

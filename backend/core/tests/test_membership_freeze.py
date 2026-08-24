@@ -174,6 +174,26 @@ def test_early_unfreeze_extends_only_real_frozen_days(setup):
     assert membership.end_date == TODAY + timedelta(days=72)
 
 
+def test_unfreeze_future_freeze_closes_without_extension(setup):
+    membership = setup['membership']
+    original_end_date = membership.end_date
+    freeze = _freeze(membership, setup['admin'], start=TODAY + timedelta(days=5), days=10)
+
+    result = complete_membership_freeze(
+        freeze=freeze,
+        actual_end_date=TODAY,
+        actor=setup['admin'],
+        reason='Liberacion anticipada.',
+    )
+
+    membership.refresh_from_db()
+    freeze.refresh_from_db()
+    assert result.extension_days == 0
+    assert freeze.status == StudentPlanFreeze.Status.COMPLETED
+    assert freeze.actual_end_date == TODAY + timedelta(days=5)
+    assert membership.end_date == original_end_date
+
+
 def test_freeze_api_permissions(api_client, setup):
     url = f"/api/plans/{setup['plan'].id}/memberships/{setup['membership'].id}/freeze/"
     payload = {

@@ -1,9 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { getStudentOverview, studentOverviewDetailsApi, usersApi } from '../api/client'
+import {
+  freezePlanMembership,
+  getStudentOverview,
+  studentOverviewDetailsApi,
+  unfreezePlanMembership,
+  usersApi,
+} from '../api/client'
+import ConfirmDialog from '../components/ConfirmDialog'
 import DashboardHeader from '../components/DashboardHeader'
 import EmptyState from '../components/EmptyState'
 import DataTable from '../components/ui/DataTable'
+import FormModal from '../components/FormModal'
 import PlanAlertBadge from '../components/ui/PlanAlertBadge'
 import ValueBadge from '../components/ui/ValueBadge'
 import { extractApiErrorMessage } from '../utils/apiErrors'
@@ -23,6 +31,7 @@ const PERIOD_OPTIONS = [
 ]
 const WEEKDAY_LABELS = ['Lunes', 'Martes', 'Miercoles', 'Jueves', 'Viernes', 'Sabado', 'Domingo']
 const EMPTY_SECTION = { items: [], count: 0, page: 1, page_size: PAGE_SIZE, has_next: false, has_previous: false }
+const freezeInitialForm = { start_date: '', planned_end_date: '', reason: '' }
 
 const PAYMENT_STATUS_LABELS = { paid: 'Pagado', unpaid: 'Impago', free: 'Gratuito' }
 const PAYMENT_STATUS_CLASSES = {
@@ -56,6 +65,26 @@ function formatDateTime(value) {
 
 function formatTime(value) {
   return value ? value.slice(0, 5) : '-'
+}
+
+function addDaysInput(value, days) {
+  const base = value ? new Date(`${value}T00:00:00`) : new Date()
+  base.setDate(base.getDate() + days)
+  return base.toISOString().slice(0, 10)
+}
+
+function daysBetween(startDate, endDate) {
+  if (!startDate || !endDate) return 0
+  const start = new Date(`${startDate}T00:00:00`)
+  const end = new Date(`${endDate}T00:00:00`)
+  return Math.max(Math.round((end.getTime() - start.getTime()) / 86400000), 0)
+}
+
+function addDaysToDate(value, days) {
+  if (!value) return ''
+  const date = new Date(`${value}T00:00:00`)
+  date.setDate(date.getDate() + days)
+  return date.toISOString().slice(0, 10)
 }
 
 function PaymentStatusBadge({ status }) {
@@ -127,7 +156,7 @@ function BreakdownList({ items = [], emptyLabel = 'Sin datos' }) {
   )
 }
 
-function MembershipSummaryCard({ membership }) {
+function MembershipSummaryCard({ membership, onFreeze, onLiberate, working }) {
   const remaining = membership.unlimited_classes ? 'Ilimitadas' : `${membership.remaining_classes ?? 0} disponibles`
   return (
     <article className="rounded-lg border border-brand-line bg-black/20 p-3">
@@ -142,6 +171,27 @@ function MembershipSummaryCard({ membership }) {
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <PaymentStatusBadge status={membership.payment_status} />
         <EnrollmentFeeNote enrollmentFeeStatus={membership.enrollment_fee_status} />
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2 border-t border-brand-line pt-3">
+        {membership.active_freeze ? (
+          <button
+            type="button"
+            disabled={working}
+            onClick={() => onLiberate(membership)}
+            className="rounded-lg border border-amber-400/50 px-3 py-1.5 text-xs font-semibold text-amber-100 disabled:opacity-50"
+          >
+            Liberar
+          </button>
+        ) : (
+          <button
+            type="button"
+            disabled={working || membership.validity_status !== 'active'}
+            onClick={() => onFreeze(membership)}
+            className="rounded-lg border border-brand-line px-3 py-1.5 text-xs font-semibold text-brand-white disabled:opacity-50"
+          >
+            Congelar
+          </button>
+        )}
       </div>
     </article>
   )
@@ -356,7 +406,7 @@ function normalizeDetailRows(type, rows = []) {
   })
 }
 
-function detailColumns(type) {
+function detailColumns(type, actions = {}) {
   if (type === 'memberships') {
     return [
       { key: 'plan', label: 'Plan', mobile: 'title' },
@@ -365,6 +415,33 @@ function detailColumns(type) {
       { key: 'disponibles', label: 'Disponibles', mobile: 'secondary' },
       { key: 'pago', label: 'Pago' },
       { key: 'matricula', label: 'Matricula' },
+      {
+        key: 'actions',
+        label: 'Acciones',
+        sortable: false,
+        render: (row) => {
+          const membership = row.raw || {}
+          return membership.active_freeze ? (
+            <button
+              type="button"
+              disabled={actions.working}
+              onClick={() => actions.onLiberate?.(membership)}
+              className="rounded border border-amber-400/50 px-2 py-1 text-xs text-amber-100 disabled:opacity-50"
+            >
+              Liberar
+            </button>
+          ) : (
+            <button
+              type="button"
+              disabled={actions.working || membership.validity_status !== 'active'}
+              onClick={() => actions.onFreeze?.(membership)}
+              className="rounded border border-brand-line px-2 py-1 text-xs text-brand-white disabled:opacity-50"
+            >
+              Congelar
+            </button>
+          )
+        },
+      },
     ]
   }
   if (type === 'attendance') {
@@ -464,11 +541,16 @@ export default function GymAdminStudentOverviewPage() {
   const [selectedStudentPreview, setSelectedStudentPreview] = useState(null)
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [workingMembership, setWorkingMembership] = useState(false)
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
   const [period, setPeriod] = useState('30d')
   const [customStart, setCustomStart] = useState('')
   const [customEnd, setCustomEnd] = useState(todayLocalISO())
   const [detail, setDetail] = useState({ type: '', loading: false, error: '', data: EMPTY_SECTION })
+  const [freezing, setFreezing] = useState(null)
+  const [freezeForm, setFreezeForm] = useState(freezeInitialForm)
+  const [liberating, setLiberating] = useState(null)
   const detailPanelRef = useRef(null)
 
   const overviewParams = useMemo(() => {
@@ -554,6 +636,62 @@ export default function GymAdminStudentOverviewPage() {
 
   const closeDetail = () => setDetail({ type: '', loading: false, error: '', data: EMPTY_SECTION })
   const activeMemberships = currentSummary.memberships.active_items || []
+  const refreshMembershipData = async () => {
+    await load(studentId, overviewParams)
+    if (detail.type === 'memberships') {
+      await loadDetail('memberships', detail.data.page || 1)
+    }
+  }
+  const openFreeze = (membership) => {
+    const start = todayLocalISO()
+    setFreezing(membership)
+    setFreezeForm({ start_date: start, planned_end_date: addDaysInput(start, 1), reason: '' })
+    setError('')
+    setNotice('')
+  }
+  const saveFreeze = async (event) => {
+    event.preventDefault()
+    if (!freezing) return
+    if (!freezeForm.reason.trim()) {
+      setError('Indica el motivo del congelamiento.')
+      return
+    }
+    setWorkingMembership(true)
+    setError('')
+    setNotice('')
+    try {
+      await freezePlanMembership(freezing.plan, freezing.id, {
+        start_date: freezeForm.start_date,
+        planned_end_date: freezeForm.planned_end_date,
+        reason: freezeForm.reason.trim(),
+      })
+      setNotice('Membresia congelada.')
+      setFreezing(null)
+      await refreshMembershipData()
+    } catch (apiError) {
+      setError(extractApiErrorMessage(apiError, 'No se pudo congelar la membresia.'))
+    } finally {
+      setWorkingMembership(false)
+    }
+  }
+  const liberateMembership = async () => {
+    if (!liberating) return
+    setWorkingMembership(true)
+    setError('')
+    setNotice('')
+    try {
+      await unfreezePlanMembership(liberating.plan, liberating.id, { reason: 'Liberacion anticipada.' })
+      setNotice('Membresia liberada.')
+      setLiberating(null)
+      await refreshMembershipData()
+    } catch (apiError) {
+      setError(extractApiErrorMessage(apiError, 'No se pudo liberar la membresia.'))
+    } finally {
+      setWorkingMembership(false)
+    }
+  }
+  const freezeDays = daysBetween(freezeForm.start_date, freezeForm.planned_end_date)
+  const freezeProjectedEnd = freezing ? addDaysToDate(freezing.end_date, freezeDays) : ''
 
   return (
     <div className="space-y-5">
@@ -636,6 +774,7 @@ export default function GymAdminStudentOverviewPage() {
           <p className="mt-5 rounded-xl border border-brand-red/50 bg-brand-red/10 px-4 py-3 text-sm text-red-200">{error}</p>
         ) : data ? (
           <div className="mt-5">
+            {notice ? <p className="mb-4 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">{notice}</p> : null}
             <div className="mb-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <div className="rounded-lg border border-brand-line bg-black/20 p-3">
                 <p className="text-xs text-brand-muted">Membresias activas</p>
@@ -664,7 +803,13 @@ export default function GymAdminStudentOverviewPage() {
               {activeMemberships.length ? (
                 <div className="grid gap-3 sm:grid-cols-2">
                   {activeMemberships.map((membership) => (
-                    <MembershipSummaryCard key={membership.id} membership={membership} />
+                    <MembershipSummaryCard
+                      key={membership.id}
+                      membership={membership}
+                      working={workingMembership}
+                      onFreeze={openFreeze}
+                      onLiberate={setLiberating}
+                    />
                   ))}
                 </div>
               ) : (
@@ -779,7 +924,11 @@ export default function GymAdminStudentOverviewPage() {
             <p className="rounded-xl border border-brand-red/50 bg-brand-red/10 px-4 py-3 text-sm text-red-200">{detail.error}</p>
           ) : (
             <DataTable
-              columns={detailColumns(detail.type)}
+              columns={detailColumns(detail.type, {
+                working: workingMembership,
+                onFreeze: openFreeze,
+                onLiberate: setLiberating,
+              })}
               data={normalizeDetailRows(detail.type, detail.data.items || [])}
               maxBodyHeight="520px"
               defaultSort={{ key: detail.type === 'memberships' ? 'vigencia' : 'fecha', direction: 'desc' }}
@@ -787,6 +936,86 @@ export default function GymAdminStudentOverviewPage() {
           )}
         </section>
       ) : null}
+
+      <FormModal
+        open={Boolean(freezing)}
+        title={`Congelar membresia${freezing ? ` - ${freezing.plan_name || 'Plan'}` : ''}`}
+        size="md"
+        closeDisabled={workingMembership}
+        onClose={() => {
+          setFreezing(null)
+          setError('')
+        }}
+      >
+        <form onSubmit={saveFreeze} className="space-y-5">
+          <div className="grid gap-3 md:grid-cols-2">
+            <label className="min-w-0 space-y-1 text-sm">
+              <span>Inicio</span>
+              <input
+                required
+                type="date"
+                disabled={workingMembership}
+                value={freezeForm.start_date}
+                onChange={(event) => {
+                  const nextStart = event.target.value
+                  setFreezeForm((prev) => ({
+                    ...prev,
+                    start_date: nextStart,
+                    planned_end_date: prev.planned_end_date && prev.planned_end_date > nextStart
+                      ? prev.planned_end_date
+                      : addDaysInput(nextStart, 1),
+                  }))
+                }}
+                className="field"
+              />
+            </label>
+            <label className="min-w-0 space-y-1 text-sm">
+              <span>Termino</span>
+              <input
+                required
+                type="date"
+                disabled={workingMembership}
+                value={freezeForm.planned_end_date}
+                onChange={(event) => setFreezeForm((prev) => ({ ...prev, planned_end_date: event.target.value }))}
+                className="field"
+              />
+            </label>
+            <label className="min-w-0 space-y-1 text-sm md:col-span-2">
+              <span>Motivo</span>
+              <textarea
+                required
+                rows={3}
+                disabled={workingMembership}
+                value={freezeForm.reason}
+                onChange={(event) => setFreezeForm((prev) => ({ ...prev, reason: event.target.value }))}
+                className="field"
+              />
+            </label>
+          </div>
+          <div className="rounded-lg border border-brand-line bg-black/20 p-3 text-sm">
+            Esta membresia se congelara por {freezeDays} dia(s).
+            {freezeProjectedEnd ? <span className="block text-brand-muted">Nuevo vencimiento previsto: {formatDate(freezeProjectedEnd)}</span> : null}
+          </div>
+          <div className="flex justify-end gap-2">
+            <button type="button" disabled={workingMembership} onClick={() => setFreezing(null)} className="rounded-lg border border-brand-line px-3 py-2 text-sm font-semibold text-brand-white disabled:opacity-60">
+              Cancelar
+            </button>
+            <button type="submit" disabled={workingMembership || freezeDays <= 0} className="rounded-lg bg-brand-blue px-3 py-2 text-sm font-semibold text-white disabled:opacity-60">
+              {workingMembership ? 'Guardando...' : 'Congelar membresia'}
+            </button>
+          </div>
+        </form>
+      </FormModal>
+
+      <ConfirmDialog
+        open={Boolean(liberating)}
+        title="Liberar membresia"
+        description={`Se cerrara el congelamiento de ${liberating?.plan_name || 'esta membresia'}.`}
+        confirmLabel="Liberar"
+        loading={workingMembership}
+        onCancel={() => setLiberating(null)}
+        onConfirm={liberateMembership}
+      />
     </div>
   )
 }
