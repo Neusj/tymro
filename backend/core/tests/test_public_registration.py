@@ -6,12 +6,12 @@ que la clase de prueba es UNA sola por persona, los guards de la prueba y el
 rate-limit del endpoint público. El link es público por slug (sin token).
 """
 import re
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 
 import pytest
 from django.utils import timezone
 
-from core.models import Branch, Enrollment, GymClass
+from core.models import Branch, Discipline, Enrollment, GymClass
 
 pytestmark = pytest.mark.django_db
 
@@ -52,6 +52,13 @@ def _make_trial_class(org, branch, *, when=None, capacity=20, eligible=True, nam
         end_datetime=start + timedelta(hours=1),
         capacity=capacity,
         is_trial_eligible=eligible,
+    )
+
+
+def _local_dt(day, hour, minute=0):
+    return timezone.make_aware(
+        datetime.combine(day, time(hour=hour, minute=minute)),
+        timezone.get_current_timezone(),
     )
 
 
@@ -248,6 +255,103 @@ def test_admin_created_student_cannot_book_free_trial(api_client, make_organizat
     student.refresh_from_db()
     assert student.trial_eligible is False
     assert student.has_used_trial is False
+
+
+def test_trial_classes_are_day_filtered_limited_and_chronological(api_client, make_organization, make_user):
+    org = make_organization(name='Org A')
+    branch = Branch.objects.create(organization=org, name='Sede')
+    student = make_user('stu', organization=org, role='student', email='stu@example.com')
+    student.email_verified = True
+    student.trial_eligible = True
+    student.save(update_fields=['email_verified', 'trial_eligible'])
+
+    target_day = timezone.localdate() + timedelta(days=1)
+    other_day = target_day + timedelta(days=1)
+    hours = [18, 7, 20, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+    created_by_hour = {
+        hour: _make_trial_class(
+            org,
+            branch,
+            when=_local_dt(target_day, hour),
+            name=f'Clase {hour:02d}',
+        )
+        for hour in hours
+    }
+    _make_trial_class(org, branch, when=_local_dt(other_day, 8), name='Otro dia')
+
+    api_client.force_authenticate(user=student)
+    resp = api_client.get(TRIAL_CLASSES_URL, {
+        'date': target_day.isoformat(),
+        'include_filters': '1',
+    })
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data['count'] == 12
+    assert data['limit'] == 10
+    assert data['has_more'] is True
+    assert len(data['results']) == 10
+    assert [row['id'] for row in data['results']] == [
+        created_by_hour[hour].id for hour in [7, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+    ]
+
+
+def test_trial_classes_search_and_filters_are_server_side(api_client, make_organization, make_user):
+    org = make_organization(name='Org A')
+    centro = Branch.objects.create(organization=org, name='Centro')
+    norte = Branch.objects.create(organization=org, name='Norte')
+    yoga = Discipline.objects.create(organization=org, name='Yoga')
+    bjj = Discipline.objects.create(organization=org, name='BJJ')
+    teacher = make_user(
+        'ana_prof',
+        organization=org,
+        role='teacher',
+        email='ana.prof@example.com',
+        first_name='Ana',
+        last_name='Lopez',
+    )
+    student = make_user('stu', organization=org, role='student', email='stu@example.com')
+    student.email_verified = True
+    student.trial_eligible = True
+    student.save(update_fields=['email_verified', 'trial_eligible'])
+    target_day = timezone.localdate() + timedelta(days=1)
+
+    yoga_class = _make_trial_class(org, centro, when=_local_dt(target_day, 10), name='Flow suave')
+    yoga_class.discipline = yoga
+    yoga_class.teacher = teacher
+    yoga_class.save(update_fields=['discipline', 'teacher'])
+    bjj_class = _make_trial_class(org, norte, when=_local_dt(target_day, 11), name='Guard passing')
+    bjj_class.discipline = bjj
+    bjj_class.save(update_fields=['discipline'])
+
+    full_class = _make_trial_class(org, centro, when=_local_dt(target_day, 12), capacity=1, name='Llena')
+    Enrollment.objects.create(gym_class=full_class, student=student, status='active')
+    cancelled = _make_trial_class(org, centro, when=_local_dt(target_day, 13), name='Cancelada')
+    cancelled.status = GymClass.Status.CANCELLED
+    cancelled.save(update_fields=['status'])
+    _make_trial_class(org, centro, when=_local_dt(target_day, 14), eligible=False, name='No prueba')
+
+    api_client.force_authenticate(user=student)
+    searched = api_client.get(TRIAL_CLASSES_URL, {
+        'date': target_day.isoformat(),
+        'q': 'ana',
+        'include_filters': '1',
+    })
+    assert searched.status_code == 200
+    assert [row['id'] for row in searched.json()['results']] == [yoga_class.id]
+    assert searched.json()['results'][0]['discipline_name'] == 'Yoga'
+
+    filtered = api_client.get(TRIAL_CLASSES_URL, {
+        'date': target_day.isoformat(),
+        'branch_id': norte.id,
+        'discipline_id': bjj.id,
+        'include_filters': '1',
+    })
+    assert filtered.status_code == 200
+    body = filtered.json()
+    assert [row['id'] for row in body['results']] == [bjj_class.id]
+    assert {item['name'] for item in body['filters']['branches']} == {'Centro', 'Norte'}
+    assert {item['name'] for item in body['filters']['disciplines']} == {'BJJ', 'Yoga'}
 
 
 # --- 6) Resolución por subdominio (sin slug en el path) -------------------------

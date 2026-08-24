@@ -1,7 +1,7 @@
 ﻿from django.contrib.auth import authenticate, get_user_model
 import csv
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from uuid import uuid4
 
 from django.conf import settings
@@ -13,7 +13,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.mail import send_mail
 from django.db import models, transaction
 from django.db.models import ProtectedError, RestrictedError
-from django.db.models.functions import Concat
+from django.db.models.functions import Concat, Trim
 from django.utils import timezone
 from django.utils.dateparse import parse_date
 from django.utils.encoding import force_bytes, force_str
@@ -1253,6 +1253,129 @@ class PublicTrialClassesView(APIView):
     del alumno autenticado, dentro de la ventana de validez de la prueba."""
 
     permission_classes = [IsAuthenticated]
+    DEFAULT_LIMIT = 10
+    MAX_LIMIT = 50
+
+    def _parse_limit(self, request):
+        try:
+            requested = int(request.query_params.get('limit', self.DEFAULT_LIMIT))
+        except (TypeError, ValueError):
+            requested = self.DEFAULT_LIMIT
+        return min(max(requested, 1), self.MAX_LIMIT)
+
+    @staticmethod
+    def _optional_int_param(request, name):
+        raw_value = request.query_params.get(name)
+        if raw_value in (None, ''):
+            return None
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError):
+            raise ValidationError({name: 'Debe ser un id numérico.'})
+        if value <= 0:
+            raise ValidationError({name: 'Debe ser un id numérico.'})
+        return value
+
+    def _target_date(self, request):
+        raw_date = request.query_params.get('date')
+        if not raw_date:
+            return None
+        target_date = parse_date(raw_date)
+        if target_date is None:
+            raise ValidationError({'date': 'Formato de fecha inválido (usa YYYY-MM-DD).'})
+        return target_date
+
+    @staticmethod
+    def _day_bounds(target_date):
+        current_tz = timezone.get_current_timezone()
+        start = timezone.make_aware(datetime.combine(target_date, time.min), current_tz)
+        end = timezone.make_aware(datetime.combine(target_date, time.max), current_tz)
+        return start, end
+
+    def _available_queryset(self, user, *, now, window_end, target_date):
+        filters = {
+            'organization_id': user.organization_id,
+            'is_trial_eligible': True,
+            'status': GymClass.Status.SCHEDULED,
+            'start_datetime__gt': now,
+            'start_datetime__lte': window_end,
+        }
+        if target_date is not None:
+            day_start, day_end = self._day_bounds(target_date)
+            filters['start_datetime__gte'] = day_start
+            filters['start_datetime__lte'] = min(window_end, day_end)
+        return (
+            GymClass.objects.filter(**filters)
+            .select_related('branch', 'teacher', 'class_type', 'discipline')
+            .annotate(active_enrollments=models.Count(
+                'enrollments',
+                filter=models.Q(enrollments__status='active'),
+            ))
+            .filter(active_enrollments__lt=models.F('capacity'))
+        )
+
+    @staticmethod
+    def _filter_options(queryset):
+        def _values(field_id, field_name):
+            rows = (
+                queryset
+                .filter(**{f'{field_id}__isnull': False})
+                .values(id_value=models.F(field_id), name_value=models.F(field_name))
+                .order_by('name_value')
+                .distinct()
+            )
+            return [{'id': row['id_value'], 'name': row['name_value']} for row in rows if row['name_value']]
+
+        branches = _values('branch_id', 'branch__name')
+        disciplines = _values('discipline_id', 'discipline__name')
+
+        teacher_rows = (
+            queryset
+            .filter(teacher_id__isnull=False)
+            .annotate(
+                teacher_full_name=Trim(
+                    Concat('teacher__first_name', models.Value(' '), 'teacher__last_name')
+                )
+            )
+            .values('teacher_id', 'teacher_full_name', 'teacher__username')
+            .order_by('teacher_full_name', 'teacher__username')
+            .distinct()
+        )
+        teachers = []
+        for row in teacher_rows:
+            name = row['teacher_full_name'] or row['teacher__username'] or ''
+            if name:
+                teachers.append({'id': row['teacher_id'], 'name': name})
+
+        return {
+            'branches': branches,
+            'disciplines': disciplines,
+            'teachers': teachers,
+        }
+
+    def _apply_filters(self, queryset, request):
+        branch_id = self._optional_int_param(request, 'branch_id')
+        discipline_id = self._optional_int_param(request, 'discipline_id')
+        teacher_id = self._optional_int_param(request, 'teacher_id')
+        query = (request.query_params.get('q') or '').strip()
+
+        if branch_id:
+            queryset = queryset.filter(branch_id=branch_id)
+        if discipline_id:
+            queryset = queryset.filter(discipline_id=discipline_id)
+        if teacher_id:
+            queryset = queryset.filter(teacher_id=teacher_id)
+        if query:
+            queryset = queryset.filter(
+                models.Q(name__icontains=query)
+                | models.Q(class_type__name__icontains=query)
+                | models.Q(discipline__name__icontains=query)
+                | models.Q(branch__name__icontains=query)
+                | models.Q(teacher__first_name__icontains=query)
+                | models.Q(teacher__last_name__icontains=query)
+                | models.Q(teacher__username__icontains=query)
+            )
+        return queryset
 
     def get(self, request):
         user = request.user
@@ -1266,22 +1389,23 @@ class PublicTrialClassesView(APIView):
 
         now = timezone.now()
         window_end = now + timedelta(days=_trial_window_days(user.organization))
-        queryset = (
-            GymClass.objects.filter(
-                organization_id=user.organization_id,
-                is_trial_eligible=True,
-                status=GymClass.Status.SCHEDULED,
-                start_datetime__gt=now,
-                # Ventana de validez de la prueba (#19): no se ofrecen clases más allá
-                # de la ventana configurada por la org (default 7 días).
-                start_datetime__lte=window_end,
-            )
-            .select_related('branch', 'teacher', 'class_type')
-            .order_by('start_datetime')
-        )
+        target_date = self._target_date(request)
+        base_queryset = self._available_queryset(user, now=now, window_end=window_end, target_date=target_date)
+        filtered_queryset = self._apply_filters(base_queryset, request).order_by('start_datetime', 'id')
+        total = filtered_queryset.count()
+        limit = self._parse_limit(request)
+        queryset = filtered_queryset[:limit]
         serializer = PublicTrialClassSerializer(queryset, many=True, context={'request': request})
-        # Solo las que aún tienen cupo.
-        data = [item for item in serializer.data if item['seats_left'] > 0]
+        data = serializer.data
+
+        if request.query_params.get('include_filters') == '1':
+            return Response({
+                'results': data,
+                'count': total,
+                'limit': limit,
+                'has_more': total > limit,
+                'filters': self._filter_options(base_queryset),
+            })
         return Response(data)
 
 

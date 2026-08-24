@@ -197,8 +197,8 @@ export const registrationApi = {
     const { data } = await publicApi.post('/public/verify-email/', { uid, token })
     return data
   },
-  listTrialClasses: async () => {
-    const { data } = await api.get('/public/trial-classes/')
+  listTrialClasses: async (params = {}) => {
+    const { data } = await api.get('/public/trial-classes/', { params })
     return data
   },
   bookTrial: async (gymClassId) => {

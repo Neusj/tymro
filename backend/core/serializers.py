@@ -3032,6 +3032,7 @@ class PublicTrialClassSerializer(serializers.ModelSerializer):
     branch_name = serializers.CharField(source='branch.name', read_only=True)
     teacher_name = serializers.SerializerMethodField()
     class_type_name = serializers.CharField(source='class_type.name', read_only=True)
+    discipline_name = serializers.CharField(source='discipline.name', read_only=True, allow_null=True)
     seats_left = serializers.SerializerMethodField()
 
     class Meta:
@@ -3042,6 +3043,7 @@ class PublicTrialClassSerializer(serializers.ModelSerializer):
             'branch_name',
             'teacher_name',
             'class_type_name',
+            'discipline_name',
             'start_datetime',
             'end_datetime',
             'capacity',
@@ -3055,7 +3057,9 @@ class PublicTrialClassSerializer(serializers.ModelSerializer):
         return full_name or obj.teacher.username
 
     def get_seats_left(self, obj):
-        active = obj.enrollments.filter(status='active').count()
+        active = getattr(obj, 'active_enrollments', None)
+        if active is None:
+            active = obj.enrollments.filter(status='active').count()
         return max(0, obj.capacity - active)
 
 
