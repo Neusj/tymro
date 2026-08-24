@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import QRCode from 'qrcode'
 import { personalizedClassesApi } from '../api/client'
+import ConfirmWithReasonDialog from '../components/ConfirmWithReasonDialog'
 import DashboardHeader from '../components/DashboardHeader'
 import FormModal from '../components/FormModal'
 import PersonalizedClassesTable from '../components/PersonalizedClassesTable'
@@ -42,6 +43,8 @@ export default function TeacherPersonalizedClassPage() {
   const [loading, setLoading] = useState(true)
   const [starting, setStarting] = useState(false)
   const [finishingId, setFinishingId] = useState(null)
+  const [cancellingId, setCancellingId] = useState(null)
+  const [cancellingClass, setCancellingClass] = useState(null)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [modalOpen, setModalOpen] = useState(false)
@@ -103,6 +106,25 @@ export default function TeacherPersonalizedClassPage() {
     }
   }
 
+  const cancelClass = async (reason) => {
+    if (!cancellingClass?.id || !reason?.trim()) {
+      return
+    }
+    setCancellingId(cancellingClass.id)
+    setError('')
+    setNotice('')
+    try {
+      await personalizedClassesApi.cancel(cancellingClass.id, { reason: reason.trim() })
+      setCancellingClass(null)
+      setNotice('Clase personalizada anulada y devuelta al plan del alumno.')
+      await loadSessions()
+    } catch (apiError) {
+      setError(firstApiError(apiError?.response?.data, 'No se pudo anular la clase personalizada.'))
+    } finally {
+      setCancellingId(null)
+    }
+  }
+
   useEffect(() => {
     const timer = window.setTimeout(() => {
       setDebouncedSearch(search)
@@ -130,7 +152,7 @@ export default function TeacherPersonalizedClassPage() {
 
   const hasActiveQr = Boolean(qrData?.check_in_url && secondsLeft > 0)
   const subtitle = useMemo(
-    () => 'Busca, filtra y pagina sesiones privadas. Los QR no usados no se guardan como clases.',
+    () => 'Busca, filtra y pagina sesiones privadas. Anular una clase devuelve la sesion al plan del alumno.',
     [],
   )
 
@@ -173,7 +195,9 @@ export default function TeacherPersonalizedClassPage() {
           setPage(1)
         }}
         onFinish={finishClass}
+        onCancel={setCancellingClass}
         finishingId={finishingId}
+        cancellingId={cancellingId}
       />
 
       <FormModal open={modalOpen} title="QR de clase personalizada" onClose={() => setModalOpen(false)}>
@@ -193,6 +217,22 @@ export default function TeacherPersonalizedClassPage() {
           </p>
         </div>
       </FormModal>
+
+      <ConfirmWithReasonDialog
+        open={Boolean(cancellingClass)}
+        title="Anular clase personalizada"
+        description={`Se anulara la clase de ${cancellingClass?.student || 'este alumno'} y se devolvera una sesion al plan usado.`}
+        reasonLabel="Motivo de anulacion"
+        confirmLabel="Anular clase"
+        variant="danger"
+        loading={Boolean(cancellingId)}
+        onCancel={() => {
+          if (!cancellingId) {
+            setCancellingClass(null)
+          }
+        }}
+        onConfirm={cancelClass}
+      />
     </div>
   )
 }

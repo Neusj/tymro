@@ -177,6 +177,7 @@ from .services.teacher_payments import build_teacher_payment_summary, calculate_
 from .services.personalized_classes import (
     PERSONALIZED_NO_PLAN_MESSAGE,
     PersonalizedClassError,
+    cancel_personalized_session,
     confirm_personalized_qr,
     confirm_personalized_session,
     finish_personalized_session,
@@ -1452,9 +1453,20 @@ def _personalized_teacher_name(teacher):
     return _user_display_name(teacher)
 
 
-def _serialize_personalized_session(session, remaining_classes=None):
+def _can_manage_personalized_session(user, session):
+    if not user or not getattr(user, 'organization_id', None):
+        return False
+    if user.organization_id != session.organization_id:
+        return False
+    if _is_gym_admin(user):
+        return True
+    return _is_teacher(user) and session.teacher_id == user.id
+
+
+def _serialize_personalized_session(session, remaining_classes=None, actor=None):
     started_at = session.confirmed_at or session.qr_issued_at
-    ended_at = session.finished_at or session.confirmed_at or session.qr_expires_at
+    ended_at = session.finished_at or session.cancelled_at or session.confirmed_at or session.qr_expires_at
+    can_manage = _can_manage_personalized_session(actor, session)
     return {
         'id': session.id,
         'name': 'Clase personalizada',
@@ -1473,12 +1485,19 @@ def _serialize_personalized_session(session, remaining_classes=None):
         'qr_expires_at': session.qr_expires_at,
         'confirmed_at': session.confirmed_at,
         'finished_at': session.finished_at,
+        'cancelled_at': session.cancelled_at,
+        'cancelled_by': _user_display_name(session.cancelled_by) if session.cancelled_by_id else '',
+        'cancellation_reason': session.cancellation_reason,
         'branch': session.branch.name if session.branch_id else '',
         'personalized_session_id': session.id,
         'remaining_classes': remaining_classes,
         'student_plan_id': session.student_plan_id,
         'student_plan_name': session.student_plan.plan.name if session.student_plan_id else '',
-        'can_finish': session.status == PersonalizedClassSession.Status.CONFIRMED,
+        'can_finish': can_manage and session.status == PersonalizedClassSession.Status.CONFIRMED,
+        'can_cancel': can_manage and session.status in {
+            PersonalizedClassSession.Status.CONFIRMED,
+            PersonalizedClassSession.Status.FINISHED,
+        },
     }
 
 
@@ -1501,12 +1520,16 @@ def _serialize_personalized_qr_context(payload, teacher, branch=None, discipline
         'qr_expires_at': payload.get('expires_at'),
         'confirmed_at': None,
         'finished_at': None,
+        'cancelled_at': None,
+        'cancelled_by': '',
+        'cancellation_reason': '',
         'branch': branch.name if branch else '',
         'personalized_session_id': None,
         'remaining_classes': remaining_classes,
         'student_plan_id': None,
         'student_plan_name': '',
         'can_finish': False,
+        'can_cancel': False,
     }
 
 
@@ -2034,7 +2057,7 @@ class PersonalizedClassSessionListView(APIView):
                 'page': safe_page,
                 'page_size': page_size,
                 'total_pages': total_pages,
-                'results': [_serialize_personalized_session(session) for session in items],
+                'results': [_serialize_personalized_session(session, actor=user) for session in items],
             }
         )
 
@@ -2051,7 +2074,25 @@ class PersonalizedClassSessionFinishView(APIView):
             if exc.code == 'forbidden':
                 raise PermissionDenied(exc.message)
             return Response({'detail': exc.message, 'code': exc.code, **exc.extra}, status=status.HTTP_400_BAD_REQUEST)
-        return Response(_serialize_personalized_session(session))
+        return Response(_serialize_personalized_session(session, actor=request.user))
+
+
+class PersonalizedClassSessionCancelView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        reason = str(request.data.get('reason') or request.data.get('comment') or '').strip()
+        if not reason:
+            raise ValidationError({'reason': 'Debes indicar el motivo de anulacion.'})
+        try:
+            session = cancel_personalized_session(session_id=pk, actor=request.user, reason=reason)
+        except PersonalizedClassSession.DoesNotExist:
+            raise NotFound('Clase personalizada no encontrada.')
+        except PersonalizedClassError as exc:
+            if exc.code == 'forbidden':
+                raise PermissionDenied(exc.message)
+            return Response({'detail': exc.message, 'code': exc.code, **exc.extra}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(_serialize_personalized_session(session, actor=request.user))
 
 
 class AttendanceQrCurrentView(APIView):

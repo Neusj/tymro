@@ -6,6 +6,7 @@ from django.utils import timezone
 
 from core.models import (
     Attendance,
+    AttendanceChangeLog,
     Branch,
     ConsumptionLog,
     GymClass,
@@ -128,6 +129,17 @@ def _scan_personalized(api_client, student, token):
 def _finish_personalized(api_client, actor, session_id):
     api_client.force_authenticate(user=actor)
     response = api_client.post(f'/api/personalized-classes/{session_id}/finish/', {}, format='json')
+    assert response.status_code == 200, response.content
+    return response.json()
+
+
+def _cancel_personalized(api_client, actor, session_id, reason='Alumno escaneo por error'):
+    api_client.force_authenticate(user=actor)
+    response = api_client.post(
+        f'/api/personalized-classes/{session_id}/cancel/',
+        {'reason': reason},
+        format='json',
+    )
     assert response.status_code == 200, response.content
     return response.json()
 
@@ -298,6 +310,57 @@ def test_personalized_consumption_creates_attendance_and_exactly_one_log(api_cli
     assert ConsumptionLog.objects.get(personalized_session=session).student_plan == setup['personalized_membership']
     setup['personalized_membership'].refresh_from_db()
     assert setup['personalized_membership'].classes_used == 1
+
+
+def test_personalized_cancel_refunds_plan_and_keeps_traceability(api_client, setup):
+    payload = _scan_personalized(api_client, setup['student'], _personalized_token(api_client, setup['teacher_a']))
+    session = PersonalizedClassSession.objects.get(id=payload['class']['personalized_session_id'])
+
+    api_client.force_authenticate(user=setup['teacher_b'])
+    wrong_teacher = api_client.post(
+        f'/api/personalized-classes/{session.id}/cancel/',
+        {'reason': 'No era su clase'},
+        format='json',
+    )
+    assert wrong_teacher.status_code == 403
+
+    _finish_personalized(api_client, setup['teacher_a'], session.id)
+    summary_before_cancel = build_teacher_payment_summary(setup['org'].id, TODAY, TODAY, class_kind='personalized')
+    row_before_cancel = next(item for item in summary_before_cancel['rows'] if item['teacher_id'] == setup['teacher_a'].id)
+    assert row_before_cancel['personalized_classes_count'] == 1
+
+    cancel_payload = _cancel_personalized(api_client, setup['admin'], session.id)
+
+    session.refresh_from_db()
+    setup['personalized_membership'].refresh_from_db()
+    attendance = Attendance.objects.get(personalized_session=session, student=setup['student'])
+    assert session.status == PersonalizedClassSession.Status.CANCELLED
+    assert session.cancelled_by == setup['admin']
+    assert session.cancellation_reason == 'Alumno escaneo por error'
+    assert cancel_payload['status'] == PersonalizedClassSession.Status.CANCELLED
+    assert cancel_payload['can_cancel'] is False
+    assert setup['personalized_membership'].classes_used == 0
+    assert not ConsumptionLog.objects.filter(personalized_session=session).exists()
+    assert attendance.status == Attendance.Status.ABSENT
+    assert AttendanceChangeLog.objects.filter(
+        attendance=attendance,
+        previous_status=Attendance.Status.PRESENT,
+        new_status=Attendance.Status.ABSENT,
+        changed_by=setup['admin'],
+    ).exists()
+
+    _cancel_personalized(api_client, setup['admin'], session.id)
+    setup['personalized_membership'].refresh_from_db()
+    assert setup['personalized_membership'].classes_used == 0
+    assert ConsumptionLog.objects.filter(personalized_session=session).count() == 0
+
+    summary_after_cancel = build_teacher_payment_summary(setup['org'].id, TODAY, TODAY, class_kind='personalized')
+    row_after_cancel = next(
+        (item for item in summary_after_cancel['rows'] if item['teacher_id'] == setup['teacher_a'].id),
+        None,
+    )
+    if row_after_cancel is not None:
+        assert row_after_cancel['personalized_classes_count'] == 0
 
 
 def test_personalized_sessions_are_counted_separately_in_teacher_summary(api_client, setup):

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import TeacherPersonalizedClassPage from './TeacherPersonalizedClassPage'
@@ -15,6 +15,7 @@ vi.mock('../api/client', () => ({
     list: vi.fn(),
     createQr: vi.fn(),
     finish: vi.fn(),
+    cancel: vi.fn(),
   },
 }))
 
@@ -87,5 +88,60 @@ describe('TeacherPersonalizedClassPage', () => {
     await waitFor(() => expect(personalizedClassesApi.finish).toHaveBeenCalledWith(7))
     expect(await screen.findByText('Clase personalizada finalizada.')).toBeInTheDocument()
     expect(screen.getAllByText('Dictada').length).toBeGreaterThan(0)
+  })
+
+  it('permite anular una clase con motivo y recargar la lista', async () => {
+    personalizedClassesApi.list
+      .mockResolvedValueOnce({
+        count: 1,
+        page: 1,
+        page_size: 10,
+        total_pages: 1,
+        results: [
+          {
+            id: 9,
+            status: 'confirmed',
+            student: 'Alumno Dos',
+            teacher: 'Profe Ana',
+            confirmed_at: '2026-08-24T14:00:00Z',
+            student_plan_name: 'Privadas 10',
+            can_finish: true,
+            can_cancel: true,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        count: 1,
+        page: 1,
+        page_size: 10,
+        total_pages: 1,
+        results: [
+          {
+            id: 9,
+            status: 'cancelled',
+            student: 'Alumno Dos',
+            teacher: 'Profe Ana',
+            confirmed_at: '2026-08-24T14:00:00Z',
+            cancelled_at: '2026-08-24T14:15:00Z',
+            student_plan_name: 'Privadas 10',
+            can_finish: false,
+            can_cancel: false,
+          },
+        ],
+      })
+    personalizedClassesApi.cancel.mockResolvedValue({ id: 9, status: 'cancelled' })
+
+    render(<TeacherPersonalizedClassPage />)
+
+    await screen.findAllByRole('button', { name: 'Anular clase' })
+    await userEvent.click(screen.getAllByRole('button', { name: 'Anular clase' })[0])
+
+    const dialog = await screen.findByRole('dialog', { name: 'Anular clase personalizada' })
+    await userEvent.type(within(dialog).getByLabelText(/Motivo de anulacion/), 'Alumno equivocado')
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Anular clase' }))
+
+    await waitFor(() => expect(personalizedClassesApi.cancel).toHaveBeenCalledWith(9, { reason: 'Alumno equivocado' }))
+    expect(await screen.findByText('Clase personalizada anulada y devuelta al plan del alumno.')).toBeInTheDocument()
+    expect(screen.getAllByText('Anulada').length).toBeGreaterThan(0)
   })
 })

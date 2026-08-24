@@ -1029,6 +1029,7 @@ class PersonalizedClassSession(TimestampedModel):
         PENDING = 'pending', 'Pendiente'
         CONFIRMED = 'confirmed', 'Confirmada'
         FINISHED = 'finished', 'Dictada'
+        CANCELLED = 'cancelled', 'Anulada'
 
     organization = models.ForeignKey(
         Organization,
@@ -1096,6 +1097,15 @@ class PersonalizedClassSession(TimestampedModel):
         blank=True,
         related_name='finished_personalized_class_sessions',
     )
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    cancelled_by = models.ForeignKey(
+        'accounts.CustomUser',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='cancelled_personalized_class_sessions',
+    )
+    cancellation_reason = models.TextField(blank=True, default='')
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
 
     class Meta:

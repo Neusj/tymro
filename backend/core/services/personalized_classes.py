@@ -16,6 +16,7 @@ from ..models import (
     TEACHER_ELIGIBLE_ROLES,
 )
 from .plans import describe_student_plan
+from .reservations import _revert_consumption_logs
 
 
 PERSONALIZED_NO_PLAN_MESSAGE = 'No tienes sesiones personalizadas disponibles.'
@@ -173,6 +174,75 @@ def finish_personalized_session(*, session_id, actor):
     session.finished_at = timezone.now()
     session.finished_by = actor
     session.save(update_fields=['status', 'finished_at', 'finished_by', 'updated_at'])
+    return session
+
+
+def _validate_personalized_session_staff_actor(actor, session, action):
+    if not actor or not getattr(actor, 'organization_id', None):
+        raise PersonalizedClassError(f'Solo profesores del gimnasio pueden {action} clases personalizadas.')
+    if actor.organization_id != session.organization_id:
+        raise PersonalizedClassError(f'No tienes permisos para {action} esta clase personalizada.', code='forbidden')
+    if actor.role not in TEACHER_ELIGIBLE_ROLES:
+        raise PersonalizedClassError(f'Solo profesores del gimnasio pueden {action} clases personalizadas.', code='forbidden')
+    if actor.role == 'teacher' and session.teacher_id != actor.id:
+        raise PersonalizedClassError(f'Solo puedes {action} clases personalizadas que dictas.', code='forbidden')
+    if not session.organization.personalized_classes_enabled:
+        raise PersonalizedClassError('Las clases personalizadas no estÃƒÂ¡n habilitadas para esta organizaciÃƒÂ³n.')
+
+
+@transaction.atomic
+def cancel_personalized_session(*, session_id, actor, reason=''):
+    session = (
+        PersonalizedClassSession.objects
+        .select_for_update(of=('self',))
+        .select_related('organization', 'teacher', 'student', 'student_plan__plan', 'branch', 'discipline', 'class_type')
+        .get(pk=session_id)
+    )
+
+    _validate_personalized_session_staff_actor(actor, session, 'anular')
+    if session.status == PersonalizedClassSession.Status.CANCELLED:
+        return session
+    if session.status not in {
+        PersonalizedClassSession.Status.CONFIRMED,
+        PersonalizedClassSession.Status.FINISHED,
+    }:
+        raise PersonalizedClassError('La clase todavia no tiene alumno registrado.', code='not_confirmed')
+
+    now = timezone.now()
+    _revert_consumption_logs(
+        ConsumptionLog.objects.filter(
+            personalized_session=session,
+            student_plan__organization_id=session.organization_id,
+        )
+    )
+
+    attendance = Attendance.objects.filter(
+        personalized_session=session,
+        student_id=session.student_id,
+    ).select_for_update().first()
+    if attendance is not None and attendance.status != Attendance.Status.ABSENT:
+        previous_status = attendance.status
+        attendance.status = Attendance.Status.ABSENT
+        attendance.source = Attendance.Source.MANUAL
+        attendance.marked_by = actor
+        attendance.marked_at = now
+        attendance.checked_at = now
+        attendance.save(update_fields=['status', 'source', 'marked_by', 'marked_at', 'checked_at', 'updated_at'])
+        AttendanceChangeLog.objects.create(
+            attendance=attendance,
+            previous_status=previous_status,
+            new_status=Attendance.Status.ABSENT,
+            changed_by=actor,
+            changed_at=now,
+            organization_id=session.organization_id,
+            source=Attendance.Source.MANUAL,
+        )
+
+    session.status = PersonalizedClassSession.Status.CANCELLED
+    session.cancelled_at = now
+    session.cancelled_by = actor
+    session.cancellation_reason = str(reason or '').strip()
+    session.save(update_fields=['status', 'cancelled_at', 'cancelled_by', 'cancellation_reason', 'updated_at'])
     return session
 
 

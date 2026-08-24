@@ -755,6 +755,10 @@ export const personalizedClassesApi = {
     const { data } = await api.post(`/personalized-classes/${id}/finish/`)
     return data
   },
+  cancel: async (id, payload = {}) => {
+    const { data } = await api.post(`/personalized-classes/${id}/cancel/`, payload)
+    return data
+  },
 }
 
 const normalizeListResponse = (data) => {

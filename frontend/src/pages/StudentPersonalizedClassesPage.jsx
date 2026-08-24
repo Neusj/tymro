@@ -61,7 +61,7 @@ export default function StudentPersonalizedClassesPage() {
     <div className="space-y-6">
       <DashboardHeader
         title="Mis clases personalizadas"
-        subtitle="Busca, filtra y revisa tus sesiones privadas en curso y dictadas."
+        subtitle="Busca, filtra y revisa tus sesiones privadas en curso, dictadas y anuladas."
       />
 
       {error ? <p className="rounded-lg border border-brand-red/50 bg-brand-red/10 px-3 py-2 text-sm text-red-200">{error}</p> : null}

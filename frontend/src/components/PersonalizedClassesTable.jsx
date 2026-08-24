@@ -13,6 +13,9 @@ function statusBadge(status) {
   if (status === 'finished') {
     return { text: 'Dictada', className: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200' }
   }
+  if (status === 'cancelled') {
+    return { text: 'Anulada', className: 'border-brand-red/50 bg-brand-red/10 text-red-200' }
+  }
   return { text: 'En curso', className: 'border-brand-orange/50 bg-brand-orange/10 text-amber-200' }
 }
 
@@ -25,7 +28,11 @@ function StatusChip({ status }) {
   )
 }
 
-function MobileRow({ item, showStudent, showTeacher, onFinish, finishingId }) {
+function sessionEndAt(item) {
+  return item.finished_at || item.cancelled_at
+}
+
+function MobileRow({ item, showStudent, showTeacher, onFinish, onCancel, finishingId, cancellingId }) {
   return (
     <article className="rounded-xl border border-brand-line bg-brand-panel/70 p-3.5">
       <div className="flex items-start justify-between gap-3">
@@ -56,7 +63,7 @@ function MobileRow({ item, showStudent, showTeacher, onFinish, finishingId }) {
         </div>
         <div>
           <dt className="text-[10px] font-semibold uppercase tracking-wide text-brand-dim">Fin</dt>
-          <dd className="text-brand-white">{formatDateTime(item.finished_at)}</dd>
+          <dd className="text-brand-white">{formatDateTime(sessionEndAt(item))}</dd>
         </div>
         <div className="min-w-0">
           <dt className="text-[10px] font-semibold uppercase tracking-wide text-brand-dim">Sede</dt>
@@ -67,15 +74,29 @@ function MobileRow({ item, showStudent, showTeacher, onFinish, finishingId }) {
           <dd className="truncate text-brand-white">{item.discipline || item.class_type || '-'}</dd>
         </div>
       </dl>
-      {item.can_finish && item.status === 'confirmed' ? (
-        <button
-          type="button"
-          onClick={() => onFinish(item.id)}
-          disabled={finishingId === item.id}
-          className="mt-3 min-h-11 w-full rounded-lg bg-brand-orange px-4 py-2 text-sm font-semibold text-brand-black transition hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {finishingId === item.id ? 'Finalizando...' : 'Finalizar clase'}
-        </button>
+      {(onFinish || onCancel) ? (
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+          {onFinish && item.can_finish && item.status === 'confirmed' ? (
+            <button
+              type="button"
+              onClick={() => onFinish(item.id)}
+              disabled={finishingId === item.id}
+              className="min-h-11 w-full rounded-lg bg-brand-orange px-4 py-2 text-sm font-semibold text-brand-black transition hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {finishingId === item.id ? 'Finalizando...' : 'Finalizar clase'}
+            </button>
+          ) : null}
+          {onCancel && item.can_cancel ? (
+            <button
+              type="button"
+              onClick={() => onCancel(item)}
+              disabled={cancellingId === item.id}
+              className="min-h-11 w-full rounded-lg border border-brand-red/60 px-4 py-2 text-sm font-semibold text-red-200 transition hover:bg-brand-red/10 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {cancellingId === item.id ? 'Anulando...' : 'Anular clase'}
+            </button>
+          ) : null}
+        </div>
       ) : null}
     </article>
   )
@@ -94,7 +115,9 @@ export default function PersonalizedClassesTable({
   onPageChange,
   onPageSizeChange,
   onFinish,
+  onCancel,
   finishingId,
+  cancellingId,
 }) {
   const count = Number(pagination?.count || 0)
   const page = Number(pagination?.page || 1)
@@ -102,7 +125,8 @@ export default function PersonalizedClassesTable({
   const totalPages = Number(pagination?.total_pages || 1)
   const startItem = count === 0 ? 0 : (page - 1) * pageSize + 1
   const endItem = count === 0 ? 0 : Math.min(page * pageSize, count)
-  const columnCount = 5 + (showStudent ? 1 : 0) + (showTeacher ? 1 : 0) + (onFinish ? 1 : 0)
+  const hasActions = Boolean(onFinish || onCancel)
+  const columnCount = 5 + (showStudent ? 1 : 0) + (showTeacher ? 1 : 0) + (hasActions ? 1 : 0)
 
   return (
     <div className="overflow-hidden rounded-2xl border border-brand-line bg-brand-soft/40 p-3 sm:p-4">
@@ -118,6 +142,7 @@ export default function PersonalizedClassesTable({
             <option value="all">Todos los estados</option>
             <option value="confirmed">En curso</option>
             <option value="finished">Dictadas</option>
+            <option value="cancelled">Anuladas</option>
           </select>
         </label>
       </div>
@@ -141,7 +166,7 @@ export default function PersonalizedClassesTable({
                   <th className="border-b border-brand-line bg-brand-panel/95 px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-brand-muted">Inicio</th>
                   <th className="border-b border-brand-line bg-brand-panel/95 px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-brand-muted">Fin</th>
                   <th className="border-b border-brand-line bg-brand-panel/95 px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-brand-muted">Sede</th>
-                  {onFinish ? <th className="border-b border-brand-line bg-brand-panel/95 px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-brand-muted">Acciones</th> : null}
+                  {hasActions ? <th className="border-b border-brand-line bg-brand-panel/95 px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-brand-muted">Acciones</th> : null}
                 </tr>
               </thead>
               <tbody>
@@ -157,20 +182,32 @@ export default function PersonalizedClassesTable({
                     {showTeacher ? <td className="border-b border-brand-line/60 px-4 py-3 text-sm text-brand-white">{item.teacher || '-'}</td> : null}
                     <td className="border-b border-brand-line/60 px-4 py-3 text-sm text-brand-white">{item.student_plan_name || '-'}</td>
                     <td className="border-b border-brand-line/60 px-4 py-3 text-sm text-brand-muted">{formatDateTime(item.confirmed_at)}</td>
-                    <td className="border-b border-brand-line/60 px-4 py-3 text-sm text-brand-muted">{formatDateTime(item.finished_at)}</td>
+                    <td className="border-b border-brand-line/60 px-4 py-3 text-sm text-brand-muted">{formatDateTime(sessionEndAt(item))}</td>
                     <td className="border-b border-brand-line/60 px-4 py-3 text-sm text-brand-muted">{item.branch || '-'}</td>
-                    {onFinish ? (
+                    {hasActions ? (
                       <td className="border-b border-brand-line/60 px-4 py-3 text-right">
-                        {item.can_finish && item.status === 'confirmed' ? (
-                          <button
-                            type="button"
-                            onClick={() => onFinish(item.id)}
-                            disabled={finishingId === item.id}
-                            className="min-h-10 rounded-lg bg-brand-orange px-3 py-2 text-xs font-semibold text-brand-black transition hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-60"
-                          >
-                            {finishingId === item.id ? 'Finalizando...' : 'Finalizar clase'}
-                          </button>
-                        ) : null}
+                        <div className="flex justify-end gap-2">
+                          {onFinish && item.can_finish && item.status === 'confirmed' ? (
+                            <button
+                              type="button"
+                              onClick={() => onFinish(item.id)}
+                              disabled={finishingId === item.id}
+                              className="min-h-10 rounded-lg bg-brand-orange px-3 py-2 text-xs font-semibold text-brand-black transition hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {finishingId === item.id ? 'Finalizando...' : 'Finalizar clase'}
+                            </button>
+                          ) : null}
+                          {onCancel && item.can_cancel ? (
+                            <button
+                              type="button"
+                              onClick={() => onCancel(item)}
+                              disabled={cancellingId === item.id}
+                              className="min-h-10 rounded-lg border border-brand-red/60 px-3 py-2 text-xs font-semibold text-red-200 transition hover:bg-brand-red/10 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {cancellingId === item.id ? 'Anulando...' : 'Anular clase'}
+                            </button>
+                          ) : null}
+                        </div>
                       </td>
                     ) : null}
                   </tr>
@@ -188,7 +225,9 @@ export default function PersonalizedClassesTable({
                 showStudent={showStudent}
                 showTeacher={showTeacher}
                 onFinish={onFinish}
+                onCancel={onCancel}
                 finishingId={finishingId}
+                cancellingId={cancellingId}
               />
             ))}
           </div>
