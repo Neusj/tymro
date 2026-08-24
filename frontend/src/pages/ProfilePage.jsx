@@ -47,7 +47,7 @@ export default function ProfilePage() {
       } else if (result.reason === 'not_configured') {
         const data = await pushApi.getPreferences()
         setPreferences(data)
-        setError('Las notificaciones todavia no estan configuradas en el servidor.')
+        setError('Las notificaciones push no estan disponibles por ahora.')
       } else {
         const data = await pushApi.getPreferences()
         setPreferences(data)
@@ -80,6 +80,11 @@ export default function ProfilePage() {
   const activeCount = preferences?.active_subscriptions_count || 0
   const serverConfigured = Boolean(preferences?.vapid_public_key)
   const activationDisabled = loading || !supported || browserPermission === 'denied' || !serverConfigured
+  const statusLabel = !serverConfigured
+    ? 'No disponibles'
+    : preferences?.push_enabled
+      ? 'Activadas'
+      : 'Desactivadas'
 
   return (
     <section className="max-w-3xl">
@@ -95,7 +100,7 @@ export default function ProfilePage() {
             <dl className="mt-4 space-y-2 text-sm">
               <div className="flex gap-2">
                 <dt className="w-36 shrink-0 text-brand-muted">Estado</dt>
-                <dd className="text-brand-white">{preferences?.push_enabled ? 'Activadas' : 'Desactivadas'}</dd>
+                <dd className="text-brand-white">{statusLabel}</dd>
               </div>
               <div className="flex gap-2">
                 <dt className="w-36 shrink-0 text-brand-muted">Dispositivos</dt>
@@ -105,14 +110,10 @@ export default function ProfilePage() {
                 <dt className="w-36 shrink-0 text-brand-muted">Navegador</dt>
                 <dd className="text-brand-white">{permissionLabel(browserPermission)}</dd>
               </div>
-              <div className="flex gap-2">
-                <dt className="w-36 shrink-0 text-brand-muted">Servidor</dt>
-                <dd className="text-brand-white">{serverConfigured ? 'Configurado' : 'Configuracion pendiente'}</dd>
-              </div>
             </dl>
             {preferences && !serverConfigured ? (
               <p className="mt-4 text-sm text-brand-muted">
-                Falta configurar la llave VAPID de push en produccion.
+                Las notificaciones push no estan disponibles por ahora.
               </p>
             ) : null}
             {message ? <p className="mt-4 text-sm text-emerald-300">{message}</p> : null}

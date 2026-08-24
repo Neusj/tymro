@@ -43,6 +43,9 @@ export default function PushPermissionPrompt() {
   if (preferences.push_enabled || preferences.prompt_status !== 'undecided') {
     return null
   }
+  if (!preferences.vapid_public_key) {
+    return null
+  }
   if (browserNotificationPermission() === 'denied') {
     return null
   }
@@ -55,7 +58,7 @@ export default function PushPermissionPrompt() {
       if (result.ok) {
         setPreferences(result.preferences)
       } else if (result.reason === 'not_configured') {
-        setError('Las notificaciones todavia no estan configuradas en el servidor.')
+        setError('Las notificaciones push no estan disponibles por ahora.')
       } else {
         const data = await pushApi.getPreferences()
         setPreferences(data)
