@@ -155,10 +155,8 @@ const navByRole = {
       label: 'Mi actividad',
       icon: <QrIcon />,
       children: [
-        { to: '/student/classes/available', label: 'Clases disponibles' },
         { to: '/student/classes/reservations', label: 'Mis reservas' },
-        { to: '/student/classes/recurring', label: 'Mis recurrencias' },
-        { to: '/student/classes/history', label: 'Historial' },
+        { to: '/student/classes/available', label: 'Clases disponibles' },
         { to: '/student/plans', label: 'Mis membresías' },
         { to: '/student/plans/comprar', label: 'Comprar para mí' },
         { to: '/student/attendance', label: 'Marcar asistencia' },
@@ -262,10 +260,8 @@ const navByRole = {
       label: 'Mis clases',
       icon: <ClassesIcon />,
       children: [
-        { to: '/student/classes/available', label: 'Disponibles' },
         { to: '/student/classes/reservations', label: 'Mis reservas' },
-        { to: '/student/classes/recurring', label: 'Mis recurrencias' },
-        { to: '/student/classes/history', label: 'Historial' },
+        { to: '/student/classes/available', label: 'Clases disponibles' },
       ],
     },
   ],

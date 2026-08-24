@@ -144,6 +144,7 @@ export default function StudentClassesPage({ mode = 'available' }) {
   const [historyFilters, setHistoryFilters] = useState(initialClassFilters)
   const [selectedAvailableIds, setSelectedAvailableIds] = useState([])
   const [selectedReservationIds, setSelectedReservationIds] = useState([])
+  const isPastSelectedDate = selectedDate < todayIsoDate()
   // Clase pendiente de confirmar antes de reservar (#24). null = sin diálogo abierto.
   const [pendingReserve, setPendingReserve] = useState(null)
   // Rebook desde "Mis reservas" cuando hay 2+ planes usables: mismo diálogo de confirmación,
@@ -295,8 +296,12 @@ export default function StudentClassesPage({ mode = 'available' }) {
   }, [filteredReservations])
 
   useEffect(() => {
+    if (isPastSelectedDate) {
+      setSelectedAvailableIds([])
+      return
+    }
     setSelectedAvailableIds((prev) => prev.filter((id) => filteredAvailableForBooking.some((item) => item.id === id)))
-  }, [filteredAvailableForBooking])
+  }, [filteredAvailableForBooking, isPastSelectedDate])
 
   const reserveClass = async (gymClass, studentPlanId) => {
     if (gymClass.reservable === false) {
@@ -922,6 +927,8 @@ export default function StudentClassesPage({ mode = 'available' }) {
     ],
     [],
   )
+  const availableViewColumns = isPastSelectedDate ? historyColumns : availableColumns
+  const availableViewData = isPastSelectedDate ? filteredHistory : filteredAvailableForBooking
 
   // El baseline de "activos"/"Limpiar" es SIEMPRE el set vacío (initialClassFilters):
   // así el rango por defecto (semana) cuenta como filtro activo → el botón "Limpiar"
@@ -993,10 +1000,10 @@ export default function StudentClassesPage({ mode = 'available' }) {
   const viewConfig = useMemo(
     () => ({
       available: {
-        title: 'Clases disponibles',
-        subtitle: 'Reserva una clase, selecciona varias o busca proximas clases concretas.',
-        columns: availableColumns,
-        data: filteredAvailableForBooking,
+        title: isPastSelectedDate ? 'Clases cursadas' : 'Clases disponibles',
+        subtitle: isPastSelectedDate ? 'Tus clases completadas en la fecha seleccionada.' : 'Reserva una clase, selecciona varias o busca proximas clases concretas.',
+        columns: availableViewColumns,
+        data: availableViewData,
       },
       reservations: {
         title: 'Mis reservas',
@@ -1004,21 +1011,16 @@ export default function StudentClassesPage({ mode = 'available' }) {
         columns: reservationColumns,
         data: filteredReservations,
       },
-      history: {
-        title: 'Historial de clases',
-        subtitle: 'Registro de clases finalizadas en tu agenda.',
-        columns: historyColumns,
-        data: filteredHistory,
-      },
     }),
-    [availableColumns, filteredAvailableForBooking, filteredHistory, filteredReservations, historyColumns, reservationColumns],
+    [availableViewColumns, availableViewData, filteredReservations, isPastSelectedDate, reservationColumns],
   )
 
   const activeView = viewConfig[mode] || viewConfig.available
   const policyMessage = reservations.find((item) => item.cancel_policy_message)?.cancel_policy_message || recurringItems.find((item) => item.manage_policy_message)?.manage_policy_message
-  const selectedAvailable = filteredAvailableForBooking.filter((item) => selectedAvailableIds.includes(item.id))
+  const selectedAvailable = isPastSelectedDate ? [] : filteredAvailableForBooking.filter((item) => selectedAvailableIds.includes(item.id))
   const selectedReservations = filteredReservations.filter((item) => selectedReservationIds.includes(item.id))
   const cancellableSelectedCount = selectedReservations.filter((item) => item.status === 'active' && item.can_cancel).length
+  const canSelectAvailableRows = mode === 'available' && !isPastSelectedDate
 
   // Los cuatro flujos de reserva/suscripción (individual, rebook, bulk, recurring)
   // comparten un único ConfirmDialog: a lo sumo uno de los estados pendientes está
@@ -1113,7 +1115,16 @@ export default function StudentClassesPage({ mode = 'available' }) {
       <DaySelector value={selectedDate} onChange={setSelectedDate} />
 
       <section className="card-surface space-y-4 p-5">
-        {mode === 'available' ? (
+        {mode === 'available' && isPastSelectedDate ? (
+          <>
+            <KpiStrip
+              items={[
+                { label: 'Clases cursadas', value: filteredHistory.length },
+              ]}
+            />
+            {renderClassFilters(historyFilters, setHistoryFilters, historyFilterOptions)}
+          </>
+        ) : mode === 'available' ? (
           <>
             <div className="flex items-center gap-2 rounded-lg border border-brand-line bg-black/20 px-3 py-2 text-xs">
               <span className="text-brand-muted">Te quedan</span>
@@ -1149,8 +1160,8 @@ export default function StudentClassesPage({ mode = 'available' }) {
             <KpiStrip
               items={[
                 { label: 'Total reservas', value: reservationKpis.total },
+                { label: 'En curso', value: reservationKpis.inProgress },
                 { label: 'Próximas reservas', value: reservationKpis.upcoming },
-                { label: 'Recurrencias activas', value: reservationKpis.recurringActive },
               ]}
             />
             {renderReservationFilters()}
@@ -1169,7 +1180,6 @@ export default function StudentClassesPage({ mode = 'available' }) {
           </>
         ) : null}
 
-        {mode === 'history' ? renderClassFilters(historyFilters, setHistoryFilters, historyFilterOptions) : null}
       </section>
 
       <section className="space-y-3">
@@ -1179,9 +1189,9 @@ export default function StudentClassesPage({ mode = 'available' }) {
           columns={activeView.columns}
           data={activeView.data}
           loading={loading}
-          selectableRows={mode === 'reservations' || mode === 'available'}
-          selectedRowIds={mode === 'reservations' ? selectedReservationIds : mode === 'available' ? selectedAvailableIds : []}
-          onSelectedRowIdsChange={mode === 'reservations' ? setSelectedReservationIds : mode === 'available' ? setSelectedAvailableIds : undefined}
+          selectableRows={mode === 'reservations' || canSelectAvailableRows}
+          selectedRowIds={mode === 'reservations' ? selectedReservationIds : canSelectAvailableRows ? selectedAvailableIds : []}
+          onSelectedRowIdsChange={mode === 'reservations' ? setSelectedReservationIds : canSelectAvailableRows ? setSelectedAvailableIds : undefined}
           selectAllScope="filtered"
           disablePagination
         />

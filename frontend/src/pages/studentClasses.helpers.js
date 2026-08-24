@@ -233,10 +233,14 @@ export function calculateReservationKpis(filteredReservations) {
   const now = Date.now()
   const recurringActiveIds = new Set()
   let upcoming = 0
+  let inProgress = 0
 
   filteredReservations.forEach((item) => {
     if (item.status === 'active' && new Date(item.class_start).getTime() > now) {
       upcoming += 1
+    }
+    if (item.status === 'active' && item.class_status === 'in_progress') {
+      inProgress += 1
     }
     if (item.recurring_enrollment && item.recurring_is_active) {
       recurringActiveIds.add(item.recurring_enrollment)
@@ -246,6 +250,7 @@ export function calculateReservationKpis(filteredReservations) {
   return {
     total: filteredReservations.length,
     upcoming,
+    inProgress,
     recurringActive: recurringActiveIds.size,
   }
 }

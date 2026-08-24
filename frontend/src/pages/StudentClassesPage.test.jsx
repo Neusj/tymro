@@ -143,6 +143,53 @@ describe('StudentClassesPage — rango por defecto (#18)', () => {
   })
 })
 
+describe('StudentClassesPage - historial unificado en clases disponibles', () => {
+  beforeEach(() => {
+    window.matchMedia = (query) => ({
+      matches: query.includes('min-width'),
+      addEventListener() {},
+      removeEventListener() {},
+      addListener() {},
+      removeListener() {},
+    })
+    getMyMemberships.mockResolvedValue([
+      { id: 1, plan_name: 'Plan Basico', remaining_classes: 10, unlimited_classes: false, validity_status: 'active' },
+    ])
+  })
+
+  it('al elegir una fecha pasada en Clases disponibles muestra clases cursadas sin controles de reserva', async () => {
+    const pastDate = isoDaysAgo(3)
+    classesApi.byDate.mockImplementation((date, params = {}) => {
+      if (params.status_in?.includes('completed')) {
+        return Promise.resolve(date === pastDate ? [
+          {
+            id: 991,
+            name: 'Clase cursada',
+            status: 'completed',
+            start_datetime: `${pastDate}T10:00:00-04:00`,
+            end_datetime: `${pastDate}T11:00:00-04:00`,
+            branch_name: 'Sede',
+            teacher_name: 'Prof',
+            discipline_name: 'Yoga',
+          },
+        ] : [])
+      }
+      return Promise.resolve([])
+    })
+
+    renderPage('available')
+    const user = userEvent.setup()
+
+    await user.click(await screen.findByRole('button', { name: 'Calendario' }))
+    fireEvent.change(screen.getByLabelText('Fecha del calendario'), { target: { value: pastDate } })
+
+    expect((await screen.findAllByText('Clases cursadas')).length).toBeGreaterThan(0)
+    expect((await screen.findAllByText('Clase cursada')).length).toBeGreaterThan(0)
+    expect(screen.queryByRole('button', { name: 'Reservar seleccionadas' })).not.toBeInTheDocument()
+    expect(screen.queryByText('Te quedan')).not.toBeInTheDocument()
+  })
+})
+
 describe('StudentClassesPage - membresias congeladas', () => {
   it('no cuenta una membresia congelada como saldo usable para reservar', async () => {
     getMyMemberships.mockResolvedValue([
@@ -171,6 +218,11 @@ describe('StudentClassesPage - membresias congeladas', () => {
 
 const DAY = 24 * 60 * 60 * 1000
 const isoIn = (ms) => new Date(Date.now() + ms).toISOString()
+const isoDaysAgo = (days) => {
+  const date = new Date(`${todayIsoDate()}T12:00:00`)
+  date.setDate(date.getDate() - days)
+  return date.toISOString().slice(0, 10)
+}
 
 // Una clase reservable dentro de la semana actual (para que pase el filtro por
 // defecto), sin reserva activa y con plan con saldo → botón "Reservar" habilitado.
@@ -238,7 +290,7 @@ describe('StudentClassesPage — confirmar antes de reservar (#24)', () => {
     await user.click(reservar)
 
     // Aparece el diálogo "¿Seguro?" y todavía NO se reservó.
-    expect(await screen.findByText(/¿seguro/i)).toBeInTheDocument()
+    expect(await screen.findByText(/Seguro que quieres/i)).toBeInTheDocument()
     expect(enrollmentsApi.create).not.toHaveBeenCalled()
 
     // Confirmar dentro del diálogo → procede la reserva.

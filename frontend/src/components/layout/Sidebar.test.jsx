@@ -33,6 +33,38 @@ describe('Sidebar — menú de Reportes (gym_admin)', () => {
   })
 })
 
+describe('Sidebar - orden de actividad personal', () => {
+  it('en gym_admin muestra primero reservas, luego clases disponibles, sin recurrencias ni historial', async () => {
+    renderSidebar({ role: 'gym_admin' })
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'Mi actividad' }))
+
+    const personalLinks = screen
+      .getAllByRole('link')
+      .filter((link) => ['Mis reservas', 'Clases disponibles'].includes(link.textContent))
+
+    expect(personalLinks.map((link) => link.textContent)).toEqual(['Mis reservas', 'Clases disponibles'])
+    expect(screen.queryByRole('link', { name: 'Mis recurrencias' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Historial' })).not.toBeInTheDocument()
+  })
+
+  it('en alumno muestra primero reservas, luego clases disponibles, sin recurrencias ni historial', async () => {
+    renderSidebar({ role: 'student' })
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'Mis clases' }))
+
+    const classLinks = screen
+      .getAllByRole('link')
+      .filter((link) => ['Mis reservas', 'Clases disponibles'].includes(link.textContent))
+
+    expect(classLinks.map((link) => link.textContent)).toEqual(['Mis reservas', 'Clases disponibles'])
+    expect(screen.queryByRole('link', { name: 'Mis recurrencias' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Historial' })).not.toBeInTheDocument()
+  })
+})
+
 describe('Sidebar — menú de profesor', () => {
   it('oculta "Mis pagos" y muestra los dos flujos docentes', async () => {
     renderSidebar({ role: 'teacher' })

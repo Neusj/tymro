@@ -50,7 +50,6 @@ import PlanListPage from './pages/PlanListPage'
 import StudentClassesPage from './pages/StudentClassesPage'
 import StudentDashboard from './pages/StudentDashboard'
 import StudentPlansPage from './pages/StudentPlansPage'
-import StudentRecurringEnrollmentsPage from './pages/StudentRecurringEnrollmentsPage'
 import StudentQrCheckInPage from './pages/StudentQrCheckInPage'
 import StudentAttendanceScanPage from './pages/StudentAttendanceScanPage'
 import SuperadminOrganizationDetailPage from './pages/SuperadminOrganizationDetailPage'
@@ -752,9 +751,7 @@ export default function App() {
         path="/student/classes/recurring"
         element={
           <ProtectedRoute allowedRoles={studentFlowRoles}>
-            <ShellRoute>
-              <StudentRecurringEnrollmentsPage />
-            </ShellRoute>
+            <Navigate to="/student/classes/reservations" replace />
           </ProtectedRoute>
         }
       />
@@ -762,9 +759,7 @@ export default function App() {
         path="/student/classes/history"
         element={
           <ProtectedRoute allowedRoles={studentFlowRoles}>
-            <ShellRoute>
-              <StudentClassesPage mode="history" />
-            </ShellRoute>
+            <Navigate to="/student/classes/available" replace />
           </ProtectedRoute>
         }
       />
