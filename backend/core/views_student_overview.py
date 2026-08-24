@@ -65,7 +65,7 @@ from datetime import datetime, time, timedelta
 
 from django.contrib.auth import get_user_model
 from django.core.paginator import EmptyPage, Paginator
-from django.db.models import Count
+from django.db.models import Count, Q
 from django.http import Http404
 from django.utils import timezone
 from rest_framework import serializers
@@ -271,6 +271,21 @@ def _class_summary(gym_class):
     }
 
 
+def _personalized_session_summary(session):
+    if session is None:
+        return None
+    return {
+        'id': session.id,
+        'name': 'Clase personalizada',
+        'kind': 'personalized',
+        'start_datetime': session.confirmed_at or session.qr_issued_at,
+        'end_datetime': session.confirmed_at or session.qr_expires_at,
+        'status': session.status,
+        'discipline_name': session.discipline.name if session.discipline_id else None,
+        'teacher_name': _full_name(session.teacher) if session.teacher_id else None,
+    }
+
+
 def _plan_name_of(student_plan, org_id):
     """Nombre del plan de la membresía, REDACTADO si la membresía es de otra organización.
 
@@ -298,23 +313,35 @@ def _plan_name_of(student_plan, org_id):
 
 
 def _consumption_row(log, org_id):
+    class_payload = (
+        _personalized_session_summary(log.personalized_session)
+        if log.personalized_session_id
+        else _class_summary(log.class_instance)
+    )
     return {
         'id': log.id,
         'consumed_at': log.consumed_at,
         'branch_name': log.branch.name if log.branch_id else None,
         'plan_name': _plan_name_of(log.student_plan, org_id),
-        'class': _class_summary(log.class_instance),
+        'class': class_payload,
+        'class_kind': 'personalized' if log.personalized_session_id else 'normal',
     }
 
 
 def _attendance_row(attendance):
+    class_payload = (
+        _personalized_session_summary(attendance.personalized_session)
+        if attendance.personalized_session_id
+        else _class_summary(attendance.gym_class)
+    )
     return {
         'id': attendance.id,
         'status': attendance.status,
         'source': attendance.source,
         'marked_at': attendance.marked_at,
         'marked_by_name': _full_name(attendance.marked_by) if attendance.marked_by_id else None,
-        'class': _class_summary(attendance.gym_class),
+        'class': class_payload,
+        'class_kind': 'personalized' if attendance.personalized_session_id else 'normal',
     }
 
 
@@ -427,17 +454,21 @@ def _overview_summary(*, memberships, recurring_qs, student_id, org_id, period):
 
     consumption_period = ConsumptionLog.objects.filter(
         user_id=student_id,
-        class_instance__organization_id=org_id,
         student_plan__organization_id=org_id,
         consumed_at__gte=period['start_at'],
         consumed_at__lt=period['end_exclusive'],
+    ).filter(
+        Q(class_instance__organization_id=org_id)
+        | Q(personalized_session__organization_id=org_id)
     )
 
     attendance_period = Attendance.objects.filter(
         student_id=student_id,
-        gym_class__organization_id=org_id,
         marked_at__gte=period['start_at'],
         marked_at__lt=period['end_exclusive'],
+    ).filter(
+        Q(gym_class__organization_id=org_id)
+        | Q(personalized_session__organization_id=org_id)
     )
     by_status = {
         row['status']: row['total']
@@ -534,14 +565,16 @@ class StudentOverviewView(APIView):
             ConsumptionLog.objects
             .filter(
                 user_id=student.id,
-                # Doble intersección de organización (class_instance Y student_plan): ninguna
-                # de las dos es la columna "oficial" del modelo (no existe), así que se acota
-                # por las dos FKs que sí son de fiar en vez de confiar en una sola.
-                class_instance__organization_id=org_id,
                 student_plan__organization_id=org_id,
+            )
+            .filter(
+                Q(class_instance__organization_id=org_id)
+                | Q(personalized_session__organization_id=org_id)
             )
             .select_related(
                 'class_instance', 'class_instance__discipline', 'class_instance__teacher',
+                'personalized_session', 'personalized_session__discipline',
+                'personalized_session__class_type', 'personalized_session__teacher',
                 'branch', 'student_plan__plan',
             )
             .order_by('-consumed_at', '-id')
@@ -550,8 +583,17 @@ class StudentOverviewView(APIView):
 
         attendance_qs = (
             Attendance.objects
-            .filter(student_id=student.id, gym_class__organization_id=org_id)
-            .select_related('gym_class', 'gym_class__discipline', 'gym_class__teacher', 'marked_by')
+            .filter(student_id=student.id)
+            .filter(
+                Q(gym_class__organization_id=org_id)
+                | Q(personalized_session__organization_id=org_id)
+            )
+            .select_related(
+                'gym_class', 'gym_class__discipline', 'gym_class__teacher',
+                'personalized_session', 'personalized_session__discipline',
+                'personalized_session__class_type', 'personalized_session__teacher',
+                'marked_by',
+            )
             .order_by('-marked_at', '-id')
         )
         attendance_rows, attendance_has_more = _paged(attendance_qs, attendance_limit)
@@ -672,8 +714,17 @@ class StudentAttendanceDetailView(StudentOverviewDetailBase):
         student, org_id = self._student_scope(request, student_id)
         queryset = (
             Attendance.objects
-            .filter(student_id=student.id, gym_class__organization_id=org_id)
-            .select_related('gym_class', 'gym_class__discipline', 'gym_class__teacher', 'marked_by')
+            .filter(student_id=student.id)
+            .filter(
+                Q(gym_class__organization_id=org_id)
+                | Q(personalized_session__organization_id=org_id)
+            )
+            .select_related(
+                'gym_class', 'gym_class__discipline', 'gym_class__teacher',
+                'personalized_session', 'personalized_session__discipline',
+                'personalized_session__class_type', 'personalized_session__teacher',
+                'marked_by',
+            )
         )
         status_value = request.query_params.get('status')
         discipline = request.query_params.get('discipline')
@@ -684,9 +735,15 @@ class StudentAttendanceDetailView(StudentOverviewDetailBase):
         if status_value:
             queryset = queryset.filter(status=status_value)
         if discipline:
-            queryset = queryset.filter(gym_class__discipline__name=discipline)
+            queryset = queryset.filter(
+                Q(gym_class__discipline__name=discipline)
+                | Q(personalized_session__discipline__name=discipline)
+            )
         if branch_id:
-            queryset = queryset.filter(gym_class__branch_id=branch_id)
+            queryset = queryset.filter(
+                Q(gym_class__branch_id=branch_id)
+                | Q(personalized_session__branch_id=branch_id)
+            )
         if date_from:
             queryset = queryset.filter(marked_at__date__gte=date_from)
         if date_to:
@@ -703,11 +760,16 @@ class StudentConsumptionDetailView(StudentOverviewDetailBase):
             ConsumptionLog.objects
             .filter(
                 user_id=student.id,
-                class_instance__organization_id=org_id,
                 student_plan__organization_id=org_id,
+            )
+            .filter(
+                Q(class_instance__organization_id=org_id)
+                | Q(personalized_session__organization_id=org_id)
             )
             .select_related(
                 'class_instance', 'class_instance__discipline', 'class_instance__teacher',
+                'personalized_session', 'personalized_session__discipline',
+                'personalized_session__class_type', 'personalized_session__teacher',
                 'branch', 'student_plan__plan',
             )
         )
@@ -717,7 +779,10 @@ class StudentConsumptionDetailView(StudentOverviewDetailBase):
         date_to = _parse_date_param('date_to', request.query_params.get('date_to'))
 
         if discipline:
-            queryset = queryset.filter(class_instance__discipline__name=discipline)
+            queryset = queryset.filter(
+                Q(class_instance__discipline__name=discipline)
+                | Q(personalized_session__discipline__name=discipline)
+            )
         if branch_id:
             queryset = queryset.filter(branch_id=branch_id)
         if date_from:

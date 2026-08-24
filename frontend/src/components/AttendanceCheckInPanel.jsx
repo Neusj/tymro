@@ -33,6 +33,7 @@ export default function AttendanceCheckInPanel({ token, onRescan }) {
 
   const gymClass = preview?.class
   const nextClass = preview?.next_class
+  const isPersonalized = gymClass?.kind === 'personalized'
   const canMark = preview?.status === 'ready' && gymClass && Boolean(grant)
 
   const statusMessage = useMemo(() => {
@@ -46,10 +47,10 @@ export default function AttendanceCheckInPanel({ token, onRescan }) {
       return 'Confirma tu asistencia para esta clase.'
     }
     if (preview.status === 'registered') {
-      return 'Tu asistencia fue registrada correctamente.'
+      return isPersonalized ? 'Clase personalizada registrada correctamente.' : 'Tu asistencia fue registrada correctamente.'
     }
     return ''
-  }, [preview])
+  }, [preview, isPersonalized])
 
   const loadPreview = async () => {
     if (!token) {
@@ -158,6 +159,20 @@ export default function AttendanceCheckInPanel({ token, onRescan }) {
               <dt className="text-brand-muted">Sucursal</dt>
               <dd className="text-right font-medium">{gymClass.branch || '-'}</dd>
             </div>
+            {isPersonalized ? (
+              <>
+                <div className="flex justify-between gap-3">
+                  <dt className="text-brand-muted">Plan</dt>
+                  <dd className="text-right font-medium">{gymClass.student_plan_name || '-'}</dd>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <dt className="text-brand-muted">Sesiones restantes</dt>
+                  <dd className="text-right font-medium">
+                    {gymClass.remaining_classes === null || gymClass.remaining_classes === undefined ? 'Ilimitado' : gymClass.remaining_classes}
+                  </dd>
+                </div>
+              </>
+            ) : null}
           </dl>
           <button
             type="button"
@@ -165,7 +180,7 @@ export default function AttendanceCheckInPanel({ token, onRescan }) {
             onClick={markAttendance}
             className="mt-5 w-full rounded-xl bg-brand-blue px-4 py-3 text-sm font-semibold text-white disabled:opacity-60"
           >
-            {working ? 'Registrando...' : preview?.status === 'registered' ? 'Asistencia registrada' : 'Marcar asistencia'}
+            {working ? 'Registrando...' : preview?.status === 'registered' ? 'Registrado' : isPersonalized ? 'Registrar clase personalizada' : 'Marcar asistencia'}
           </button>
         </article>
       ) : null}

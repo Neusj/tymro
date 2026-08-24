@@ -226,6 +226,7 @@ class OrganizationSerializer(serializers.ModelSerializer):
             'class_pruning_grace_days',
             'annual_enrollment_fee',
             'student_discount_percentage',
+            'personalized_classes_enabled',
             'branches_count',
         ]
         read_only_fields = [
@@ -1478,6 +1479,7 @@ class AttendanceSerializer(serializers.ModelSerializer):
         fields = [
             'id',
             'gym_class',
+            'personalized_session',
             'student',
             'student_name',
             'student_email',
@@ -2020,6 +2022,9 @@ class PlanSerializer(serializers.ModelSerializer):
             'effective_discount_source',
             'student_discount_applicable',
             'student_discount_percentage',
+            'compatible_disciplines',
+            'compatible_class_types',
+            'allowed_personalized_teachers',
             'is_public',
             'is_active',
         ]
@@ -2051,6 +2056,20 @@ class PlanSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {'branch': 'La sucursal no pertenece a la organización del plan.'}
             )
+
+        for field_name, message in (
+            ('compatible_disciplines', 'Las disciplinas deben pertenecer a la organización del plan.'),
+            ('compatible_class_types', 'Los tipos de clase deben pertenecer a la organización del plan.'),
+            ('allowed_personalized_teachers', 'Los profesores deben pertenecer a la organización del plan.'),
+        ):
+            values = attrs.get(field_name)
+            if values is None:
+                continue
+            for value in values:
+                if value.organization_id != organization.id:
+                    raise serializers.ValidationError({field_name: message})
+                if field_name == 'allowed_personalized_teachers' and value.role not in TEACHER_ELIGIBLE_ROLES:
+                    raise serializers.ValidationError({field_name: 'Solo puedes permitir profesores de la organización.'})
 
         return attrs
 

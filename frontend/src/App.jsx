@@ -59,6 +59,7 @@ import SuperadminUsersPage from './pages/SuperadminUsersPage'
 import SuperadminPlatformPage from './pages/SuperadminPlatformPage'
 import TeacherClassesPage from './pages/TeacherClassesPage'
 import TeacherDashboard from './pages/TeacherDashboard'
+import TeacherPersonalizedClassPage from './pages/TeacherPersonalizedClassPage'
 import TeacherPaymentRulesPage from './pages/TeacherPaymentRulesPage'
 import TeacherPaymentsOverviewPage from './pages/TeacherPaymentsOverviewPage'
 import ProtectedRoute from './routes/ProtectedRoute'
@@ -649,6 +650,16 @@ export default function App() {
           <ProtectedRoute allowedRoles={['teacher', 'gym_admin']}>
             <ShellRoute>
               <TeacherClassesPage mode="coverable" />
+            </ShellRoute>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/teacher/personalized-class"
+        element={
+          <ProtectedRoute allowedRoles={['teacher', 'gym_admin']}>
+            <ShellRoute>
+              <TeacherPersonalizedClassPage />
             </ShellRoute>
           </ProtectedRoute>
         }

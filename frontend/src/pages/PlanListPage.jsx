@@ -28,6 +28,7 @@ const planTypeLabel = {
   single_class: 'Clase suelta',
   trial: 'Trial',
   giftcard: 'Giftcard',
+  personalized: 'Clases personalizadas',
 }
 
 function firstApiError(detail, fallback) {
@@ -385,6 +386,7 @@ export default function PlanListPage({
               <option value="single_class">Clase suelta</option>
               <option value="trial">Trial</option>
               <option value="giftcard">Giftcard</option>
+              <option value="personalized">Clases personalizadas</option>
             </select>
           </label>
           <label className="space-y-1 text-sm">

@@ -63,6 +63,7 @@ function StatTile({ label, value, accent }) {
 
 export default function TeacherPaymentsPage() {
   const [month, setMonth] = useState(currentMonthValue())
+  const [classKind, setClassKind] = useState('all')
   const [row, setRow] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -73,7 +74,11 @@ export default function TeacherPaymentsPage() {
     setError('')
     try {
       // El backend auto-scopea summary al teacher_id del usuario: rows trae a lo más su propia fila.
-      const data = await teacherPaymentsApi.summary(monthToRange(month))
+      const params = { ...monthToRange(month) }
+      if (classKind !== 'all') {
+        params.class_kind = classKind
+      }
+      const data = await teacherPaymentsApi.summary(params)
       const myRow = Array.isArray(data?.rows) ? data.rows[0] || null : null
       setRow(myRow)
     } catch (apiError) {
@@ -87,14 +92,18 @@ export default function TeacherPaymentsPage() {
   useEffect(() => {
     loadSummary()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [month])
+  }, [month, classKind])
 
   const handleExport = async (format) => {
     setExporting(format)
     setError('')
     try {
       // exportSummary usa el mismo scope: el profe sólo exporta lo suyo.
-      const response = await teacherPaymentsApi.exportSummary({ ...monthToRange(month), fmt: format })
+      const params = { ...monthToRange(month), fmt: format }
+      if (classKind !== 'all') {
+        params.class_kind = classKind
+      }
+      const response = await teacherPaymentsApi.exportSummary(params)
       const blob = new Blob([response.data], { type: response.headers['content-type'] })
       const url = window.URL.createObjectURL(blob)
       const link = document.createElement('a')
@@ -130,15 +139,29 @@ export default function TeacherPaymentsPage() {
       {/* Controles de período + export */}
       <section className="card-surface space-y-4 p-4 sm:p-5">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-          <label className="space-y-1 text-sm">
-            <span className="text-brand-muted">Período</span>
-            <input
-              type="month"
-              value={month}
-              onChange={(event) => setMonth(event.target.value || currentMonthValue())}
-              className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2 sm:w-52"
-            />
-          </label>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="space-y-1 text-sm">
+              <span className="text-brand-muted">Período</span>
+              <input
+                type="month"
+                value={month}
+                onChange={(event) => setMonth(event.target.value || currentMonthValue())}
+                className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2 sm:w-52"
+              />
+            </label>
+            <label className="space-y-1 text-sm">
+              <span className="text-brand-muted">Tipo de clase</span>
+              <select
+                value={classKind}
+                onChange={(event) => setClassKind(event.target.value)}
+                className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2 sm:w-52"
+              >
+                <option value="all">Todas</option>
+                <option value="normal">Normales</option>
+                <option value="personalized">Personalizadas</option>
+              </select>
+            </label>
+          </div>
 
           <div className="flex items-center gap-2">
             <button
@@ -234,6 +257,7 @@ export default function TeacherPaymentsPage() {
                       <p className="truncate text-brand-white">{cls.name || `Clase #${cls.id}`}</p>
                       <p className="text-xs text-brand-dim">
                         {formatDay(cls.start)} · {cls.attendees} asist.
+                        {cls.class_kind === 'personalized' && cls.student_name ? ` · ${cls.student_name}` : ''}
                       </p>
                     </div>
                     <div className="flex shrink-0 items-center gap-2">

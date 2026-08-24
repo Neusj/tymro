@@ -142,6 +142,14 @@ def _manual_plan_name(payment):
     return plan.name if plan is not None else None
 
 
+def _manual_plan_type(payment):
+    membership = _own_or_none(payment.student_plan, payment.organization_id)
+    if membership is None:
+        return None
+    plan = _own_or_none(membership.plan, payment.organization_id)
+    return plan.plan_type if plan is not None else None
+
+
 # --------------------------------------------------------------------------------------
 # Capa 2 · el listado de un método
 # --------------------------------------------------------------------------------------
@@ -184,6 +192,7 @@ def _manual_row(payment):
     """
     student_plan = payment.student_plan
     student = student_plan.user
+    plan_type = _manual_plan_type(payment)
     row = {
         'kind': KIND_MANUAL,
         'id': payment.id,
@@ -207,6 +216,8 @@ def _manual_row(payment):
         row['plan_amount'] = _to_int(payment.plan_amount)
     if _to_int(payment.enrollment_fee_amount) > 0:
         row['enrollment_fee_amount'] = _to_int(payment.enrollment_fee_amount)
+    if plan_type == 'personalized':
+        row['plan_type'] = plan_type
     return row
 
 
@@ -231,6 +242,7 @@ def _mp_row(transaction, *, occurred_at, amount, scope, refund=False):
     """
     student = transaction.user
     membership = _mp_membership(transaction)
+    plan_type = _mp_plan_type(transaction, membership)
     row = {
         'kind': KIND_MERCADOPAGO,
         # `str()` y no el UUID crudo: DRF lo serializaría igual, pero el id viaja al front para
@@ -258,6 +270,8 @@ def _mp_row(transaction, *, occurred_at, amount, scope, refund=False):
         # período que lo contiene.
         collected_date = timezone.localtime(transaction.collected_at).date()
         row['collected_in_period'] = scope.date_from <= collected_date <= scope.date_to
+    if plan_type == 'personalized':
+        row['plan_type'] = plan_type
     return row
 
 
@@ -478,6 +492,18 @@ def _mp_plan_name(transaction, membership):
     return membership_plan.name if membership_plan is not None else None
 
 
+def _mp_plan_type(transaction, membership):
+    plan = _own_or_none(transaction.plan, transaction.organization_id)
+    if plan is not None:
+        return plan.plan_type
+    if transaction.plan_id:
+        return None
+    if membership is None:
+        return None
+    membership_plan = _own_or_none(membership.plan, transaction.organization_id)
+    return membership_plan.plan_type if membership_plan is not None else None
+
+
 def _manual_detail(organization_id, payment_id):
     payment = get_object_or_404(
         ManualPayment.objects.select_related(
@@ -489,6 +515,7 @@ def _manual_detail(organization_id, payment_id):
     # SIN ninguna clave de MercadoPago, ni siquiera en null: un `status` o un
     # `provider_payment_id` vacíos en un cobro de recepción no son "sin dato", son una pregunta
     # que no existe. El front decide qué mostrar por PRESENCIA de clave.
+    plan_type = _manual_plan_type(payment)
     row = {
         'kind': KIND_MANUAL,
         'id': payment.id,
@@ -516,6 +543,8 @@ def _manual_detail(organization_id, payment_id):
         row['plan_amount'] = _to_int(payment.plan_amount)
     if _to_int(payment.enrollment_fee_amount) > 0:
         row['enrollment_fee_amount'] = _to_int(payment.enrollment_fee_amount)
+    if plan_type == 'personalized':
+        row['plan_type'] = plan_type
     return row
 
 
@@ -526,10 +555,11 @@ def _mercadopago_detail(organization_id, transaction_id):
         id=transaction_id, organization_id=organization_id)
     membership = _mp_membership(transaction)
     student = transaction.user
+    plan_type = _mp_plan_type(transaction, membership)
     # SIN `recorded_by_*`: este cobro lo escribió el webhook del proveedor
     # (`services/payments.py`), no un administrador. Publicar la clave en null diría "no se
     # sabe quién lo registró", y sí se sabe: nadie, es automático.
-    return {
+    row = {
         'kind': KIND_MERCADOPAGO,
         'id': str(transaction.id),
         'amount': _to_int(transaction.amount),
@@ -558,6 +588,9 @@ def _mercadopago_detail(organization_id, transaction_id):
         'branch_id': transaction.branch_id,
         'branch_name': transaction.branch.name if transaction.branch_id else None,
     }
+    if plan_type == 'personalized':
+        row['plan_type'] = plan_type
+    return row
 
 
 #: Constructor de detalle por tipo. Ver el porqué del dict en `build_payment_detail`.

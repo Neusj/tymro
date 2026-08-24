@@ -13,6 +13,7 @@ from .models import (
     MembershipPlan,
     Organization,
     OrganizationExpiryNotificationConfig,
+    PersonalizedClassSession,
     Plan,
     PlanExpiryNotification,
     Person,
@@ -41,6 +42,7 @@ admin.site.register(MembershipPlan)
 admin.site.register(Plan)
 admin.site.register(StudentPlan)
 admin.site.register(ConsumptionLog)
+admin.site.register(PersonalizedClassSession)
 admin.site.register(TeacherPaymentRule)
 admin.site.register(TeacherPaymentRecord)
 

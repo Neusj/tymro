@@ -69,6 +69,7 @@ export default function TeacherPaymentsOverviewPage() {
   const canMarkPaid = canManageAdmin(user?.role)
 
   const [month, setMonth] = useState(currentMonthValue())
+  const [classKind, setClassKind] = useState('all')
   const [summary, setSummary] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -83,6 +84,9 @@ export default function TeacherPaymentsOverviewPage() {
     const params = { ...monthToRange(month) }
     if (isSuperadmin && selectedOrganizationId) {
       params.organization_id = selectedOrganizationId
+    }
+    if (classKind !== 'all') {
+      params.class_kind = classKind
     }
     return params
   }
@@ -128,7 +132,7 @@ export default function TeacherPaymentsOverviewPage() {
     loadSummary()
     setExpanded(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [month, selectedOrganizationId, isSuperadmin])
+  }, [month, classKind, selectedOrganizationId, isSuperadmin])
 
   const rows = summary?.rows || []
   const grandTotal = summary?.grand_total || 0
@@ -216,15 +220,29 @@ export default function TeacherPaymentsOverviewPage() {
         ) : null}
 
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-          <label className="space-y-1 text-sm">
-            <span className="text-brand-muted">Período</span>
-            <input
-              type="month"
-              value={month}
-              onChange={(event) => setMonth(event.target.value || currentMonthValue())}
-              className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2 sm:w-52"
-            />
-          </label>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="space-y-1 text-sm">
+              <span className="text-brand-muted">Período</span>
+              <input
+                type="month"
+                value={month}
+                onChange={(event) => setMonth(event.target.value || currentMonthValue())}
+                className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2 sm:w-52"
+              />
+            </label>
+            <label className="space-y-1 text-sm">
+              <span className="text-brand-muted">Tipo de clase</span>
+              <select
+                value={classKind}
+                onChange={(event) => setClassKind(event.target.value)}
+                className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2 sm:w-52"
+              >
+                <option value="all">Todas</option>
+                <option value="normal">Normales</option>
+                <option value="personalized">Personalizadas</option>
+              </select>
+            </label>
+          </div>
 
           <div className="flex items-center gap-2">
             <button
@@ -303,6 +321,11 @@ export default function TeacherPaymentsOverviewPage() {
                       ) : (
                         row.modalities.map((code) => <ValueBadge key={code} kind="payment_type" value={code} />)
                       )}
+                      {row.personalized_classes_count ? (
+                        <span className="rounded-full border border-brand-blue/30 bg-brand-blue/10 px-2 py-0.5 text-[11px] text-brand-blue">
+                          {row.personalized_classes_count} pers.
+                        </span>
+                      ) : null}
                       <PayoutStatus payout={row.payout} pending={row.pending} />
                     </div>
                     {/* Métricas inline (solo móvil) */}
@@ -380,6 +403,7 @@ export default function TeacherPaymentsOverviewPage() {
                               <p className="truncate text-brand-white">{cls.name || `Clase #${cls.id}`}</p>
                               <p className="text-xs text-brand-dim">
                                 {formatDay(cls.start)} · {cls.attendees} asist.
+                                {cls.class_kind === 'personalized' && cls.student_name ? ` · ${cls.student_name}` : ''}
                               </p>
                             </div>
                             <div className="flex shrink-0 items-center gap-2">

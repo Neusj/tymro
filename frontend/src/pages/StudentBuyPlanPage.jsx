@@ -8,6 +8,7 @@ const PLAN_TYPE_LABEL = {
   monthly: 'Mensual',
   pack: 'Pack',
   single_class: 'Clase suelta',
+  personalized: 'Clases personalizadas',
 }
 
 // Un plan es "comprable" si es público, activo y no es trial ni giftcard.

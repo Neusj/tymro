@@ -177,6 +177,7 @@ const navByRole = {
       icon: <ClassesIcon />,
       children: [
         { to: '/teacher/classes/upcoming', label: 'Mis clases' },
+        { to: '/teacher/personalized-class', label: 'Clase personalizada', requiresPersonalizedClasses: true },
         { to: '/teacher/classes/coverable', label: 'Clases por cubrir' },
         { to: '/gym-admin/class-templates', label: 'Gestión de clases' },
         { to: '/gym-admin/holidays', label: 'Festivos' },
@@ -242,6 +243,7 @@ const navByRole = {
       icon: <ClassesIcon />,
       children: [
         { to: '/teacher/classes/upcoming', label: 'Mis clases' },
+        { to: '/teacher/personalized-class', label: 'Clase personalizada', requiresPersonalizedClasses: true },
         { to: '/teacher/classes/coverable', label: 'Clases por cubrir' },
       ],
     },
@@ -314,8 +316,27 @@ const navByRole = {
   ],
 }
 
+function filterEnabledItems(items, user) {
+  const personalizedEnabled = Boolean(user?.organization_detail?.personalized_classes_enabled)
+  return items
+    .map((item) => {
+      if (item.requiresPersonalizedClasses && !personalizedEnabled) {
+        return null
+      }
+      if (item.type === 'group') {
+        const children = filterEnabledItems(item.children || [], user)
+        if (!children.length) {
+          return null
+        }
+        return { ...item, children }
+      }
+      return item
+    })
+    .filter(Boolean)
+}
+
 export default function Sidebar({ isOpen, isMobile, user, onNavigate, onRequestOpen }) {
-  const items = navByRole[user?.role] || []
+  const items = filterEnabledItems(navByRole[user?.role] || [], user)
   const displayExpanded = isMobile || isOpen
 
   return (

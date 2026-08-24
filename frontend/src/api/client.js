@@ -738,6 +738,13 @@ export const attendanceQrApi = {
   },
 }
 
+export const personalizedClassesApi = {
+  createQr: async (payload = {}) => {
+    const { data } = await api.post('/personalized-classes/qr/', payload)
+    return data
+  },
+}
+
 const normalizeListResponse = (data) => {
   if (Array.isArray(data)) {
     return data

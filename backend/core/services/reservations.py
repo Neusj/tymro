@@ -6,7 +6,7 @@ from django.db.models import F, Value
 from django.db.models.functions import Greatest
 from django.utils import timezone
 
-from ..models import ConsumptionLog, Enrollment, GymClass, StudentPlan
+from ..models import ConsumptionLog, Enrollment, GymClass, Plan, StudentPlan
 from .plans import REASON_PLAN_UNAVAILABLE, describe_student_plan
 
 
@@ -177,6 +177,7 @@ def _usable_student_plan_candidates(student, organization_id, target_date):
     candidates_qs = (
         StudentPlan.objects
         .filter(user=student, organization_id=organization_id)
+        .exclude(plan__plan_type=Plan.PlanType.PERSONALIZED)
         .valid_on(target_date)
         .prefetch_related('freezes')
         .order_by('-start_date', '-id')

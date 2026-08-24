@@ -1,6 +1,14 @@
 from django.db.models import Count, Q
 
-from ..models import Attendance, ConsumptionLog, Enrollment, GymClass, TeacherPaymentRecord, TeacherPaymentRule
+from ..models import (
+    Attendance,
+    ConsumptionLog,
+    Enrollment,
+    GymClass,
+    PersonalizedClassSession,
+    TeacherPaymentRecord,
+    TeacherPaymentRule,
+)
 
 
 def _match_rule_for_class(rules, class_instance):
@@ -217,7 +225,7 @@ def _teacher_display_name(teacher):
     return full_name or teacher.username
 
 
-def build_teacher_payment_summary(organization_id, date_from, date_to, teacher_id=None):
+def build_teacher_payment_summary(organization_id, date_from, date_to, teacher_id=None, class_kind=None):
     """Agrega el pago por profesor en un periodo, combinando:
     - clases dictadas + asistentes reales (desde GymClass / Attendance),
     - monto acumulado por clase (desde TeacherPaymentRecord),
@@ -228,6 +236,8 @@ def build_teacher_payment_summary(organization_id, date_from, date_to, teacher_i
     """
     completed = [GymClass.Status.COMPLETED, GymClass.Status.COMPLETED_EARLY]
     rows = {}
+    include_normal = class_kind in (None, 'normal')
+    include_personalized = class_kind in (None, 'personalized')
 
     def _ensure(tid, teacher_obj=None):
         row = rows.get(tid)
@@ -236,6 +246,8 @@ def build_teacher_payment_summary(organization_id, date_from, date_to, teacher_i
                 'teacher_id': tid,
                 'teacher_name': _teacher_display_name(teacher_obj),
                 'classes_count': 0,
+                'normal_classes_count': 0,
+                'personalized_classes_count': 0,
                 'attendees_total': 0,
                 'per_class_total': 0.0,
                 'monthly_total': 0.0,
@@ -247,64 +259,104 @@ def build_teacher_payment_summary(organization_id, date_from, date_to, teacher_i
             row['teacher_name'] = _teacher_display_name(teacher_obj)
         return row
 
-    # --- Clases dictadas + asistentes (fuente: GymClass) ---
-    classes_qs = (
-        GymClass.objects.filter(
-            organization_id=organization_id,
-            status__in=completed,
-            teacher__isnull=False,
-            start_datetime__date__gte=date_from,
-            start_datetime__date__lte=date_to,
+    if include_normal:
+        # --- Clases dictadas + asistentes (fuente: GymClass) ---
+        classes_qs = (
+            GymClass.objects.filter(
+                organization_id=organization_id,
+                status__in=completed,
+                teacher__isnull=False,
+                start_datetime__date__gte=date_from,
+                start_datetime__date__lte=date_to,
+            )
+            .select_related('teacher')
+            .annotate(present_count=Count('attendances', filter=Q(attendances__status=Attendance.Status.PRESENT)))
         )
-        .select_related('teacher')
-        .annotate(present_count=Count('attendances', filter=Q(attendances__status=Attendance.Status.PRESENT)))
-    )
-    if teacher_id:
-        classes_qs = classes_qs.filter(teacher_id=teacher_id)
+        if teacher_id:
+            classes_qs = classes_qs.filter(teacher_id=teacher_id)
 
-    # --- Monto por clase (fuente: TeacherPaymentRecord, mismo periodo por fecha de clase) ---
-    records_qs = TeacherPaymentRecord.objects.filter(
-        class_instance__organization_id=organization_id,
-        class_instance__status__in=completed,
-        class_instance__start_datetime__date__gte=date_from,
-        class_instance__start_datetime__date__lte=date_to,
-    ).select_related('rule')
-    if teacher_id:
-        records_qs = records_qs.filter(teacher_id=teacher_id)
-    record_by_class = {r.class_instance_id: r for r in records_qs}
+        # --- Monto por clase (fuente: TeacherPaymentRecord, mismo periodo por fecha de clase) ---
+        records_qs = TeacherPaymentRecord.objects.filter(
+            class_instance__organization_id=organization_id,
+            class_instance__status__in=completed,
+            class_instance__start_datetime__date__gte=date_from,
+            class_instance__start_datetime__date__lte=date_to,
+        ).select_related('rule')
+        if teacher_id:
+            records_qs = records_qs.filter(teacher_id=teacher_id)
+        record_by_class = {r.class_instance_id: r for r in records_qs}
 
-    for gym_class in classes_qs:
-        row = _ensure(gym_class.teacher_id, gym_class.teacher)
-        row['classes_count'] += 1
-        row['attendees_total'] += int(gym_class.present_count or 0)
-        record = record_by_class.get(gym_class.id)
-        amount = round(float(record.total_amount), 2) if record else 0.0
-        payment_type = record.rule.payment_type if (record and record.rule_id) else None
-        if payment_type:
-            row['modalities'].add(payment_type)
-        row['per_class_total'] += amount
-        row['classes'].append(
-            {
-                'id': gym_class.id,
-                'name': gym_class.name,
-                'start': gym_class.start_datetime,
-                'attendees': int(gym_class.present_count or 0),
-                'amount': amount,
-                'payment_type': payment_type,
-            }
+        for gym_class in classes_qs:
+            row = _ensure(gym_class.teacher_id, gym_class.teacher)
+            row['classes_count'] += 1
+            row['normal_classes_count'] += 1
+            row['attendees_total'] += int(gym_class.present_count or 0)
+            record = record_by_class.get(gym_class.id)
+            amount = round(float(record.total_amount), 2) if record else 0.0
+            payment_type = record.rule.payment_type if (record and record.rule_id) else None
+            if payment_type:
+                row['modalities'].add(payment_type)
+            row['per_class_total'] += amount
+            row['classes'].append(
+                {
+                    'id': gym_class.id,
+                    'name': gym_class.name,
+                    'start': gym_class.start_datetime,
+                    'attendees': int(gym_class.present_count or 0),
+                    'amount': amount,
+                    'payment_type': payment_type,
+                    'class_kind': 'normal',
+                }
+            )
+
+    if include_personalized:
+        personalized_qs = (
+            PersonalizedClassSession.objects.filter(
+                organization_id=organization_id,
+                status=PersonalizedClassSession.Status.CONFIRMED,
+                teacher__isnull=False,
+                confirmed_at__date__gte=date_from,
+                confirmed_at__date__lte=date_to,
+            )
+            .select_related('teacher', 'student', 'discipline', 'class_type')
         )
+        if teacher_id:
+            personalized_qs = personalized_qs.filter(teacher_id=teacher_id)
+
+        for session in personalized_qs:
+            row = _ensure(session.teacher_id, session.teacher)
+            row['classes_count'] += 1
+            row['personalized_classes_count'] += 1
+            row['attendees_total'] += 1 if session.student_id else 0
+            row['classes'].append(
+                {
+                    'id': session.id,
+                    'name': 'Clase personalizada',
+                    'start': session.confirmed_at,
+                    'attendees': 1 if session.student_id else 0,
+                    'amount': 0.0,
+                    'payment_type': None,
+                    'class_kind': 'personalized',
+                    'student_id': session.student_id,
+                    'student_name': _teacher_display_name(session.student) if session.student_id else '',
+                    'discipline_name': session.discipline.name if session.discipline_id else '',
+                    'class_type_name': session.class_type.name if session.class_type_id else '',
+                }
+            )
 
     # --- Sueldo mensual fijo (fuente: reglas monthly_fixed activas; NO hay records) ---
     months = _months_between(date_from, date_to)
-    monthly_rules = (
-        TeacherPaymentRule.objects.filter(
-            organization_id=organization_id,
-            is_active=True,
-            payment_type=TeacherPaymentRule.PaymentType.MONTHLY_FIXED,
+    monthly_rules = TeacherPaymentRule.objects.none()
+    if class_kind is None:
+        monthly_rules = (
+            TeacherPaymentRule.objects.filter(
+                organization_id=organization_id,
+                is_active=True,
+                payment_type=TeacherPaymentRule.PaymentType.MONTHLY_FIXED,
+            )
+            .prefetch_related('teachers')
+            .select_related('teacher')
         )
-        .prefetch_related('teachers')
-        .select_related('teacher')
-    )
     for rule in monthly_rules:
         assigned_ids = set(rule.teachers.values_list('id', flat=True))
         if rule.teacher_id:
@@ -337,6 +389,8 @@ def build_teacher_payment_summary(organization_id, date_from, date_to, teacher_i
                 'teacher_id': row['teacher_id'],
                 'teacher_name': row['teacher_name'],
                 'classes_count': row['classes_count'],
+                'normal_classes_count': row['normal_classes_count'],
+                'personalized_classes_count': row['personalized_classes_count'],
                 'attendees_total': row['attendees_total'],
                 'per_class_total': per_class_total,
                 'monthly_total': monthly_total,

@@ -165,6 +165,10 @@ class Organization(TimestampedModel):
         validators=[MinValueValidator(0), MaxValueValidator(100)],
         help_text='Descuento estudiante para planes mensuales. 0 = sin beneficio monetario.',
     )
+    personalized_classes_enabled = models.BooleanField(
+        default=False,
+        help_text='Habilita el flujo de clases personalizadas por QR ad hoc.',
+    )
 
     class Meta:
         ordering = ['name']
@@ -583,6 +587,13 @@ class Attendance(TimestampedModel):
         SYSTEM = 'system', 'Sistema'
 
     gym_class = models.ForeignKey(GymClass, on_delete=models.CASCADE, related_name='attendances', null=True, blank=True)
+    personalized_session = models.ForeignKey(
+        'PersonalizedClassSession',
+        on_delete=models.CASCADE,
+        related_name='attendances',
+        null=True,
+        blank=True,
+    )
     student = models.ForeignKey('accounts.CustomUser', on_delete=models.CASCADE, related_name='attendance_records', null=True, blank=True)
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.ABSENT)
     source = models.CharField(max_length=10, choices=Source.choices, default=Source.MANUAL)
@@ -604,6 +615,13 @@ class Attendance(TimestampedModel):
     class Meta:
         ordering = ['-marked_at', 'id']
         unique_together = ('gym_class', 'student')
+        constraints = [
+            models.UniqueConstraint(
+                fields=['personalized_session', 'student'],
+                condition=models.Q(personalized_session__isnull=False),
+                name='uniq_attendance_personalized_session_student',
+            ),
+        ]
 
     def __str__(self):
         return f'Asistencia {self.gym_class_id}-{self.student_id}'
@@ -695,6 +713,7 @@ class Plan(TimestampedModel):
         SINGLE_CLASS = 'single_class', 'Clase suelta'
         TRIAL = 'trial', 'Trial'
         GIFTCARD = 'giftcard', 'Giftcard'
+        PERSONALIZED = 'personalized', 'Clases personalizadas'
 
     # Tipos que el gimnasio asigna a mano y NO se venden en línea. Fuente única de verdad:
     # la usan `create_checkout` (rechaza la compra) y el catálogo del alumno en
@@ -726,6 +745,24 @@ class Plan(TimestampedModel):
     discount_percentage = models.FloatField(default=0)
     is_public = models.BooleanField(default=True)
     is_active = models.BooleanField(default=True)
+    compatible_disciplines = models.ManyToManyField(
+        Discipline,
+        blank=True,
+        related_name='compatible_plans',
+        help_text='Vacío = cualquier disciplina. Se usa para clases personalizadas.',
+    )
+    compatible_class_types = models.ManyToManyField(
+        ClassType,
+        blank=True,
+        related_name='compatible_plans',
+        help_text='Vacío = cualquier tipo de clase. Se usa para clases personalizadas.',
+    )
+    allowed_personalized_teachers = models.ManyToManyField(
+        'accounts.CustomUser',
+        blank=True,
+        related_name='allowed_personalized_plans',
+        help_text='Vacío = cualquier profesor de la organización.',
+    )
 
     class Meta:
         ordering = ['name']
@@ -946,7 +983,20 @@ class StudentPlanFreeze(TimestampedModel):
 class ConsumptionLog(TimestampedModel):
     user = models.ForeignKey('accounts.CustomUser', on_delete=models.CASCADE, related_name='consumption_logs')
     student_plan = models.ForeignKey(StudentPlan, on_delete=models.CASCADE, related_name='consumption_logs')
-    class_instance = models.ForeignKey(GymClass, on_delete=models.CASCADE, related_name='consumption_logs')
+    class_instance = models.ForeignKey(
+        GymClass,
+        on_delete=models.CASCADE,
+        related_name='consumption_logs',
+        null=True,
+        blank=True,
+    )
+    personalized_session = models.ForeignKey(
+        'PersonalizedClassSession',
+        on_delete=models.CASCADE,
+        related_name='consumption_logs',
+        null=True,
+        blank=True,
+    )
     # Sucursal donde se consumió la sesión; se deriva de `class_instance.branch`. Se
     # desnormaliza para que el consumo conserve la sede aunque la clase cambie de
     # sucursal después. NULL solo en filas anteriores a la migración de backfill.
@@ -961,9 +1011,94 @@ class ConsumptionLog(TimestampedModel):
 
     class Meta:
         ordering = ['-consumed_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['personalized_session'],
+                condition=models.Q(personalized_session__isnull=False),
+                name='uniq_consumption_personalized_session',
+            ),
+        ]
 
     def __str__(self):
-        return f'Consumo {self.user_id} - {self.class_instance_id}'
+        target_id = self.class_instance_id or f'personalizada:{self.personalized_session_id}'
+        return f'Consumo {self.user_id} - {target_id}'
+
+
+class PersonalizedClassSession(TimestampedModel):
+    class Status(models.TextChoices):
+        PENDING = 'pending', 'Pendiente'
+        CONFIRMED = 'confirmed', 'Confirmada'
+
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.PROTECT,
+        related_name='personalized_class_sessions',
+    )
+    branch = models.ForeignKey(
+        Branch,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='personalized_class_sessions',
+    )
+    teacher = models.ForeignKey(
+        'accounts.CustomUser',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='personalized_class_sessions_taught',
+    )
+    student = models.ForeignKey(
+        'accounts.CustomUser',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='personalized_class_sessions_attended',
+    )
+    student_plan = models.ForeignKey(
+        StudentPlan,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='personalized_class_sessions',
+    )
+    discipline = models.ForeignKey(
+        Discipline,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='personalized_class_sessions',
+    )
+    class_type = models.ForeignKey(
+        ClassType,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='personalized_class_sessions',
+    )
+    qr_jti = models.CharField(max_length=64, unique=True)
+    qr_issued_at = models.DateTimeField(default=timezone.now)
+    qr_expires_at = models.DateTimeField()
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+    confirmed_by = models.ForeignKey(
+        'accounts.CustomUser',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='confirmed_personalized_class_sessions',
+    )
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+
+    class Meta:
+        ordering = ['-qr_issued_at', '-id']
+        indexes = [
+            models.Index(fields=['organization', 'status', 'qr_expires_at'], name='core_person_organiz_0a9c33_idx'),
+            models.Index(fields=['organization', 'teacher', 'confirmed_at'], name='core_person_organiz_fcd2d4_idx'),
+            models.Index(fields=['organization', 'student', 'confirmed_at'], name='core_person_organiz_b7f0db_idx'),
+        ]
+
+    def __str__(self):
+        return f'Personalizada {self.id} - profesor {self.teacher_id}'
 
 
 class StudentPlanChangeLog(TimestampedModel):
