@@ -39,6 +39,7 @@ import GymAdminRetentionReportPage from './pages/GymAdminRetentionReportPage'
 import GymAdminTrialConversionReportPage from './pages/GymAdminTrialConversionReportPage'
 import StudentBuyPlanPage from './pages/StudentBuyPlanPage'
 import PaymentResultPage from './pages/PaymentResultPage'
+import ProfilePage from './pages/ProfilePage'
 import LoginPage from './pages/LoginPage'
 import ForgotPasswordPage from './pages/ForgotPasswordPage'
 import ResetPasswordPage from './pages/ResetPasswordPage'
@@ -107,6 +108,16 @@ export default function App() {
         element={
           <ProtectedRoute allowedRoles={studentFlowRoles}>
             <StudentQrCheckInPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/profile"
+        element={
+          <ProtectedRoute>
+            <ShellRoute>
+              <ProfilePage />
+            </ShellRoute>
           </ProtectedRoute>
         }
       />

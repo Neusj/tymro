@@ -1136,6 +1136,142 @@ class PlanExpiryNotification(TimestampedModel):
         return f'{self.get_kind_display()}{offset} - plan {self.student_plan_id}'
 
 
+class PushPreference(TimestampedModel):
+    class PromptStatus(models.TextChoices):
+        UNDECIDED = 'undecided', 'Sin decidir'
+        DISMISSED = 'dismissed', 'Postergado'
+        ENABLED = 'enabled', 'Activado'
+        BLOCKED = 'blocked', 'Bloqueado'
+
+    user = models.OneToOneField(
+        'accounts.CustomUser',
+        on_delete=models.CASCADE,
+        related_name='push_preference',
+    )
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name='push_preferences',
+    )
+    push_enabled = models.BooleanField(default=False)
+    prompt_status = models.CharField(
+        max_length=16,
+        choices=PromptStatus.choices,
+        default=PromptStatus.UNDECIDED,
+    )
+    last_profile_reminder_sent_on = models.DateField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['user_id']
+        indexes = [
+            models.Index(fields=['organization', 'push_enabled']),
+            models.Index(fields=['prompt_status']),
+        ]
+
+    def clean(self):
+        super().clean()
+        if self.user_id and self.user.organization_id != self.organization_id:
+            raise ValidationError({'organization': 'La organizacion debe coincidir con la del usuario.'})
+
+    def __str__(self):
+        return f'Push {self.user_id} - {self.prompt_status}'
+
+
+class PushSubscription(TimestampedModel):
+    user = models.ForeignKey(
+        'accounts.CustomUser',
+        on_delete=models.CASCADE,
+        related_name='push_subscriptions',
+    )
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name='push_subscriptions',
+    )
+    endpoint = models.TextField(unique=True)
+    p256dh = models.TextField()
+    auth = models.TextField()
+    user_agent = models.TextField(blank=True, default='')
+    is_active = models.BooleanField(default=True)
+    deactivated_at = models.DateTimeField(null=True, blank=True)
+    last_error = models.TextField(blank=True, default='')
+
+    class Meta:
+        ordering = ['-created_at', '-id']
+        indexes = [
+            models.Index(fields=['organization', 'is_active']),
+            models.Index(fields=['user', 'is_active']),
+        ]
+
+    def clean(self):
+        super().clean()
+        if self.user_id and self.user.organization_id != self.organization_id:
+            raise ValidationError({'organization': 'La organizacion debe coincidir con la del usuario.'})
+
+    def deactivate(self, reason=''):
+        self.is_active = False
+        self.deactivated_at = timezone.now()
+        self.last_error = str(reason or '')[:500]
+        self.save(update_fields=['is_active', 'deactivated_at', 'last_error', 'updated_at'])
+
+    @property
+    def webpush_payload(self):
+        return {
+            'endpoint': self.endpoint,
+            'keys': {
+                'p256dh': self.p256dh,
+                'auth': self.auth,
+            },
+        }
+
+    def __str__(self):
+        return f'Push subscription {self.user_id} - {self.endpoint[:40]}'
+
+
+class PushNotification(TimestampedModel):
+    class Status(models.TextChoices):
+        PENDING = 'pending', 'Pendiente'
+        SENT = 'sent', 'Enviada'
+        SKIPPED = 'skipped', 'Omitida'
+        FAILED = 'failed', 'Fallida'
+
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name='push_notifications',
+    )
+    user = models.ForeignKey(
+        'accounts.CustomUser',
+        on_delete=models.CASCADE,
+        related_name='push_notifications',
+    )
+    event_type = models.CharField(max_length=64)
+    dedupe_key = models.CharField(max_length=160)
+    title = models.CharField(max_length=120)
+    body = models.TextField()
+    data = models.JSONField(default=dict, blank=True)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    sent_count = models.PositiveIntegerField(default=0)
+    error = models.TextField(blank=True, default='')
+
+    class Meta:
+        ordering = ['-created_at', '-id']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['organization', 'user', 'event_type', 'dedupe_key'],
+                name='uniq_push_notification_event_per_user',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['organization', 'event_type']),
+            models.Index(fields=['user', 'event_type']),
+        ]
+
+    def __str__(self):
+        return f'{self.event_type} - user {self.user_id} - {self.status}'
+
+
 class TeacherPaymentRule(TimestampedModel):
     class PaymentType(models.TextChoices):
         FIXED_PER_CLASS = 'fixed_per_class', 'Fijo por clase'

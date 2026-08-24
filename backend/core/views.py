@@ -49,6 +49,8 @@ from .models import (
     generate_attendance_screen_code,
     generate_attendance_screen_session_code,
     Person,
+    PushPreference,
+    PushSubscription,
     RecurringEnrollment,
     StudentPlan,
     StudentPlanChangeLog,
@@ -91,6 +93,11 @@ from .serializers import (
     PublicOrganizationBrandingSerializer,
     PublicRegistrationSerializer,
     PublicTrialClassSerializer,
+    PushPreferenceSerializer,
+    PushPreferenceUpdateSerializer,
+    PushSubscriptionDeleteSerializer,
+    PushSubscriptionRegisterSerializer,
+    PushSubscriptionSerializer,
     PersonSerializer,
     RecurringEnrollmentSerializer,
     SelfProfileSerializer,
@@ -138,6 +145,13 @@ from .services.membership_freezes import (
     create_membership_freeze,
 )
 from .services.public_urls import organization_public_base_url, platform_public_base_url
+from .services.push_notifications import (
+    deactivate_push_subscription,
+    get_or_create_push_preference,
+    notify_class_cancelled,
+    register_push_subscription,
+    set_push_preference,
+)
 from .services.reservations import (
     ReservationRuleError,
     cancel_enrollment_with_refund,
@@ -380,6 +394,13 @@ def _refund_active_enrollments_for_cancelled_class(gym_class):
         cancel_enrollment_with_refund(enrollment)
         refunded += 1
     return refunded
+
+
+def _active_students_for_class(gym_class):
+    return [
+        enrollment.student
+        for enrollment in gym_class.enrollments.filter(status='active').select_related('student')
+    ]
 
 
 def _can_manage_org_resource(user, organization_id):
@@ -859,6 +880,63 @@ class MeView(APIView):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(CustomUserSerializer(request.user, context={'request': request}).data)
+
+
+class PushPreferenceView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def _serialized_preference(self, request):
+        preference = get_or_create_push_preference(request.user)
+        if preference is None:
+            raise PermissionDenied('Las notificaciones push requieren un usuario con organizacion.')
+        preference.active_subscriptions_count = PushSubscription.objects.filter(
+            user=request.user,
+            organization_id=request.user.organization_id,
+            is_active=True,
+        ).count()
+        data = PushPreferenceSerializer(preference).data
+        data['vapid_public_key'] = settings.WEB_PUSH_VAPID_PUBLIC_KEY
+        return data
+
+    def get(self, request):
+        return Response(self._serialized_preference(request))
+
+    def patch(self, request):
+        serializer = PushPreferenceUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            set_push_preference(request.user, **serializer.validated_data)
+        except ValueError as exc:
+            raise ValidationError({'detail': str(exc)})
+        return Response(self._serialized_preference(request))
+
+
+class PushSubscriptionView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = PushSubscriptionRegisterSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            subscription = register_push_subscription(
+                request.user,
+                endpoint=serializer.validated_data['endpoint'],
+                p256dh=serializer.validated_data['p256dh'],
+                auth=serializer.validated_data['auth'],
+                user_agent=request.META.get('HTTP_USER_AGENT', ''),
+            )
+        except ValueError as exc:
+            raise ValidationError({'detail': str(exc)})
+        return Response(PushSubscriptionSerializer(subscription).data, status=status.HTTP_201_CREATED)
+
+    def delete(self, request):
+        serializer = PushSubscriptionDeleteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        removed = deactivate_push_subscription(
+            request.user,
+            endpoint=serializer.validated_data['endpoint'],
+        )
+        return Response({'removed': removed})
 
 
 logger = logging.getLogger(__name__)
@@ -3452,6 +3530,7 @@ class GymClassViewSet(ModelViewSet):
         if gym_class.status in [GymClass.Status.CANCELLED, GymClass.Status.COMPLETED, GymClass.Status.COMPLETED_EARLY]:
             return Response({'detail': 'La clase ya está cerrada y no se puede cancelar.'}, status=status.HTTP_400_BAD_REQUEST)
 
+        affected_students = _active_students_for_class(gym_class)
         gym_class.status = GymClass.Status.CANCELLED
         gym_class.is_active = False
         gym_class.closed_by = user
@@ -3459,6 +3538,7 @@ class GymClassViewSet(ModelViewSet):
         gym_class.closure_comment = comment
         gym_class.save(update_fields=['status', 'is_active', 'closed_by', 'closed_at', 'closure_comment', 'updated_at'])
         _refund_active_enrollments_for_cancelled_class(gym_class)
+        notify_class_cancelled(gym_class, affected_students)
 
         return Response(self.get_serializer(gym_class).data)
 
@@ -3636,6 +3716,7 @@ class GymClassViewSet(ModelViewSet):
             gym_class.closed_at = gym_class.closed_at or timezone.now()
             gym_class.closure_comment = comment
             gym_class.is_active = False
+            affected_students = _active_students_for_class(gym_class) if action_name == 'cancel' else []
 
             if action_name == 'cancel':
                 gym_class.status = GymClass.Status.CANCELLED
@@ -3645,6 +3726,7 @@ class GymClassViewSet(ModelViewSet):
             gym_class.save(update_fields=['status', 'is_active', 'closed_by', 'closed_at', 'closure_comment', 'updated_at'])
             if action_name == 'cancel':
                 _refund_active_enrollments_for_cancelled_class(gym_class)
+                notify_class_cancelled(gym_class, affected_students)
             if action_name == 'complete_early':
                 gym_class.consolidate_attendance(marked_by=user, marked_at=gym_class.closed_at)
                 _register_teacher_payment_for_class(gym_class)

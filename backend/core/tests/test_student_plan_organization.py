@@ -126,9 +126,10 @@ def test_backfill_stamps_the_organization_of_the_plan_not_of_the_user(
     student.organization = org_b
     student.save(update_fields=['organization'])
 
-    migrator(MIGRATION_AFTER)
+    apps = migrator(MIGRATION_AFTER)
+    HistoricalStudentPlan = apps.get_model('core', 'StudentPlan')
 
-    migrated = StudentPlan.objects.get(user=student)
+    migrated = HistoricalStudentPlan.objects.get(user_id=student.id)
     assert migrated.organization_id == org_a.id, 'la membresía la vendió A, no B'
     assert migrated.organization_id != org_b.id
 
@@ -147,9 +148,10 @@ def test_backfill_resolves_a_membership_of_an_orphan_user(
     student.organization = None
     student.save(update_fields=['organization'])
 
-    migrator(MIGRATION_AFTER)
+    apps = migrator(MIGRATION_AFTER)
+    HistoricalStudentPlan = apps.get_model('core', 'StudentPlan')
 
-    assert StudentPlan.objects.get(user=student).organization_id == org.id
+    assert HistoricalStudentPlan.objects.get(user_id=student.id).organization_id == org.id
 
 
 def test_backfill_migrates_a_student_with_two_active_memberships(
@@ -172,9 +174,10 @@ def test_backfill_migrates_a_student_with_two_active_memberships(
     _legacy_membership(student, bjj, start_offset=10)
     _legacy_membership(student, kick, start_offset=0)
 
-    migrator(MIGRATION_AFTER)
+    apps = migrator(MIGRATION_AFTER)
+    HistoricalStudentPlan = apps.get_model('core', 'StudentPlan')
 
-    memberships = StudentPlan.objects.filter(user=student)
+    memberships = HistoricalStudentPlan.objects.filter(user_id=student.id)
     assert memberships.count() == 2
     assert memberships.filter(is_active=True).count() == 2
     assert {m.organization_id for m in memberships} == {org.id}

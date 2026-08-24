@@ -16,6 +16,9 @@ from .models import (
     Plan,
     PlanExpiryNotification,
     Person,
+    PushNotification,
+    PushPreference,
+    PushSubscription,
     RecurringEnrollment,
     StudentPlan,
     StudentPlanFreeze,
@@ -40,6 +43,39 @@ admin.site.register(StudentPlan)
 admin.site.register(ConsumptionLog)
 admin.site.register(TeacherPaymentRule)
 admin.site.register(TeacherPaymentRecord)
+
+
+@admin.register(PushPreference)
+class PushPreferenceAdmin(admin.ModelAdmin):
+    list_display = ('user', 'organization', 'push_enabled', 'prompt_status', 'last_profile_reminder_sent_on')
+    list_filter = ('push_enabled', 'prompt_status', 'organization')
+    search_fields = ('user__email', 'user__username')
+    readonly_fields = ('created_at', 'updated_at')
+
+
+@admin.register(PushSubscription)
+class PushSubscriptionAdmin(admin.ModelAdmin):
+    list_display = ('user', 'organization', 'is_active', 'created_at', 'deactivated_at')
+    list_filter = ('is_active', 'organization')
+    search_fields = ('user__email', 'endpoint')
+    readonly_fields = ('created_at', 'updated_at')
+
+
+@admin.register(PushNotification)
+class PushNotificationAdmin(admin.ModelAdmin):
+    list_display = ('event_type', 'user', 'organization', 'status', 'sent_count', 'sent_at', 'created_at')
+    list_filter = ('event_type', 'status', 'organization')
+    search_fields = ('user__email', 'dedupe_key', 'title')
+    readonly_fields = (
+        'organization', 'user', 'event_type', 'dedupe_key', 'title', 'body', 'data',
+        'status', 'sent_at', 'sent_count', 'error', 'created_at', 'updated_at',
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(StudentPlanFreeze)

@@ -33,6 +33,8 @@ from .models import (
     MembershipPlan,
     Organization,
     OrganizationExpiryNotificationConfig,
+    PushPreference,
+    PushSubscription,
     DEFAULT_TEACHER_ATTENDANCE_EDIT_LIMIT_MINUTES,
     PaymentAccount,
     PaymentTransaction,
@@ -3036,6 +3038,63 @@ class PublicTrialClassSerializer(serializers.ModelSerializer):
     def get_seats_left(self, obj):
         active = obj.enrollments.filter(status='active').count()
         return max(0, obj.capacity - active)
+
+
+class PushPreferenceSerializer(serializers.ModelSerializer):
+    active_subscriptions_count = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = PushPreference
+        fields = [
+            'push_enabled',
+            'prompt_status',
+            'last_profile_reminder_sent_on',
+            'active_subscriptions_count',
+        ]
+        read_only_fields = ['last_profile_reminder_sent_on', 'active_subscriptions_count']
+
+
+class PushPreferenceUpdateSerializer(serializers.Serializer):
+    push_enabled = serializers.BooleanField(required=False)
+    prompt_status = serializers.ChoiceField(
+        choices=[choice for choice, _label in PushPreference.PromptStatus.choices],
+        required=False,
+    )
+
+    def validate(self, attrs):
+        if not attrs:
+            raise serializers.ValidationError('Debes enviar push_enabled o prompt_status.')
+        return attrs
+
+
+class PushSubscriptionRegisterSerializer(serializers.Serializer):
+    endpoint = serializers.CharField(max_length=2048)
+    keys = serializers.DictField()
+
+    def validate(self, attrs):
+        endpoint = str(attrs.get('endpoint') or '').strip()
+        if not endpoint.startswith('https://'):
+            raise serializers.ValidationError({'endpoint': 'El endpoint push debe usar https.'})
+        keys = attrs.get('keys') or {}
+        p256dh = str(keys.get('p256dh') or '').strip()
+        auth = str(keys.get('auth') or '').strip()
+        if not p256dh or not auth:
+            raise serializers.ValidationError({'keys': 'La suscripcion debe incluir keys.p256dh y keys.auth.'})
+        attrs['p256dh'] = p256dh
+        attrs['auth'] = auth
+        attrs['endpoint'] = endpoint
+        return attrs
+
+
+class PushSubscriptionDeleteSerializer(serializers.Serializer):
+    endpoint = serializers.CharField(max_length=2048)
+
+
+class PushSubscriptionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PushSubscription
+        fields = ['id', 'endpoint', 'is_active', 'created_at', 'updated_at']
+        read_only_fields = fields
 
 
 class PaymentAccountSerializer(serializers.ModelSerializer):

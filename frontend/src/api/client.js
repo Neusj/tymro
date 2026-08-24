@@ -150,6 +150,25 @@ export const authApi = {
   },
 }
 
+export const pushApi = {
+  getPreferences: async () => {
+    const { data } = await api.get('/push/preferences/')
+    return data
+  },
+  updatePreferences: async (payload) => {
+    const { data } = await api.patch('/push/preferences/', payload)
+    return data
+  },
+  registerSubscription: async (subscription) => {
+    const { data } = await api.post('/push/subscriptions/', subscription)
+    return data
+  },
+  removeSubscription: async (endpoint) => {
+    const { data } = await api.delete('/push/subscriptions/', { data: { endpoint } })
+    return data
+  },
+}
+
 // Registro público de prospectos + clase de prueba gratis (links por gimnasio).
 // Usa `publicApi` (sin Authorization, sin redirect 401): la persona que escanea
 // el QR no está autenticada y un token viejo en el navegador no debe interferir.

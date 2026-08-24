@@ -319,6 +319,13 @@ EMAIL_BACKEND = os.getenv(
 ANYMAIL = {'RESEND_API_KEY': os.getenv('RESEND_API_KEY', '')}
 DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'no-reply@tymroapp.com')
 
+# Web Push (VAPID). Si no se configuran, el backend conserva suscripciones/logs pero no
+# intenta llamar al proveedor de push. Esto permite desplegar migraciones antes de cargar
+# las claves.
+WEB_PUSH_VAPID_PUBLIC_KEY = os.getenv('WEB_PUSH_VAPID_PUBLIC_KEY', '')
+WEB_PUSH_VAPID_PRIVATE_KEY = os.getenv('WEB_PUSH_VAPID_PRIVATE_KEY', '')
+WEB_PUSH_VAPID_SUBJECT = os.getenv('WEB_PUSH_VAPID_SUBJECT', f'mailto:{DEFAULT_FROM_EMAIL}')
+
 # URL base del frontend para armar links públicos por organización.
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173')
 # URL de la app de plataforma (superadmin). Si no se define, el helper usa app.<BASE_DOMAIN>

@@ -1,6 +1,7 @@
 ﻿import { useEffect, useRef, useState } from 'react'
 import InstallAppButton from '../InstallAppButton'
 import PwaUpdateButton from '../PwaUpdateButton'
+import PushPermissionPrompt from '../PushPermissionPrompt'
 import RutReminderBanner from '../RutReminderBanner'
 import ScrollToTopButton from '../ScrollToTopButton'
 import TrialClassBanner from '../TrialClassBanner'
@@ -109,6 +110,7 @@ export default function AppLayout({ user, onLogout, children }) {
         <main ref={mainRef} className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain px-4 py-5 sm:px-6 sm:py-7 lg:px-8 lg:py-9 3xl:px-12">
           <div className="app-container animate-fade-rise">
             <RutReminderBanner />
+            <PushPermissionPrompt />
             <TrialClassBanner />
             {children}
           </div>

@@ -149,6 +149,7 @@ const navByRole = {
     },
   ],
   gym_admin: [
+    { type: 'item', to: '/profile', label: 'Perfil', icon: <UsersIcon /> },
     { type: 'item', to: '/gym-admin/dashboard', label: 'Dashboard', icon: <DashboardIcon /> },
     {
       type: 'group',
@@ -232,6 +233,7 @@ const navByRole = {
     },
   ],
   teacher: [
+    { type: 'item', to: '/profile', label: 'Perfil', icon: <UsersIcon /> },
     { type: 'item', to: '/teacher/dashboard', label: 'Dashboard', icon: <DashboardIcon /> },
     {
       type: 'group',
@@ -244,6 +246,7 @@ const navByRole = {
     },
   ],
   student: [
+    { type: 'item', to: '/profile', label: 'Perfil', icon: <UsersIcon /> },
     { type: 'item', to: '/student/dashboard', label: 'Dashboard', icon: <DashboardIcon /> },
     { type: 'item', to: '/student/attendance', label: 'Marcar asistencia', icon: <QrIcon /> },
     {
@@ -268,6 +271,7 @@ const navByRole = {
   // Manager: páginas operativas del gym_admin (reutiliza /gym-admin/*). Sin planes,
   // sin pagos a profesores, sin QR; ve sucursales en solo lectura.
   manager: [
+    { type: 'item', to: '/profile', label: 'Perfil', icon: <UsersIcon /> },
     { type: 'item', to: '/gym-admin/dashboard', label: 'Dashboard', icon: <DashboardIcon /> },
     { type: 'item', to: '/gym-admin/users', label: 'Usuarios', icon: <UsersIcon /> },
     { type: 'item', to: '/gym-admin/branches', label: 'Sucursales', icon: <BranchesIcon /> },
@@ -285,6 +289,7 @@ const navByRole = {
   ],
   // Monitor: solo lectura sobre lo de su organización (reutiliza /gym-admin/*).
   monitor: [
+    { type: 'item', to: '/profile', label: 'Perfil', icon: <UsersIcon /> },
     {
       type: 'group',
       label: 'Clases',

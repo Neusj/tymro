@@ -131,10 +131,10 @@ def test_teacher_can_edit_attendance_until_20_minutes_after_class_end(api_client
     assert resp.json()['status'] == Attendance.Status.PRESENT
 
 
-def test_teacher_cannot_edit_attendance_after_20_minute_grace(api_client, gym_setup):
+def test_teacher_cannot_edit_attendance_after_30_minute_grace(api_client, gym_setup):
     gym_class = gym_setup['gym_class']
     student = gym_setup['student']
-    end = timezone.now() - timedelta(minutes=21)
+    end = timezone.now() - timedelta(minutes=31)
     gym_class.start_datetime = end - timedelta(hours=1)
     gym_class.end_datetime = end
     gym_class.status = GymClass.Status.COMPLETED

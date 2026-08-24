@@ -43,6 +43,7 @@ export const pwaOptions = {
     cleanupOutdatedCaches: true,
     clientsClaim: true,
     skipWaiting: true,
+    importScripts: ['push-sw.js'],
     runtimeCaching: [
       {
         // API: NetworkFirst → online usa la red; offline muestra lo último

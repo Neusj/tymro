@@ -16,4 +16,8 @@ describe('pwaOptions - contrato de actualizacion in-app', () => {
   it('limpia caches viejas para no servir un shell obsoleto', () => {
     expect(pwaOptions.workbox.cleanupOutdatedCaches).toBe(true)
   })
+
+  it('extiende el service worker existente con el manejador push', () => {
+    expect(pwaOptions.workbox.importScripts).toContain('push-sw.js')
+  })
 })
