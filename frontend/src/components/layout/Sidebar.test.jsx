@@ -119,14 +119,19 @@ describe('Sidebar - configuracion de clases personalizadas', () => {
 
     await user.click(screen.getByRole('button', { name: 'Configuraciones' }))
 
-    expect(screen.getByText('Pagos')).toBeInTheDocument()
-    expect(screen.getByText('Comunicación')).toBeInTheDocument()
-    expect(screen.getByText('Membresías')).toBeInTheDocument()
-    expect(screen.getByText('Operación')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Pagos' })).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.getByRole('button', { name: 'Comunicación' })).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.getByRole('button', { name: 'Membresías' })).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.getByRole('button', { name: 'Operación' })).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('link', { name: 'Clases personalizadas' })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Operación' }))
     expect(screen.getByRole('link', { name: 'Clases personalizadas' })).toHaveAttribute(
       'href',
       '/gym-admin/settings/personalized-classes',
     )
+
+    await user.click(screen.getByRole('button', { name: 'Pagos' }))
     expect(screen.getByRole('link', { name: 'MercadoPago' })).toHaveAttribute('href', '/ajustes/pagos')
   })
 
