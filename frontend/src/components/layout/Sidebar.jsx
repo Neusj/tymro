@@ -157,6 +157,7 @@ const navByRole = {
       icon: <QrIcon />,
       children: [
         { to: '/student/classes/reservations', label: 'Mis reservas' },
+        { to: '/student/classes/personalized', label: 'Clases personalizadas', requiresPersonalizedClasses: true },
         { to: '/student/classes/available', label: 'Clases disponibles' },
         { to: '/student/plans', label: 'Mis membresías' },
         { to: '/student/plans/comprar', label: 'Comprar para mí' },
@@ -177,7 +178,7 @@ const navByRole = {
       icon: <ClassesIcon />,
       children: [
         { to: '/teacher/classes/upcoming', label: 'Mis clases' },
-        { to: '/teacher/personalized-class', label: 'Clase personalizada', requiresPersonalizedClasses: true },
+        { to: '/teacher/personalized-class', label: 'Clases personalizadas', requiresPersonalizedClasses: true },
         { to: '/teacher/classes/coverable', label: 'Clases por cubrir' },
         { to: '/gym-admin/class-templates', label: 'Gestión de clases' },
         { to: '/gym-admin/holidays', label: 'Festivos' },
@@ -244,7 +245,7 @@ const navByRole = {
       icon: <ClassesIcon />,
       children: [
         { to: '/teacher/classes/upcoming', label: 'Mis clases' },
-        { to: '/teacher/personalized-class', label: 'Clase personalizada', requiresPersonalizedClasses: true },
+        { to: '/teacher/personalized-class', label: 'Clases personalizadas', requiresPersonalizedClasses: true },
         { to: '/teacher/classes/coverable', label: 'Clases por cubrir' },
       ],
     },
@@ -268,6 +269,7 @@ const navByRole = {
       icon: <ClassesIcon />,
       children: [
         { to: '/student/classes/reservations', label: 'Mis reservas' },
+        { to: '/student/classes/personalized', label: 'Clases personalizadas', requiresPersonalizedClasses: true },
         { to: '/student/classes/available', label: 'Clases disponibles' },
       ],
     },

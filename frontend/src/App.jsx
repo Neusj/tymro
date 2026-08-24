@@ -51,6 +51,7 @@ import TrialBookingPage from './pages/TrialBookingPage'
 import PlanListPage from './pages/PlanListPage'
 import StudentClassesPage from './pages/StudentClassesPage'
 import StudentDashboard from './pages/StudentDashboard'
+import StudentPersonalizedClassesPage from './pages/StudentPersonalizedClassesPage'
 import StudentPlansPage from './pages/StudentPlansPage'
 import StudentQrCheckInPage from './pages/StudentQrCheckInPage'
 import StudentAttendanceScanPage from './pages/StudentAttendanceScanPage'
@@ -776,6 +777,16 @@ export default function App() {
           <ProtectedRoute allowedRoles={studentFlowRoles}>
             <ShellRoute>
               <StudentClassesPage mode="reservations" />
+            </ShellRoute>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/student/classes/personalized"
+        element={
+          <ProtectedRoute allowedRoles={studentFlowRoles}>
+            <ShellRoute>
+              <StudentPersonalizedClassesPage />
             </ShellRoute>
           </ProtectedRoute>
         }

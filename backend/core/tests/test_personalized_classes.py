@@ -18,6 +18,7 @@ from core.services.teacher_payments import build_teacher_payment_summary
 pytestmark = pytest.mark.django_db
 
 QR_URL = '/api/personalized-classes/qr/'
+LIST_URL = '/api/personalized-classes/'
 PREVIEW_URL = '/api/attendance-qr/preview/'
 CHECKIN_URL = '/api/attendance-qr/check-in/'
 TODAY = timezone.localdate()
@@ -30,6 +31,7 @@ def setup(make_organization, make_user):
     org.save(update_fields=['personalized_classes_enabled'])
     other_org = make_organization(name='Otra')
     branch = Branch.objects.create(organization=org, name='Central')
+    admin = make_user('personal-admin', organization=org, role='gym_admin')
     teacher_a = make_user('personal-teacher-a', organization=org, role='teacher')
     teacher_b = make_user('personal-teacher-b', organization=org, role='teacher')
     student = make_user('personal-student', organization=org, role='student')
@@ -56,6 +58,7 @@ def setup(make_organization, make_user):
         'org': org,
         'other_org': other_org,
         'branch': branch,
+        'admin': admin,
         'teacher_a': teacher_a,
         'teacher_b': teacher_b,
         'student': student,
@@ -120,6 +123,13 @@ def _scan_personalized(api_client, student, token):
     return response.json()
 
 
+def _finish_personalized(api_client, actor, session_id):
+    api_client.force_authenticate(user=actor)
+    response = api_client.post(f'/api/personalized-classes/{session_id}/finish/', {}, format='json')
+    assert response.status_code == 200, response.content
+    return response.json()
+
+
 def test_normal_and_personalized_plans_keep_independent_balances(api_client, setup):
     gym_class = _future_class(setup)
     reserve_student_in_class(student=setup['student'], gym_class=gym_class)
@@ -153,6 +163,53 @@ def test_same_personalized_plan_tracks_multiple_real_teachers(api_client, setup)
         setup['teacher_b'].id,
     ]
     assert setup['personalized_membership'].consumption_logs.count() == 2
+
+
+def test_personalized_classes_are_listed_for_teacher_admin_and_student(api_client, setup):
+    first_payload = _scan_personalized(api_client, setup['student'], _personalized_token(api_client, setup['teacher_a']))
+    first_session = PersonalizedClassSession.objects.get(id=first_payload['class']['personalized_session_id'])
+    _finish_personalized(api_client, setup['teacher_a'], first_session.id)
+    second_payload = _scan_personalized(api_client, setup['student'], _personalized_token(api_client, setup['teacher_b']))
+    second_session_id = second_payload['class']['personalized_session_id']
+
+    api_client.force_authenticate(user=setup['teacher_a'])
+    teacher_response = api_client.get(LIST_URL)
+    assert teacher_response.status_code == 200, teacher_response.content
+    teacher_items = teacher_response.json()
+    assert [item['id'] for item in teacher_items] == [first_session.id]
+    assert teacher_items[0]['status'] == PersonalizedClassSession.Status.FINISHED
+    assert teacher_items[0]['student_id'] == setup['student'].id
+
+    api_client.force_authenticate(user=setup['admin'])
+    admin_response = api_client.get(LIST_URL)
+    assert admin_response.status_code == 200, admin_response.content
+    assert {item['id'] for item in admin_response.json()} == {first_session.id, second_session_id}
+
+    api_client.force_authenticate(user=setup['student'])
+    student_response = api_client.get(LIST_URL)
+    assert student_response.status_code == 200, student_response.content
+    assert {item['id'] for item in student_response.json()} == {first_session.id, second_session_id}
+
+
+def test_personalized_class_finish_requires_confirmed_session_and_owner(api_client, setup):
+    token = _personalized_token(api_client, setup['teacher_a'])
+    pending_session = PersonalizedClassSession.objects.get()
+    api_client.force_authenticate(user=setup['teacher_a'])
+    pending_response = api_client.post(f'/api/personalized-classes/{pending_session.id}/finish/', {}, format='json')
+    assert pending_response.status_code == 400
+    assert pending_response.json()['code'] == 'not_confirmed'
+
+    payload = _scan_personalized(api_client, setup['student'], token)
+    session = PersonalizedClassSession.objects.get(id=payload['class']['personalized_session_id'])
+    api_client.force_authenticate(user=setup['teacher_b'])
+    wrong_teacher = api_client.post(f'/api/personalized-classes/{session.id}/finish/', {}, format='json')
+    assert wrong_teacher.status_code == 403
+
+    finished_payload = _finish_personalized(api_client, setup['teacher_a'], session.id)
+    session.refresh_from_db()
+    assert session.status == PersonalizedClassSession.Status.FINISHED
+    assert session.finished_by == setup['teacher_a']
+    assert finished_payload['finished_at'] is not None
 
 
 def test_personalized_qr_rejects_expired_reused_wrong_org_no_plan_and_no_balance(api_client, setup):
@@ -218,7 +275,15 @@ def test_personalized_sessions_are_counted_separately_in_teacher_summary(api_cli
         capacity=10,
         status=GymClass.Status.COMPLETED,
     )
-    _scan_personalized(api_client, setup['student'], _personalized_token(api_client, setup['teacher_a']))
+    payload = _scan_personalized(api_client, setup['student'], _personalized_token(api_client, setup['teacher_a']))
+    session = PersonalizedClassSession.objects.get(id=payload['class']['personalized_session_id'])
+
+    summary_before_finish = build_teacher_payment_summary(setup['org'].id, TODAY, TODAY)
+    row_before_finish = next(item for item in summary_before_finish['rows'] if item['teacher_id'] == setup['teacher_a'].id)
+    assert row_before_finish['classes_count'] == 1
+    assert row_before_finish['personalized_classes_count'] == 0
+
+    _finish_personalized(api_client, setup['teacher_a'], session.id)
 
     summary = build_teacher_payment_summary(setup['org'].id, TODAY, TODAY)
     row = next(item for item in summary['rows'] if item['teacher_id'] == setup['teacher_a'].id)

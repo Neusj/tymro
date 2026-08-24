@@ -313,10 +313,10 @@ def build_teacher_payment_summary(organization_id, date_from, date_to, teacher_i
         personalized_qs = (
             PersonalizedClassSession.objects.filter(
                 organization_id=organization_id,
-                status=PersonalizedClassSession.Status.CONFIRMED,
+                status=PersonalizedClassSession.Status.FINISHED,
                 teacher__isnull=False,
-                confirmed_at__date__gte=date_from,
-                confirmed_at__date__lte=date_to,
+                finished_at__date__gte=date_from,
+                finished_at__date__lte=date_to,
             )
             .select_related('teacher', 'student', 'discipline', 'class_type')
         )
@@ -332,11 +332,13 @@ def build_teacher_payment_summary(organization_id, date_from, date_to, teacher_i
                 {
                     'id': session.id,
                     'name': 'Clase personalizada',
-                    'start': session.confirmed_at,
+                    'start': session.finished_at,
                     'attendees': 1 if session.student_id else 0,
                     'amount': 0.0,
                     'payment_type': None,
                     'class_kind': 'personalized',
+                    'confirmed_at': session.confirmed_at,
+                    'finished_at': session.finished_at,
                     'student_id': session.student_id,
                     'student_name': _teacher_display_name(session.student) if session.student_id else '',
                     'discipline_name': session.discipline.name if session.discipline_id else '',

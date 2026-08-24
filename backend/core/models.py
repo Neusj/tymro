@@ -1028,6 +1028,7 @@ class PersonalizedClassSession(TimestampedModel):
     class Status(models.TextChoices):
         PENDING = 'pending', 'Pendiente'
         CONFIRMED = 'confirmed', 'Confirmada'
+        FINISHED = 'finished', 'Dictada'
 
     organization = models.ForeignKey(
         Organization,
@@ -1087,6 +1088,14 @@ class PersonalizedClassSession(TimestampedModel):
         blank=True,
         related_name='confirmed_personalized_class_sessions',
     )
+    finished_at = models.DateTimeField(null=True, blank=True)
+    finished_by = models.ForeignKey(
+        'accounts.CustomUser',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='finished_personalized_class_sessions',
+    )
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
 
     class Meta:
@@ -1095,6 +1104,7 @@ class PersonalizedClassSession(TimestampedModel):
             models.Index(fields=['organization', 'status', 'qr_expires_at'], name='core_person_organiz_0a9c33_idx'),
             models.Index(fields=['organization', 'teacher', 'confirmed_at'], name='core_person_organiz_fcd2d4_idx'),
             models.Index(fields=['organization', 'student', 'confirmed_at'], name='core_person_organiz_b7f0db_idx'),
+            models.Index(fields=['organization', 'status', 'finished_at'], name='core_person_organiz_2e3d35_idx'),
         ]
 
     def __str__(self):

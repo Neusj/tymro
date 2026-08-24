@@ -118,6 +118,37 @@ def validate_personalized_teacher(teacher):
 
 
 @transaction.atomic
+def finish_personalized_session(*, session_id, actor):
+    session = (
+        PersonalizedClassSession.objects
+        .select_for_update(of=('self',))
+        .select_related('organization', 'teacher', 'student', 'student_plan__plan', 'branch', 'discipline', 'class_type')
+        .get(pk=session_id)
+    )
+
+    if not actor or not getattr(actor, 'organization_id', None):
+        raise PersonalizedClassError('Solo profesores del gimnasio pueden finalizar clases personalizadas.')
+    if actor.organization_id != session.organization_id:
+        raise PersonalizedClassError('No tienes permisos para finalizar esta clase personalizada.', code='forbidden')
+    if actor.role not in TEACHER_ELIGIBLE_ROLES:
+        raise PersonalizedClassError('Solo profesores del gimnasio pueden finalizar clases personalizadas.', code='forbidden')
+    if actor.role == 'teacher' and session.teacher_id != actor.id:
+        raise PersonalizedClassError('Solo puedes finalizar clases personalizadas que dictas.', code='forbidden')
+    if not session.organization.personalized_classes_enabled:
+        raise PersonalizedClassError('Las clases personalizadas no estÃ¡n habilitadas para esta organizaciÃ³n.')
+    if session.status == PersonalizedClassSession.Status.FINISHED:
+        return session
+    if session.status != PersonalizedClassSession.Status.CONFIRMED:
+        raise PersonalizedClassError('La clase todavÃ­a no tiene alumno registrado.', code='not_confirmed')
+
+    session.status = PersonalizedClassSession.Status.FINISHED
+    session.finished_at = timezone.now()
+    session.finished_by = actor
+    session.save(update_fields=['status', 'finished_at', 'finished_by', 'updated_at'])
+    return session
+
+
+@transaction.atomic
 def confirm_personalized_session(*, session_id, qr_jti, student):
     session = (
         PersonalizedClassSession.objects

@@ -178,6 +178,7 @@ from .services.personalized_classes import (
     PERSONALIZED_NO_PLAN_MESSAGE,
     PersonalizedClassError,
     confirm_personalized_session,
+    finish_personalized_session,
     resolve_personalized_student_plan,
     validate_personalized_teacher,
 )
@@ -1451,21 +1452,32 @@ def _personalized_teacher_name(teacher):
 
 
 def _serialize_personalized_session(session, remaining_classes=None):
+    started_at = session.confirmed_at or session.qr_issued_at
+    ended_at = session.finished_at or session.confirmed_at or session.qr_expires_at
     return {
         'id': session.id,
         'name': 'Clase personalizada',
         'kind': 'personalized',
+        'status': session.status,
+        'status_label': session.get_status_display(),
         'discipline': session.discipline.name if session.discipline_id else '',
         'class_type': session.class_type.name if session.class_type_id else '',
         'teacher': _personalized_teacher_name(session.teacher),
         'teacher_id': session.teacher_id,
-        'start_datetime': session.confirmed_at or session.qr_issued_at,
-        'end_datetime': session.confirmed_at or session.qr_expires_at,
+        'student': _user_display_name(session.student) if session.student_id else '',
+        'student_id': session.student_id,
+        'start_datetime': started_at,
+        'end_datetime': ended_at,
+        'qr_issued_at': session.qr_issued_at,
+        'qr_expires_at': session.qr_expires_at,
+        'confirmed_at': session.confirmed_at,
+        'finished_at': session.finished_at,
         'branch': session.branch.name if session.branch_id else '',
         'personalized_session_id': session.id,
         'remaining_classes': remaining_classes,
         'student_plan_id': session.student_plan_id,
         'student_plan_name': session.student_plan.plan.name if session.student_plan_id else '',
+        'can_finish': session.status == PersonalizedClassSession.Status.CONFIRMED,
     }
 
 
@@ -1848,6 +1860,62 @@ class PersonalizedClassQrView(APIView):
             qr_expires_at=now + timedelta(seconds=PERSONALIZED_QR_TTL_SECONDS),
         )
         return Response(_personalized_qr_payload(request, session), status=status.HTTP_201_CREATED)
+
+
+class PersonalizedClassSessionListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        if not user.organization_id:
+            raise PermissionDenied('No tienes permisos para ver clases personalizadas.')
+        if not user.organization.personalized_classes_enabled:
+            raise PermissionDenied('Las clases personalizadas no están habilitadas para esta organización.')
+
+        queryset = (
+            PersonalizedClassSession.objects
+            .select_related('teacher', 'student', 'student_plan__plan', 'branch', 'discipline', 'class_type')
+            .filter(organization_id=user.organization_id)
+        )
+        if _is_teacher(user):
+            queryset = queryset.filter(teacher_id=user.id)
+        elif _is_gym_admin(user):
+            pass
+        elif _acts_as_student(user):
+            queryset = queryset.filter(student_id=user.id).exclude(status=PersonalizedClassSession.Status.PENDING)
+        else:
+            raise PermissionDenied('No tienes permisos para ver clases personalizadas.')
+
+        status_filter = request.query_params.get('status')
+        if status_filter:
+            requested_statuses = [
+                item.strip()
+                for item in str(status_filter).split(',')
+                if item.strip()
+            ]
+            valid_statuses = {choice[0] for choice in PersonalizedClassSession.Status.choices}
+            invalid = [item for item in requested_statuses if item not in valid_statuses]
+            if invalid:
+                raise ValidationError({'status': 'Estado inválido.'})
+            queryset = queryset.filter(status__in=requested_statuses)
+
+        queryset = queryset.order_by('-confirmed_at', '-qr_issued_at', '-id')[:200]
+        return Response([_serialize_personalized_session(session) for session in queryset])
+
+
+class PersonalizedClassSessionFinishView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        try:
+            session = finish_personalized_session(session_id=pk, actor=request.user)
+        except PersonalizedClassSession.DoesNotExist:
+            raise NotFound('Clase personalizada no encontrada.')
+        except PersonalizedClassError as exc:
+            if exc.code == 'forbidden':
+                raise PermissionDenied(exc.message)
+            return Response({'detail': exc.message, 'code': exc.code, **exc.extra}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(_serialize_personalized_session(session))
 
 
 class AttendanceQrCurrentView(APIView):

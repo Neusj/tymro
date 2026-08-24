@@ -124,4 +124,38 @@ describe('Sidebar - configuracion de clases personalizadas', () => {
       '/gym-admin/settings/personalized-classes',
     )
   })
+
+  it('muestra las clases personalizadas dentro de Mis clases del alumno cuando estan activadas', async () => {
+    const enabledOrg = { personalized_classes_enabled: true }
+    const user = userEvent.setup()
+
+    renderSidebar({ role: 'student', organization_detail: enabledOrg })
+    await user.click(screen.getByRole('button', { name: 'Mis clases' }))
+    expect(screen.getByRole('link', { name: 'Clases personalizadas' })).toHaveAttribute(
+      'href',
+      '/student/classes/personalized',
+    )
+  })
+
+  it('muestra el flujo operativo de clases personalizadas para profesores', async () => {
+    renderSidebar({ role: 'teacher', organization_detail: { personalized_classes_enabled: true } })
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'Clases' }))
+
+    expect(screen.getByRole('link', { name: 'Clases personalizadas' })).toHaveAttribute(
+      'href',
+      '/teacher/personalized-class',
+    )
+  })
+
+  it('muestra el flujo operativo de clases personalizadas para admin', async () => {
+    renderSidebar({ role: 'gym_admin', organization_detail: { personalized_classes_enabled: true } })
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'Clases' }))
+
+    const links = screen.getAllByRole('link', { name: 'Clases personalizadas' })
+    expect(links.some((link) => link.getAttribute('href') === '/teacher/personalized-class')).toBe(true)
+  })
 })

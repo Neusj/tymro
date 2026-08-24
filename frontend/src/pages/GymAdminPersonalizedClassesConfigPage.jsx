@@ -81,7 +81,7 @@ export default function GymAdminPersonalizedClassesConfigPage() {
               <span>
                 <span className="block font-semibold text-brand-white">Habilitar clases personalizadas</span>
                 <span className="mt-1 block text-xs text-brand-muted">
-                  Muestra el menu Clase personalizada a profesores y permite registrar sesiones por QR usando planes de tipo Clases personalizadas.
+                  Muestra el menu Clases personalizadas a profesores y alumnos, y permite registrar sesiones por QR usando planes de tipo Clases personalizadas.
                 </span>
               </span>
             </label>

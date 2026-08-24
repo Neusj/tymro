@@ -743,8 +743,16 @@ export const attendanceQrApi = {
 }
 
 export const personalizedClassesApi = {
+  list: async (params = {}) => {
+    const { data } = await api.get('/personalized-classes/', { params })
+    return data
+  },
   createQr: async (payload = {}) => {
     const { data } = await api.post('/personalized-classes/qr/', payload)
+    return data
+  },
+  finish: async (id) => {
+    const { data } = await api.post(`/personalized-classes/${id}/finish/`)
     return data
   },
 }
