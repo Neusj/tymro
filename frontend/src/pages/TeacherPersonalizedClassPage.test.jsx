@@ -21,7 +21,7 @@ vi.mock('../api/client', () => ({
 describe('TeacherPersonalizedClassPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    personalizedClassesApi.list.mockResolvedValue([])
+    personalizedClassesApi.list.mockResolvedValue({ count: 0, page: 1, page_size: 10, total_pages: 1, results: [] })
   })
 
   it('abre el modal con QR al comenzar clase', async () => {
@@ -33,7 +33,7 @@ describe('TeacherPersonalizedClassPage', () => {
 
     render(<TeacherPersonalizedClassPage />)
 
-    await screen.findByText('Sin clases en curso')
+    expect((await screen.findAllByText('No hay clases personalizadas')).length).toBeGreaterThan(0)
     await userEvent.click(screen.getByRole('button', { name: 'Comenzar clase' }))
 
     expect(await screen.findByRole('dialog', { name: 'QR de clase personalizada' })).toBeInTheDocument()
@@ -44,36 +44,48 @@ describe('TeacherPersonalizedClassPage', () => {
 
   it('permite finalizar una clase en curso desde la lista', async () => {
     personalizedClassesApi.list
-      .mockResolvedValueOnce([
-        {
-          id: 7,
-          status: 'confirmed',
-          student: 'Alumno Uno',
-          teacher: 'Profe Ana',
-          confirmed_at: '2026-08-24T14:00:00Z',
-          can_finish: true,
-        },
-      ])
-      .mockResolvedValueOnce([
-        {
-          id: 7,
-          status: 'finished',
-          student: 'Alumno Uno',
-          teacher: 'Profe Ana',
-          confirmed_at: '2026-08-24T14:00:00Z',
-          finished_at: '2026-08-24T15:00:00Z',
-          can_finish: false,
-        },
-      ])
+      .mockResolvedValueOnce({
+        count: 1,
+        page: 1,
+        page_size: 10,
+        total_pages: 1,
+        results: [
+          {
+            id: 7,
+            status: 'confirmed',
+            student: 'Alumno Uno',
+            teacher: 'Profe Ana',
+            confirmed_at: '2026-08-24T14:00:00Z',
+            can_finish: true,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        count: 1,
+        page: 1,
+        page_size: 10,
+        total_pages: 1,
+        results: [
+          {
+            id: 7,
+            status: 'finished',
+            student: 'Alumno Uno',
+            teacher: 'Profe Ana',
+            confirmed_at: '2026-08-24T14:00:00Z',
+            finished_at: '2026-08-24T15:00:00Z',
+            can_finish: false,
+          },
+        ],
+      })
     personalizedClassesApi.finish.mockResolvedValue({ id: 7, status: 'finished' })
 
     render(<TeacherPersonalizedClassPage />)
 
-    await screen.findByRole('button', { name: 'Finalizar clase' })
-    await userEvent.click(screen.getByRole('button', { name: 'Finalizar clase' }))
+    await screen.findAllByRole('button', { name: 'Finalizar clase' })
+    await userEvent.click(screen.getAllByRole('button', { name: 'Finalizar clase' })[0])
 
     await waitFor(() => expect(personalizedClassesApi.finish).toHaveBeenCalledWith(7))
     expect(await screen.findByText('Clase personalizada finalizada.')).toBeInTheDocument()
-    expect(screen.getByText('Dictada')).toBeInTheDocument()
+    expect(screen.getAllByText('Dictada').length).toBeGreaterThan(0)
   })
 })

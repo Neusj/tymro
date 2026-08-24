@@ -1,5 +1,7 @@
 from dataclasses import dataclass
+from datetime import datetime
 
+from django.contrib.auth import get_user_model
 from django.db import IntegrityError, transaction
 from django.db.models import F
 from django.utils import timezone
@@ -17,6 +19,7 @@ from .plans import describe_student_plan
 
 
 PERSONALIZED_NO_PLAN_MESSAGE = 'No tienes sesiones personalizadas disponibles.'
+User = get_user_model()
 
 
 class PersonalizedClassError(Exception):
@@ -117,6 +120,31 @@ def validate_personalized_teacher(teacher):
     return teacher
 
 
+def _virtual_session_from_qr_payload(payload, teacher):
+    expires_at = payload.get('expires_at')
+    if timezone.is_naive(expires_at):
+        expires_at = timezone.make_aware(expires_at, timezone.get_current_timezone())
+    issued_at = payload.get('issued_at') or timezone.now().isoformat()
+    try:
+        issued_at = datetime.fromisoformat(issued_at)
+    except (TypeError, ValueError):
+        issued_at = timezone.now()
+    if timezone.is_naive(issued_at):
+        issued_at = timezone.make_aware(issued_at, timezone.get_current_timezone())
+    return PersonalizedClassSession(
+        organization=teacher.organization,
+        organization_id=teacher.organization_id,
+        branch_id=payload.get('branch_id'),
+        teacher=teacher,
+        teacher_id=teacher.id,
+        discipline_id=payload.get('discipline_id'),
+        class_type_id=payload.get('class_type_id'),
+        qr_jti=payload.get('qr_jti'),
+        qr_issued_at=issued_at,
+        qr_expires_at=expires_at,
+    )
+
+
 @transaction.atomic
 def finish_personalized_session(*, session_id, actor):
     session = (
@@ -146,6 +174,109 @@ def finish_personalized_session(*, session_id, actor):
     session.finished_by = actor
     session.save(update_fields=['status', 'finished_at', 'finished_by', 'updated_at'])
     return session
+
+
+@transaction.atomic
+def confirm_personalized_qr(*, payload, student):
+    now = timezone.now()
+    teacher = (
+        User.objects
+        .select_related('organization')
+        .filter(
+            id=payload.get('teacher_id'),
+            organization_id=payload.get('organization_id'),
+            role__in=TEACHER_ELIGIBLE_ROLES,
+            is_active=True,
+        )
+        .first()
+    )
+    if teacher is None:
+        raise PersonalizedClassError('Profesor no habilitado para esta organizaciÃ³n.', code='teacher_not_allowed')
+    if not teacher.organization.personalized_classes_enabled:
+        raise PersonalizedClassError('Las clases personalizadas no estÃ¡n habilitadas para esta organizaciÃ³n.')
+    if student.organization_id != teacher.organization_id:
+        raise PersonalizedClassError('Este QR pertenece a otro gimnasio.', code='wrong_organization')
+    if payload.get('expires_at') <= now:
+        raise PersonalizedClassError('El QR expirÃ³. Pide al profesor generar uno nuevo.', code='expired_qr')
+    if PersonalizedClassSession.objects.filter(qr_jti=payload.get('qr_jti')).exists():
+        raise PersonalizedClassError('Este QR ya fue utilizado.', code='qr_reused')
+
+    virtual_session = _virtual_session_from_qr_payload(payload, teacher)
+    chosen_plan = resolve_personalized_student_plan(student, virtual_session, on_date=timezone.localdate(now))
+    chosen_plan = (
+        StudentPlan.objects
+        .select_for_update()
+        .select_related('plan', 'user')
+        .prefetch_related(
+            'freezes',
+            'plan__allowed_personalized_teachers',
+            'plan__compatible_disciplines',
+            'plan__compatible_class_types',
+        )
+        .get(pk=chosen_plan.pk)
+    )
+    if not describe_student_plan(chosen_plan, timezone.localdate(now)).is_usable or not _plan_matches_session(chosen_plan, virtual_session):
+        raise PersonalizedClassError(PERSONALIZED_NO_PLAN_MESSAGE, code='personalized_plan_unavailable')
+
+    try:
+        with transaction.atomic():
+            session = PersonalizedClassSession.objects.create(
+                organization=teacher.organization,
+                branch_id=payload.get('branch_id'),
+                teacher=teacher,
+                student=student,
+                student_plan=chosen_plan,
+                discipline_id=payload.get('discipline_id'),
+                class_type_id=payload.get('class_type_id'),
+                qr_jti=payload.get('qr_jti'),
+                qr_issued_at=virtual_session.qr_issued_at,
+                qr_expires_at=payload.get('expires_at'),
+                confirmed_by=student,
+                confirmed_at=now,
+                status=PersonalizedClassSession.Status.CONFIRMED,
+            )
+    except IntegrityError:
+        raise PersonalizedClassError('Este QR ya fue utilizado.', code='qr_reused')
+
+    try:
+        consumption = ConsumptionLog.objects.create(
+            user=student,
+            student_plan=chosen_plan,
+            personalized_session=session,
+            branch_id=session.branch_id,
+        )
+    except IntegrityError:
+        raise PersonalizedClassError('Este QR ya fue utilizado.', code='qr_reused')
+
+    StudentPlan.objects.filter(pk=chosen_plan.pk).update(
+        classes_used=F('classes_used') + 1,
+        updated_at=timezone.now(),
+    )
+    chosen_plan.refresh_from_db(fields=['classes_used', 'updated_at'])
+
+    attendance, created = Attendance.objects.update_or_create(
+        personalized_session=session,
+        student=student,
+        defaults={
+            'gym_class': None,
+            'status': Attendance.Status.PRESENT,
+            'source': Attendance.Source.QR,
+            'marked_by': student,
+            'marked_at': now,
+            'checked_at': now,
+        },
+    )
+    remaining = None if chosen_plan.unlimited_classes else max(
+        (chosen_plan.total_classes or 0) - (chosen_plan.classes_used or 0),
+        0,
+    )
+    return PersonalizedClassResult(
+        session=session,
+        attendance=attendance,
+        consumption=consumption,
+        remaining_classes=remaining,
+        created_attendance=created,
+    )
 
 
 @transaction.atomic

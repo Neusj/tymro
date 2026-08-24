@@ -141,10 +141,12 @@ export default function TeacherPaymentsOverviewPage() {
     return rows.reduce(
       (acc, row) => {
         acc.classes += row.classes_count || 0
+        acc.normal += row.normal_classes_count || 0
+        acc.personalized += row.personalized_classes_count || 0
         acc.attendees += row.attendees_total || 0
         return acc
       },
-      { classes: 0, attendees: 0 },
+      { classes: 0, normal: 0, personalized: 0, attendees: 0 },
     )
   }, [rows])
 
@@ -194,7 +196,7 @@ export default function TeacherPaymentsOverviewPage() {
     <div className="space-y-5">
       <DashboardHeader
         title="Pagos Profesores · Resumen"
-        subtitle="Lo que le debes a cada profesor en el período, calculado desde las clases dictadas y la asistencia real."
+        subtitle="Lo que le debes a cada profesor en el período. Puedes filtrar normales o personalizadas y exportar el detalle."
       />
 
       {error ? (
@@ -273,9 +275,10 @@ export default function TeacherPaymentsOverviewPage() {
           <p className="mt-1 font-display text-4xl font-bold leading-none text-brand-white sm:text-5xl">
             {clp(grandTotal)}
           </p>
-          <div className="mt-4 grid grid-cols-3 gap-2">
+          <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
             <StatTile label="Profesores" value={rows.length} accent="text-brand-orange" />
-            <StatTile label="Clases" value={totals.classes} />
+            <StatTile label="Normales" value={totals.normal} />
+            <StatTile label="Personalizadas" value={totals.personalized} accent="text-brand-blue" />
             <StatTile label="Asistentes" value={totals.attendees} />
           </div>
         </div>

@@ -177,6 +177,7 @@ from .services.teacher_payments import build_teacher_payment_summary, calculate_
 from .services.personalized_classes import (
     PERSONALIZED_NO_PLAN_MESSAGE,
     PersonalizedClassError,
+    confirm_personalized_qr,
     confirm_personalized_session,
     finish_personalized_session,
     resolve_personalized_student_plan,
@@ -1481,28 +1482,58 @@ def _serialize_personalized_session(session, remaining_classes=None):
     }
 
 
-def _personalized_qr_payload(request, session):
+def _serialize_personalized_qr_context(payload, teacher, branch=None, discipline=None, class_type=None, remaining_classes=None):
+    return {
+        'id': None,
+        'name': 'Clase personalizada',
+        'kind': 'personalized',
+        'status': 'qr_active',
+        'status_label': 'QR activo',
+        'discipline': discipline.name if discipline else '',
+        'class_type': class_type.name if class_type else '',
+        'teacher': _personalized_teacher_name(teacher),
+        'teacher_id': teacher.id,
+        'student': '',
+        'student_id': None,
+        'start_datetime': payload.get('issued_at'),
+        'end_datetime': payload.get('expires_at'),
+        'qr_issued_at': payload.get('issued_at'),
+        'qr_expires_at': payload.get('expires_at'),
+        'confirmed_at': None,
+        'finished_at': None,
+        'branch': branch.name if branch else '',
+        'personalized_session_id': None,
+        'remaining_classes': remaining_classes,
+        'student_plan_id': None,
+        'student_plan_name': '',
+        'can_finish': False,
+    }
+
+
+def _personalized_qr_payload(request, payload, teacher, branch=None, discipline=None, class_type=None):
     token = signing.dumps(
         {
             'kind': 'personalized',
-            'organization_id': session.organization_id,
-            'teacher_id': session.teacher_id,
-            'session_id': session.id,
-            'qr_jti': session.qr_jti,
-            'issued_at': session.qr_issued_at.isoformat(),
-            'expires_at': session.qr_expires_at.isoformat(),
+            'organization_id': payload['organization_id'],
+            'teacher_id': payload['teacher_id'],
+            'branch_id': payload.get('branch_id'),
+            'discipline_id': payload.get('discipline_id'),
+            'class_type_id': payload.get('class_type_id'),
+            'qr_jti': payload['qr_jti'],
+            'issued_at': payload['issued_at'].isoformat(),
+            'expires_at': payload['expires_at'].isoformat(),
         },
         salt=PERSONALIZED_QR_SALT,
     )
     check_in_path = f'/attendance/check-in?token={token}'
     return {
-        'organization_name': session.organization.name,
+        'organization_name': teacher.organization.name,
         'token': token,
-        'expires_at': session.qr_expires_at,
-        'expires_in_seconds': max(0, int((session.qr_expires_at - timezone.now()).total_seconds())),
+        'expires_at': payload['expires_at'],
+        'expires_in_seconds': max(0, int((payload['expires_at'] - timezone.now()).total_seconds())),
         'check_in_path': check_in_path,
         'check_in_url': request.build_absolute_uri(check_in_path),
-        'session': _serialize_personalized_session(session),
+        'session': _serialize_personalized_qr_context(payload, teacher, branch, discipline, class_type),
     }
 
 
@@ -1552,13 +1583,28 @@ def _load_personalized_qr_token(raw_token):
         expires_at = timezone.make_aware(expires_at, timezone.get_current_timezone())
     if timezone.now() > expires_at:
         raise ValidationError({'token': 'El QR expiró. Pide al profesor generar uno nuevo.'})
+    issued_at = payload.get('issued_at')
+    try:
+        issued_at = datetime.fromisoformat(issued_at)
+    except (TypeError, ValueError):
+        raise ValidationError({'token': 'Token QR inválido.'})
+    if timezone.is_naive(issued_at):
+        issued_at = timezone.make_aware(issued_at, timezone.get_current_timezone())
     try:
         payload['organization_id'] = int(payload.get('organization_id'))
         payload['teacher_id'] = int(payload.get('teacher_id'))
-        payload['session_id'] = int(payload.get('session_id'))
     except (TypeError, ValueError):
         raise ValidationError({'token': 'Token QR inválido.'})
+    for key in ('session_id', 'branch_id', 'discipline_id', 'class_type_id'):
+        if payload.get(key) in (None, ''):
+            payload[key] = None
+            continue
+        try:
+            payload[key] = int(payload.get(key))
+        except (TypeError, ValueError):
+            raise ValidationError({'token': 'Token QR inválido.'})
     payload['expires_at'] = expires_at
+    payload['issued_at'] = issued_at
     return payload
 
 
@@ -1578,7 +1624,16 @@ def _load_any_qr_token(raw_token):
     return payload
 
 
-def _build_checkin_grant(student_id, gym_class_id, organization_id, *, kind='attendance', personalized_session_id=None, qr_jti=''):
+def _build_checkin_grant(
+    student_id,
+    gym_class_id,
+    organization_id,
+    *,
+    kind='attendance',
+    personalized_session_id=None,
+    qr_jti='',
+    personalized_qr=None,
+):
     """Emite el permiso de un solo uso para confirmar asistencia tras un preview
     válido. Firmado con `signing.dumps` (lleva timestamp para el TTL del grant)."""
     payload = {
@@ -1587,6 +1642,7 @@ def _build_checkin_grant(student_id, gym_class_id, organization_id, *, kind='att
         'gym_class_id': gym_class_id,
         'personalized_session_id': personalized_session_id,
         'qr_jti': qr_jti,
+        'personalized_qr': personalized_qr or None,
         'organization_id': organization_id,
         'issued_at': timezone.now().isoformat(),
     }
@@ -1729,50 +1785,81 @@ def _personalized_preview_payload(student, payload):
             'class': None,
             'next_check_in_at': None,
         }
-    session = (
+    existing_session = (
         PersonalizedClassSession.objects
         .select_related('organization', 'teacher', 'branch', 'discipline', 'class_type', 'student_plan__plan')
-        .filter(id=payload.get('session_id'), organization_id=payload['organization_id'])
+        .filter(qr_jti=payload.get('qr_jti'), organization_id=payload['organization_id'])
         .first()
     )
-    if session is None or session.qr_jti != payload.get('qr_jti'):
+    if existing_session is not None:
+        attendance = Attendance.objects.filter(personalized_session=existing_session, student=student).first()
         return {
-            'status': 'invalid_qr',
-            'detail': 'QR inválido.',
+            'status': 'already_registered' if attendance else 'qr_reused',
+            'detail': 'Esta clase personalizada ya fue registrada.' if attendance else 'Este QR ya fue utilizado.',
+            'class': _serialize_personalized_session(existing_session),
+            'attendance_status': attendance.status if attendance else None,
+            'attendance_source': attendance.source if attendance else None,
+            'next_check_in_at': None,
+        }
+
+    teacher = (
+        User.objects
+        .select_related('organization')
+        .filter(
+            id=payload.get('teacher_id'),
+            organization_id=payload['organization_id'],
+            role__in=TEACHER_ELIGIBLE_ROLES,
+            is_active=True,
+        )
+        .first()
+    )
+    if teacher is None:
+        return {
+            'status': 'teacher_not_allowed',
+            'detail': 'Profesor no habilitado para esta organización.',
             'class': None,
             'next_check_in_at': None,
         }
-    if not session.organization.personalized_classes_enabled:
+    if not teacher.organization.personalized_classes_enabled:
         return {
             'status': 'feature_disabled',
             'detail': 'Las clases personalizadas no están habilitadas para esta organización.',
             'class': None,
             'next_check_in_at': None,
         }
-    if session.status != PersonalizedClassSession.Status.PENDING:
-        attendance = Attendance.objects.filter(personalized_session=session, student=student).first()
-        return {
-            'status': 'already_registered' if attendance else 'qr_reused',
-            'detail': 'Esta clase personalizada ya fue registrada.' if attendance else 'Este QR ya fue utilizado.',
-            'class': _serialize_personalized_session(session),
-            'attendance_status': attendance.status if attendance else None,
-            'attendance_source': attendance.source if attendance else None,
-            'next_check_in_at': None,
-        }
-    if session.qr_expires_at <= timezone.now():
+    if payload['expires_at'] <= timezone.now():
         return {
             'status': 'expired_qr',
             'detail': 'El QR expiró. Pide al profesor generar uno nuevo.',
             'class': None,
             'next_check_in_at': None,
         }
+
+    branch = Branch.objects.filter(id=payload.get('branch_id'), organization_id=payload['organization_id']).first() if payload.get('branch_id') else None
+    discipline = Discipline.objects.filter(id=payload.get('discipline_id'), organization_id=payload['organization_id']).first() if payload.get('discipline_id') else None
+    class_type = ClassType.objects.filter(id=payload.get('class_type_id'), organization_id=payload['organization_id']).first() if payload.get('class_type_id') else None
+    session = PersonalizedClassSession(
+        organization=teacher.organization,
+        organization_id=teacher.organization_id,
+        branch=branch,
+        branch_id=payload.get('branch_id'),
+        teacher=teacher,
+        teacher_id=teacher.id,
+        discipline=discipline,
+        discipline_id=payload.get('discipline_id'),
+        class_type=class_type,
+        class_type_id=payload.get('class_type_id'),
+        qr_jti=payload.get('qr_jti'),
+        qr_issued_at=payload.get('issued_at'),
+        qr_expires_at=payload.get('expires_at'),
+    )
     try:
         student_plan = resolve_personalized_student_plan(student, session)
     except PersonalizedClassError:
         return {
             'status': 'no_personalized_plan',
             'detail': PERSONALIZED_NO_PLAN_MESSAGE,
-            'class': _serialize_personalized_session(session),
+            'class': _serialize_personalized_qr_context(payload, teacher, branch, discipline, class_type),
             'next_check_in_at': None,
         }
     remaining = None if student_plan.unlimited_classes else max(
@@ -1783,7 +1870,14 @@ def _personalized_preview_payload(student, payload):
     return {
         'status': 'ready',
         'detail': '',
-        'class': _serialize_personalized_session(session, remaining_classes=remaining),
+        'class': _serialize_personalized_qr_context(
+            payload,
+            teacher,
+            branch,
+            discipline,
+            class_type,
+            remaining_classes=remaining,
+        ),
         'attendance_status': None,
         'attendance_source': None,
         'next_check_in_at': None,
@@ -1849,17 +1943,20 @@ class PersonalizedClassQrView(APIView):
             'class_type',
         )
         now = timezone.now()
-        session = PersonalizedClassSession.objects.create(
-            organization=user.organization,
-            branch=branch,
-            teacher=user,
-            discipline=discipline,
-            class_type=class_type,
-            qr_jti=uuid4().hex,
-            qr_issued_at=now,
-            qr_expires_at=now + timedelta(seconds=PERSONALIZED_QR_TTL_SECONDS),
+        payload = {
+            'organization_id': user.organization_id,
+            'teacher_id': user.id,
+            'branch_id': branch.id if branch else None,
+            'discipline_id': discipline.id if discipline else None,
+            'class_type_id': class_type.id if class_type else None,
+            'issued_at': now,
+            'expires_at': now + timedelta(seconds=PERSONALIZED_QR_TTL_SECONDS),
+            'qr_jti': uuid4().hex,
+        }
+        return Response(
+            _personalized_qr_payload(request, payload, user, branch, discipline, class_type),
+            status=status.HTTP_201_CREATED,
         )
-        return Response(_personalized_qr_payload(request, session), status=status.HTTP_201_CREATED)
 
 
 class PersonalizedClassSessionListView(APIView):
@@ -1876,13 +1973,14 @@ class PersonalizedClassSessionListView(APIView):
             PersonalizedClassSession.objects
             .select_related('teacher', 'student', 'student_plan__plan', 'branch', 'discipline', 'class_type')
             .filter(organization_id=user.organization_id)
+            .exclude(status=PersonalizedClassSession.Status.PENDING)
         )
         if _is_teacher(user):
             queryset = queryset.filter(teacher_id=user.id)
         elif _is_gym_admin(user):
             pass
         elif _acts_as_student(user):
-            queryset = queryset.filter(student_id=user.id).exclude(status=PersonalizedClassSession.Status.PENDING)
+            queryset = queryset.filter(student_id=user.id)
         else:
             raise PermissionDenied('No tienes permisos para ver clases personalizadas.')
 
@@ -1899,8 +1997,46 @@ class PersonalizedClassSessionListView(APIView):
                 raise ValidationError({'status': 'Estado inválido.'})
             queryset = queryset.filter(status__in=requested_statuses)
 
-        queryset = queryset.order_by('-confirmed_at', '-qr_issued_at', '-id')[:200]
-        return Response([_serialize_personalized_session(session) for session in queryset])
+        search = str(request.query_params.get('search') or request.query_params.get('q') or '').strip()
+        if search:
+            queryset = queryset.filter(
+                models.Q(student__first_name__icontains=search)
+                | models.Q(student__last_name__icontains=search)
+                | models.Q(student__username__icontains=search)
+                | models.Q(student__email__icontains=search)
+                | models.Q(teacher__first_name__icontains=search)
+                | models.Q(teacher__last_name__icontains=search)
+                | models.Q(teacher__username__icontains=search)
+                | models.Q(teacher__email__icontains=search)
+                | models.Q(student_plan__plan__name__icontains=search)
+                | models.Q(branch__name__icontains=search)
+                | models.Q(discipline__name__icontains=search)
+                | models.Q(class_type__name__icontains=search)
+            )
+
+        try:
+            page = max(1, int(request.query_params.get('page') or 1))
+        except (TypeError, ValueError):
+            raise ValidationError({'page': 'Debe ser un entero positivo.'})
+        try:
+            page_size = int(request.query_params.get('page_size') or request.query_params.get('pageSize') or 10)
+        except (TypeError, ValueError):
+            raise ValidationError({'page_size': 'Debe ser un entero positivo.'})
+        page_size = min(max(1, page_size), 100)
+        total = queryset.count()
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        safe_page = min(page, total_pages)
+        start = (safe_page - 1) * page_size
+        items = queryset.order_by('-confirmed_at', '-qr_issued_at', '-id')[start:start + page_size]
+        return Response(
+            {
+                'count': total,
+                'page': safe_page,
+                'page_size': page_size,
+                'total_pages': total_pages,
+                'results': [_serialize_personalized_session(session) for session in items],
+            }
+        )
 
 
 class PersonalizedClassSessionFinishView(APIView):
@@ -2026,6 +2162,17 @@ class AttendanceQrPreviewView(APIView):
                 kind=payload.get('kind', 'attendance'),
                 personalized_session_id=payload.get('session_id'),
                 qr_jti=payload.get('qr_jti', ''),
+                personalized_qr={
+                    'organization_id': payload.get('organization_id'),
+                    'teacher_id': payload.get('teacher_id'),
+                    'session_id': payload.get('session_id'),
+                    'branch_id': payload.get('branch_id'),
+                    'discipline_id': payload.get('discipline_id'),
+                    'class_type_id': payload.get('class_type_id'),
+                    'qr_jti': payload.get('qr_jti'),
+                    'issued_at': payload.get('issued_at').isoformat() if payload.get('issued_at') else None,
+                    'expires_at': payload.get('expires_at').isoformat() if payload.get('expires_at') else None,
+                } if payload.get('kind') == 'personalized' else None,
             )
         return Response(preview)
 
@@ -2053,11 +2200,38 @@ class AttendanceQrCheckInView(APIView):
 
         if grant.get('kind') == 'personalized':
             try:
-                result = confirm_personalized_session(
-                    session_id=grant.get('personalized_session_id'),
-                    qr_jti=grant.get('qr_jti'),
-                    student=request.user,
-                )
+                if grant.get('personalized_session_id'):
+                    result = confirm_personalized_session(
+                        session_id=grant.get('personalized_session_id'),
+                        qr_jti=grant.get('qr_jti'),
+                        student=request.user,
+                    )
+                else:
+                    personalized_payload = grant.get('personalized_qr') or {}
+                    expires_at = personalized_payload.get('expires_at')
+                    issued_at = personalized_payload.get('issued_at')
+                    try:
+                        personalized_payload['expires_at'] = datetime.fromisoformat(expires_at)
+                        personalized_payload['issued_at'] = datetime.fromisoformat(issued_at)
+                    except (TypeError, ValueError):
+                        return Response(
+                            {'detail': 'El permiso de asistencia no corresponde a una clase personalizada válida.'},
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+                    if timezone.is_naive(personalized_payload['expires_at']):
+                        personalized_payload['expires_at'] = timezone.make_aware(
+                            personalized_payload['expires_at'],
+                            timezone.get_current_timezone(),
+                        )
+                    if timezone.is_naive(personalized_payload['issued_at']):
+                        personalized_payload['issued_at'] = timezone.make_aware(
+                            personalized_payload['issued_at'],
+                            timezone.get_current_timezone(),
+                        )
+                    result = confirm_personalized_qr(
+                        payload=personalized_payload,
+                        student=request.user,
+                    )
             except PersonalizedClassSession.DoesNotExist:
                 return Response(
                     {'detail': 'La sesión personalizada ya no está disponible.'},

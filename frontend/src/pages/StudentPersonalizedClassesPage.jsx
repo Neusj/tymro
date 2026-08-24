@@ -1,129 +1,90 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { personalizedClassesApi } from '../api/client'
 import DashboardHeader from '../components/DashboardHeader'
-import EmptyState from '../components/EmptyState'
-import { firstApiError, formatDate } from '../utils/format'
+import PersonalizedClassesTable from '../components/PersonalizedClassesTable'
+import { firstApiError } from '../utils/format'
 
-function formatDateTime(value) {
-  if (!value) return '-'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  return `${formatDate(value)} ${date.toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })}`
-}
+const emptyList = { count: 0, page: 1, page_size: 10, total_pages: 1, results: [] }
 
-function statusBadge(item) {
-  if (item.status === 'finished') {
-    return { text: 'Dictada', className: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200' }
+function normalizeList(data) {
+  if (Array.isArray(data)) {
+    return { ...emptyList, count: data.length, results: data }
   }
-  return { text: 'En curso', className: 'border-brand-orange/50 bg-brand-orange/10 text-amber-200' }
-}
-
-function StudentSessionCard({ item }) {
-  const badge = statusBadge(item)
-  return (
-    <article className="rounded-xl border border-brand-line bg-brand-soft/80 p-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <h3 className="font-semibold text-brand-white">Clase personalizada</h3>
-        <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${badge.className}`}>
-          {badge.text}
-        </span>
-      </div>
-      <dl className="mt-3 grid gap-2 text-sm text-brand-muted sm:grid-cols-2">
-        <div>
-          <dt className="text-xs uppercase tracking-wide text-brand-muted/80">Profesor</dt>
-          <dd className="font-medium text-brand-white">{item.teacher || '-'}</dd>
-        </div>
-        <div>
-          <dt className="text-xs uppercase tracking-wide text-brand-muted/80">Plan</dt>
-          <dd>{item.student_plan_name || '-'}</dd>
-        </div>
-        <div>
-          <dt className="text-xs uppercase tracking-wide text-brand-muted/80">Inicio</dt>
-          <dd>{formatDateTime(item.confirmed_at)}</dd>
-        </div>
-        <div>
-          <dt className="text-xs uppercase tracking-wide text-brand-muted/80">Fin</dt>
-          <dd>{formatDateTime(item.finished_at)}</dd>
-        </div>
-        <div>
-          <dt className="text-xs uppercase tracking-wide text-brand-muted/80">Sede</dt>
-          <dd>{item.branch || '-'}</dd>
-        </div>
-        <div>
-          <dt className="text-xs uppercase tracking-wide text-brand-muted/80">Disciplina</dt>
-          <dd>{item.discipline || item.class_type || '-'}</dd>
-        </div>
-      </dl>
-    </article>
-  )
+  return {
+    count: Number(data?.count || 0),
+    page: Number(data?.page || 1),
+    page_size: Number(data?.page_size || 10),
+    total_pages: Number(data?.total_pages || 1),
+    results: Array.isArray(data?.results) ? data.results : [],
+  }
 }
 
 export default function StudentPersonalizedClassesPage() {
-  const [sessions, setSessions] = useState([])
+  const [listData, setListData] = useState(emptyList)
+  const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const [statusFilter, setStatusFilter] = useState('all')
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(10)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
   const loadSessions = useCallback(async () => {
+    setLoading(true)
     try {
-      const data = await personalizedClassesApi.list()
-      setSessions(Array.isArray(data) ? data : [])
+      const params = { page, page_size: pageSize }
+      if (debouncedSearch.trim()) params.search = debouncedSearch.trim()
+      if (statusFilter !== 'all') params.status = statusFilter
+      const data = await personalizedClassesApi.list(params)
+      setListData(normalizeList(data))
       setError('')
     } catch (apiError) {
       setError(firstApiError(apiError?.response?.data, 'No se pudieron cargar tus clases personalizadas.'))
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [debouncedSearch, page, pageSize, statusFilter])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedSearch(search)
+      setPage(1)
+    }, 300)
+    return () => window.clearTimeout(timer)
+  }, [search])
 
   useEffect(() => {
     loadSessions()
   }, [loadSessions])
 
-  const currentSessions = useMemo(
-    () => sessions.filter((item) => item.status === 'confirmed'),
-    [sessions],
-  )
-  const finishedSessions = useMemo(
-    () => sessions.filter((item) => item.status === 'finished'),
-    [sessions],
-  )
-
   return (
     <div className="space-y-6">
       <DashboardHeader
         title="Mis clases personalizadas"
-        subtitle="Revisa tus sesiones privadas en curso y dictadas."
-        extra={(
-          <button type="button" onClick={loadSessions} className="inline-flex min-h-10 items-center rounded-lg border border-brand-line px-4 py-2 text-sm font-semibold text-brand-white transition hover:border-brand-orange">
-            Actualizar
-          </button>
-        )}
+        subtitle="Busca, filtra y revisa tus sesiones privadas en curso y dictadas."
       />
 
       {error ? <p className="rounded-lg border border-brand-red/50 bg-brand-red/10 px-3 py-2 text-sm text-red-200">{error}</p> : null}
 
-      <section className="space-y-3">
-        <h2 className="text-lg font-semibold text-brand-white">En curso</h2>
-        {loading ? <p className="text-sm text-brand-muted">Cargando clases...</p> : null}
-        {!loading && currentSessions.length === 0 ? (
-          <EmptyState title="Sin clases en curso" description="Cuando escanees el QR de una clase personalizada aparecera aqui." />
-        ) : (
-          <div className="grid gap-3">
-            {currentSessions.map((item) => <StudentSessionCard key={item.id} item={item} />)}
-          </div>
-        )}
-      </section>
-
-      <section className="space-y-3">
-        <h2 className="text-lg font-semibold text-brand-white">Dictadas</h2>
-        {!loading && finishedSessions.length === 0 ? (
-          <EmptyState title="Sin clases dictadas" description="Las clases finalizadas por el profesor quedan registradas aqui." />
-        ) : (
-          <div className="grid gap-3">
-            {finishedSessions.map((item) => <StudentSessionCard key={item.id} item={item} />)}
-          </div>
-        )}
-      </section>
+      <PersonalizedClassesTable
+        items={listData.results}
+        loading={loading}
+        search={search}
+        status={statusFilter}
+        pagination={listData}
+        showStudent={false}
+        showTeacher
+        onSearchChange={setSearch}
+        onStatusChange={(value) => {
+          setStatusFilter(value)
+          setPage(1)
+        }}
+        onPageChange={setPage}
+        onPageSizeChange={(value) => {
+          setPageSize(value)
+          setPage(1)
+        }}
+      />
     </div>
   )
 }
