@@ -212,6 +212,7 @@ const navByRole = {
         { to: '/gym-admin/settings/trial-followup', label: 'Emails de prueba' },
         { to: '/gym-admin/settings/expiry-notification', label: 'Avisos de vencimiento' },
         { to: '/gym-admin/settings/enrollment-fee', label: 'Matricula anual' },
+        { to: '/gym-admin/settings/student-discount', label: 'Descuento estudiante' },
         { to: '/gym-admin/settings/reservation-window', label: 'Anticipacion reservas' },
         { to: '/gym-admin/settings/attendance-edit', label: 'Edicion asistencia' },
         { to: '/gym-admin/settings/teacher-payment', label: 'Pago al profesor' },

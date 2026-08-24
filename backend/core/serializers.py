@@ -8,7 +8,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import Q
 from django.utils import timezone
 from rest_framework import serializers
-from rest_framework.exceptions import NotFound
+from rest_framework.exceptions import NotFound, PermissionDenied
 
 from accounts import roles
 from accounts.rut import clean_rut
@@ -45,7 +45,14 @@ from .models import (
     TeacherPaymentRule,
     TrialFollowupConfiguration,
 )
-from .services.plans import money, quote_student_plan_assignment, describe_student_plan
+from .services.plans import (
+    money,
+    quote_plan_purchase,
+    quote_student_plan_assignment,
+    describe_student_plan,
+    student_benefit_expiry_for,
+    student_benefit_is_active,
+)
 from .services.recurrence import create_enrollments_for_recurring_subscription, recurring_skip_reason_for_instance
 from .services.reservations import (
     REASON_PLAN_NOT_FOUND,
@@ -216,6 +223,7 @@ class OrganizationSerializer(serializers.ModelSerializer):
             'teacher_attendance_edit_limit_minutes',
             'class_pruning_grace_days',
             'annual_enrollment_fee',
+            'student_discount_percentage',
             'branches_count',
         ]
         read_only_fields = [
@@ -376,6 +384,7 @@ class CustomUserSerializer(serializers.ModelSerializer):
     # Etiqueta legible del rol (única fuente: los choices de CustomUser.Role vía
     # get_role_display()). Solo lectura: nunca expone la key interna ('gym_admin').
     role_display = serializers.CharField(source='get_role_display', read_only=True)
+    student_benefit_active = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -392,6 +401,12 @@ class CustomUserSerializer(serializers.ModelSerializer):
             'profile_image',
             'is_active_member',
             'pays_enrollment_fee',
+            'student_benefit_enabled',
+            'student_benefit_active',
+            'student_benefit_activated_on',
+            'student_benefit_expires_on',
+            'student_benefit_updated_at',
+            'student_benefit_updated_by',
             'organization',
             'branch',
             'organization_detail',
@@ -406,7 +421,38 @@ class CustomUserSerializer(serializers.ModelSerializer):
             'trial_eligible',
             'has_used_trial',
         ]
-        read_only_fields = ['email_verified', 'trial_eligible', 'has_used_trial']
+        read_only_fields = [
+            'email_verified',
+            'trial_eligible',
+            'has_used_trial',
+            'student_benefit_active',
+            'student_benefit_activated_on',
+            'student_benefit_expires_on',
+            'student_benefit_updated_at',
+            'student_benefit_updated_by',
+        ]
+
+    def get_student_benefit_active(self, obj):
+        return student_benefit_is_active(obj, timezone.localdate())
+
+    def _stamp_student_benefit(self, instance, enabled):
+        request = self.context.get('request')
+        actor = getattr(request, 'user', None)
+        today = timezone.localdate()
+        update_fields = [
+            'student_benefit_enabled',
+            'student_benefit_updated_at',
+            'student_benefit_updated_by',
+        ]
+        instance.student_benefit_enabled = bool(enabled)
+        instance.student_benefit_updated_at = timezone.now()
+        instance.student_benefit_updated_by = actor if getattr(actor, 'is_authenticated', False) else None
+        if enabled:
+            instance.student_benefit_activated_on = today
+            instance.student_benefit_expires_on = student_benefit_expiry_for(today)
+            update_fields.extend(['student_benefit_activated_on', 'student_benefit_expires_on'])
+        instance.save(update_fields=update_fields)
+        return instance
 
     def validate(self, attrs):
         """Integridad de datos del usuario. La decisión de qué rol puede asignar
@@ -418,6 +464,13 @@ class CustomUserSerializer(serializers.ModelSerializer):
         # Rol efectivo: el del payload; en updates sin 'role', el de la instancia;
         # en create sin 'role', el default del modelo.
         effective_role = attrs.get('role') or (self.instance.role if self.instance else User.Role.STUDENT)
+
+        if 'student_benefit_enabled' in attrs and not (
+            actor is not None
+            and getattr(actor, 'is_authenticated', False)
+            and actor.role in {User.Role.SUPERADMIN, User.Role.GYM_ADMIN}
+        ):
+            raise PermissionDenied('No tienes permisos para modificar el beneficio estudiante.')
 
         # Actores org-admin (gym_admin/manager): la organización SIEMPRE es la suya.
         if roles.is_org_admin(actor):
@@ -481,6 +534,7 @@ class CustomUserSerializer(serializers.ModelSerializer):
         return attrs
 
     def create(self, validated_data):
+        benefit_enabled = validated_data.pop('student_benefit_enabled', None)
         password = validated_data.pop('password', None)
         user = User(**validated_data)
         if password:
@@ -488,15 +542,21 @@ class CustomUserSerializer(serializers.ModelSerializer):
         else:
             user.set_unusable_password()
         user.save()
+        if benefit_enabled is not None:
+            self._stamp_student_benefit(user, benefit_enabled)
         return user
 
     def update(self, instance, validated_data):
+        benefit_touched = 'student_benefit_enabled' in validated_data
+        benefit_enabled = validated_data.pop('student_benefit_enabled', None)
         password = validated_data.pop('password', None)
         for key, value in validated_data.items():
             setattr(instance, key, value)
         if password:
             instance.set_password(password)
         instance.save()
+        if benefit_touched:
+            self._stamp_student_benefit(instance, benefit_enabled)
         return instance
 
 
@@ -753,6 +813,19 @@ class OrganizationEnrollmentFeeConfigSerializer(serializers.ModelSerializer):
         value = money(value)
         if value > Decimal('1000000000'):
             raise serializers.ValidationError('El valor es demasiado alto.')
+        return value
+
+
+class OrganizationStudentDiscountConfigSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Organization
+        fields = ['student_discount_percentage']
+
+    def validate_student_discount_percentage(self, value):
+        if not math.isfinite(value):
+            raise serializers.ValidationError('El valor debe ser un número finito.')
+        if value < 0 or value > 100:
+            raise serializers.ValidationError('El porcentaje debe estar entre 0 y 100.')
         return value
 
 
@@ -1901,6 +1974,12 @@ class MembershipPlanSerializer(serializers.ModelSerializer):
 class PlanSerializer(serializers.ModelSerializer):
     organization_name = serializers.CharField(source='organization.name', read_only=True)
     branch_name = serializers.CharField(source='branch.name', read_only=True)
+    effective_price = serializers.SerializerMethodField()
+    effective_discount_percentage = serializers.SerializerMethodField()
+    effective_discount_amount = serializers.SerializerMethodField()
+    effective_discount_source = serializers.SerializerMethodField()
+    student_discount_applicable = serializers.SerializerMethodField()
+    student_discount_percentage = serializers.SerializerMethodField()
 
     class Meta:
         model = Plan
@@ -1917,6 +1996,12 @@ class PlanSerializer(serializers.ModelSerializer):
             'duration_days',
             'price',
             'discount_percentage',
+            'effective_price',
+            'effective_discount_percentage',
+            'effective_discount_amount',
+            'effective_discount_source',
+            'student_discount_applicable',
+            'student_discount_percentage',
             'is_public',
             'is_active',
         ]
@@ -1950,6 +2035,51 @@ class PlanSerializer(serializers.ModelSerializer):
             )
 
         return attrs
+
+    def _purchase_quote(self, obj):
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        if not getattr(user, 'is_authenticated', False) or user.role != User.Role.STUDENT:
+            return None
+        if user.organization_id != obj.organization_id:
+            return None
+        if not hasattr(self, '_purchase_quotes'):
+            self._purchase_quotes = {}
+        if obj.pk not in self._purchase_quotes:
+            self._purchase_quotes[obj.pk] = quote_plan_purchase(student=user, plan=obj)
+        return self._purchase_quotes[obj.pk]
+
+    def get_effective_price(self, obj):
+        quote = self._purchase_quote(obj)
+        return str(quote.final_amount) if quote else str(money(obj.price))
+
+    def get_effective_discount_percentage(self, obj):
+        quote = self._purchase_quote(obj)
+        if quote:
+            return str(quote.discount_percentage)
+        return str(money(obj.discount_percentage or 0))
+
+    def get_effective_discount_amount(self, obj):
+        quote = self._purchase_quote(obj)
+        if quote:
+            return str(quote.discount_amount)
+        original = money(obj.price)
+        final = money(original * (Decimal('1') - (money(obj.discount_percentage or 0) / Decimal('100'))))
+        return str(max(original - final, Decimal('0.00')))
+
+    def get_effective_discount_source(self, obj):
+        quote = self._purchase_quote(obj)
+        if quote:
+            return quote.discount_source
+        return 'plan' if (obj.discount_percentage or 0) > 0 else ''
+
+    def get_student_discount_applicable(self, obj):
+        quote = self._purchase_quote(obj)
+        return bool(quote and quote.student_discount_applicable)
+
+    def get_student_discount_percentage(self, obj):
+        quote = self._purchase_quote(obj)
+        return str(quote.student_discount_percentage) if quote else '0.00'
 
 
 class ChargeLineItemSerializer(serializers.ModelSerializer):
@@ -2015,6 +2145,7 @@ class StudentPlanSerializer(serializers.ModelSerializer):
             'expiry_alert_message',
             'show_expiry_banner',
             'discount_percentage',
+            'discount_source',
             'final_price',
             'enrollment_fee',
             'enrollment_fee_paid_at',
@@ -2355,7 +2486,6 @@ class StudentPlanAdminUpdateSerializer(serializers.Serializer):
 
         return attrs
 
-
 class ChargeLineItemInputSerializer(serializers.Serializer):
     """Entrada de UN concepto extra del desglose (#12). Valida FORMA, no pertenencia.
 
@@ -2384,16 +2514,13 @@ class StudentPlanAssignmentQuoteSerializer(serializers.Serializer):
         plan = attrs['plan']
         if plan.organization_id != student.organization_id:
             raise serializers.ValidationError({'plan': 'El plan no pertenece a la organización del alumno.'})
-        discount = attrs.get('discount_percentage')
-        if discount is None:
-            discount = plan.discount_percentage or 0
-        attrs['discount_percentage'] = discount
         quote = quote_student_plan_assignment(
             student=student,
             plan=plan,
-            discount_percentage=discount,
+            discount_percentage=attrs.get('discount_percentage'),
             line_items=attrs.get('line_items') or [],
         )
+        attrs['discount_percentage'] = float(quote.discount_percentage)
         attrs['quote'] = quote
         return attrs
 
@@ -2545,11 +2672,9 @@ class StudentPlanAssignSerializer(serializers.Serializer):
                     ),
                 })
             attrs['discount_percentage'] = 100
+            discount = 100
         else:
             discount = attrs.get('discount_percentage')
-            if discount is None:
-                discount = plan.discount_percentage or 0
-            attrs['discount_percentage'] = discount
             # La invariante `manual ⟹ final_price > 0` (FREE gana sobre PAID en
             # `_payment_status`) NO se valida acá: este `validate()` corre en
             # `serializer.is_valid()`, que en la view pasa ANTES de las guardas cross-org. Si
@@ -2563,9 +2688,11 @@ class StudentPlanAssignSerializer(serializers.Serializer):
         quote = quote_student_plan_assignment(
             student=student,
             plan=plan,
-            discount_percentage=attrs['discount_percentage'],
+            discount_percentage=discount,
             line_items=payment.get('line_items') or [],
         )
+        attrs['discount_percentage'] = float(quote.discount_percentage)
+        attrs['discount_source'] = quote.discount_source
         attrs['assignment_quote'] = quote
         return attrs
 
@@ -2952,7 +3079,14 @@ class PaymentTransactionAdminSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'created_at', 'processed_at',
             'status', 'status_detail',
-            'amount', 'plan_amount', 'enrollment_fee_amount', 'currency',
+            'amount',
+            'plan_original_amount',
+            'plan_amount',
+            'discount_percentage',
+            'discount_amount',
+            'discount_source',
+            'enrollment_fee_amount',
+            'currency',
             'student_name', 'student_email', 'student_phone',
             'plan_name', 'branch_name', 'concept', 'line_items',
             'activated_student_plan', 'student_plan',

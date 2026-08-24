@@ -12,6 +12,7 @@ from django.db import transaction as db_transaction
 from django.utils import timezone
 
 from core.models import PaymentAccount, PaymentTransaction, Plan
+from .plans import quote_plan_purchase
 from .providers import PaymentProviderError, get_payment_provider
 from .providers.base import BackUrls, CheckoutItem, PaymentStatus, RevocationUnverified
 from .public_urls import organization_public_base_url
@@ -416,6 +417,10 @@ def create_checkout(*, organization, user, plan=None, target_student_plan=None):
         raise CheckoutError('Debe indicarse exactamente uno: plan o target_student_plan.')
 
     plan_amount = Decimal('0')
+    plan_original_amount = Decimal('0')
+    discount_percentage = 0
+    discount_amount = Decimal('0')
+    discount_source = ''
     enrollment_fee_amount = Decimal('0')
     items = []
     # Sede de lo que se paga; se lee DESPUÉS de las guardas de pertenencia de cada rama
@@ -428,8 +433,12 @@ def create_checkout(*, organization, user, plan=None, target_student_plan=None):
         if plan.plan_type in Plan.NOT_PURCHASABLE_ONLINE:
             raise CheckoutError('Este plan no se puede comprar en línea.')
         branch = plan.branch
-        discount = plan.discount_percentage or 0
-        plan_amount = _clp(max(float(plan.price) * (1 - discount / 100), 0))
+        quote = quote_plan_purchase(student=user, plan=plan)
+        plan_original_amount = quote.original_amount
+        discount_percentage = float(quote.discount_percentage)
+        discount_amount = quote.discount_amount
+        discount_source = quote.discount_source
+        plan_amount = _clp(quote.final_amount)
         items.append(CheckoutItem(title=f'Plan {plan.name}', quantity=1, unit_price=plan_amount))
     else:
         sp = target_student_plan
@@ -455,9 +464,15 @@ def create_checkout(*, organization, user, plan=None, target_student_plan=None):
     tx = PaymentTransaction.objects.create(
         organization=organization, user=user, provider=account.provider,
         branch=branch, payment_account=account,
-        plan=plan, plan_amount=plan_amount, enrollment_fee_amount=enrollment_fee_amount,
+        plan=plan,
+        plan_original_amount=plan_original_amount,
+        plan_amount=plan_amount,
+        discount_percentage=discount_percentage,
+        discount_amount=discount_amount,
+        discount_source=discount_source,
+        enrollment_fee_amount=enrollment_fee_amount,
         amount=amount, currency='CLP', target_student_plan=target_student_plan,
-        metadata={'items': [it.title for it in items]},
+        metadata={'items': [it.title for it in items], 'discount_source': discount_source},
     )
 
     provider = get_payment_provider(account.provider)
@@ -609,9 +624,16 @@ def apply_provider_payment(*, tx, payment):
             tx.collected_at = tx.collected_at or timezone.now()
             from .plans import PlanOrganizationMismatch, activate_student_plan
             if tx.plan_id:
+                tx_discount = (
+                    tx.discount_percentage
+                    if tx.discount_source or (tx.discount_percentage or 0) > 0
+                    else None
+                )
                 try:
                     sp = activate_student_plan(student=tx.user, plan=tx.plan,
-                                               start_date=timezone.localdate())
+                                               start_date=timezone.localdate(),
+                                               discount_percentage=tx_discount,
+                                               discount_source=tx.discount_source)
                 except PlanOrganizationMismatch as exc:
                     # El alumno cambió de organización entre el checkout y la aprobación:
                     # activar el plan crearía una membresía que ningún endpoint muestra ni

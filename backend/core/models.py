@@ -160,6 +160,11 @@ class Organization(TimestampedModel):
         validators=[MinValueValidator(Decimal('0'))],
         help_text='Matrícula anual del gimnasio. 0 = sin matrícula.',
     )
+    student_discount_percentage = models.FloatField(
+        default=0,
+        validators=[MinValueValidator(0), MaxValueValidator(100)],
+        help_text='Descuento estudiante para planes mensuales. 0 = sin beneficio monetario.',
+    )
 
     class Meta:
         ordering = ['name']
@@ -808,6 +813,7 @@ class StudentPlan(TimestampedModel):
     unlimited_classes = models.BooleanField(default=False)
     classes_used = models.IntegerField(default=0)
     discount_percentage = models.FloatField(default=0)
+    discount_source = models.CharField(max_length=30, blank=True, default='')
     final_price = models.FloatField(null=True, blank=True)
     enrollment_fee = models.DecimalField(
         max_digits=10,
@@ -1950,7 +1956,11 @@ class PaymentTransaction(TimestampedModel):
     currency = models.CharField(max_length=3, default='CLP')
     plan = models.ForeignKey(Plan, on_delete=models.SET_NULL, null=True, blank=True,
                              related_name='payment_transactions')
+    plan_original_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     plan_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    discount_percentage = models.FloatField(default=0)
+    discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    discount_source = models.CharField(max_length=30, blank=True, default='')
     enrollment_fee_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     target_student_plan = models.ForeignKey(StudentPlan, on_delete=models.SET_NULL, null=True, blank=True,

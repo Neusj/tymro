@@ -44,6 +44,20 @@ class CustomUser(AbstractUser):
         default=True,
         help_text='Si esta desmarcado, este alumno no debe pagar matricula anual.',
     )
+    student_benefit_enabled = models.BooleanField(
+        default=False,
+        help_text='Beneficio comercial de estudiante; no reemplaza el rol de alumno.',
+    )
+    student_benefit_activated_on = models.DateField(null=True, blank=True)
+    student_benefit_expires_on = models.DateField(null=True, blank=True)
+    student_benefit_updated_at = models.DateTimeField(null=True, blank=True)
+    student_benefit_updated_by = models.ForeignKey(
+        'self',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='student_benefit_updates',
+    )
     email_verified = models.BooleanField(default=False)
     trial_eligible = models.BooleanField(default=False)
     has_used_trial = models.BooleanField(default=False)

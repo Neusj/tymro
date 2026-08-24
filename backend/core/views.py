@@ -83,6 +83,7 @@ from .serializers import (
     OrganizationExpiryNotificationConfigSerializer,
     OrganizationReservationWindowConfigSerializer,
     OrganizationSerializer,
+    OrganizationStudentDiscountConfigSerializer,
     OrganizationTeacherPaymentConfigSerializer,
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
@@ -511,7 +512,7 @@ def _get_active_student_plan_map(student_ids, organization_id, on_date=None):
         .select_related('plan', 'user')
         # El eje de pago del estado sale de estas dos FKs inversas. Sin prefetch,
         # `_plan_status_payload` dispara una consulta por alumno del roster.
-        .prefetch_related('origin_transactions', 'manual_payments')
+        .prefetch_related('origin_transactions', 'manual_payments', 'freezes')
         .order_by('user_id', '-start_date', '-id')
     )
 
@@ -538,7 +539,7 @@ def _get_latest_student_plan_map(student_ids, organization_id):
             organization_id=organization_id,
         )
         .select_related('plan', 'user')
-        .prefetch_related('origin_transactions', 'manual_payments')   # mismo N+1 que en el mapa de vigentes
+        .prefetch_related('origin_transactions', 'manual_payments', 'freezes')   # mismo N+1 que en el mapa de vigentes
         .order_by('user_id', '-end_date', '-start_date', '-id')
     )
 
@@ -1923,6 +1924,25 @@ class OrganizationViewSet(ModelViewSet):
         serializer.save()
         return Response(serializer.data)
 
+    @action(detail=True, methods=['get', 'put'], url_path='student-discount-config')
+    def student_discount_config(self, request, pk=None):
+        """Descuento estudiante de la organización para planes mensuales."""
+        organization = Organization.objects.filter(pk=pk).first()
+        if organization is None:
+            raise NotFound('Organización no encontrada.')
+        if not _can_manage_org_resource(request.user, organization.id):
+            raise PermissionDenied('No tienes permisos para gestionar esta configuración.')
+
+        if request.method == 'GET':
+            return Response(OrganizationStudentDiscountConfigSerializer(organization).data)
+
+        serializer = OrganizationStudentDiscountConfigSerializer(
+            organization, data=request.data, partial=True,
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
     @action(detail=True, methods=['get', 'put'], url_path='reservation-window-config')
     def reservation_window_config(self, request, pk=None):
         """Anticipación máxima para reservas, editable desde configuración de organización."""
@@ -2251,6 +2271,9 @@ class UserViewSet(ModelViewSet):
 
         if not roles.assignable_roles(user):
             raise PermissionDenied('No tienes permisos para gestionar usuarios.')
+
+        if 'student_benefit_enabled' in data and not (_is_superadmin(user) or _is_gym_admin(user)):
+            raise PermissionDenied('No tienes permisos para modificar el beneficio estudiante.')
 
         if instance is not None and not roles.can_assign(user, instance.role):
             raise PermissionDenied('No tienes permisos para gestionar usuarios con ese rol.')
@@ -5217,6 +5240,7 @@ class MembershipPlanViewSet(ModelViewSet):
                     plan=plan,
                     start_date=validated['start_date'],
                     discount_percentage=validated['discount_percentage'],
+                    discount_source=validated.get('discount_source', ''),
                     enrollment_fee=enrollment_fee,
                     enrollment_fee_paid_at=enrollment_fee_paid_at,
                     enrollment_fee_due_at=enrollment_fee_due_at,

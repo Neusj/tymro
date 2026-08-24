@@ -23,7 +23,7 @@ from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
-from core.models import PaymentTransaction, RecurringEnrollment, StudentPlan, StudentPlanFreeze
+from core.models import PaymentTransaction, Plan, RecurringEnrollment, StudentPlan, StudentPlanFreeze
 
 
 # Umbrales de aviso de vencimiento, en días. FUENTE ÚNICA: estaban duplicados como
@@ -93,6 +93,34 @@ class PlanPaymentStatus:
     PAID = 'paid'
     UNPAID = 'unpaid'
     FREE = 'free'
+
+
+DISCOUNT_SOURCE_PLAN = 'plan'
+DISCOUNT_SOURCE_STUDENT = 'student_benefit'
+
+
+@dataclass(frozen=True)
+class PlanPurchaseQuote:
+    original_amount: Decimal
+    discount_percentage: Decimal
+    discount_amount: Decimal
+    final_amount: Decimal
+    discount_source: str
+    student_discount_percentage: Decimal
+    student_discount_applicable: bool
+    plan_discount_percentage: Decimal
+
+    def payload(self):
+        return {
+            'original_amount': str(self.original_amount),
+            'discount_percentage': str(self.discount_percentage),
+            'discount_amount': str(self.discount_amount),
+            'final_amount': str(self.final_amount),
+            'discount_source': self.discount_source,
+            'student_discount_percentage': str(self.student_discount_percentage),
+            'student_discount_applicable': self.student_discount_applicable,
+            'plan_discount_percentage': str(self.plan_discount_percentage),
+        }
 
 
 class EnrollmentFeeStatus:
@@ -424,6 +452,75 @@ def money(value):
     return Decimal(str(value or 0)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
 
+def student_benefit_expiry_for(on_date):
+    return date(on_date.year, 12, 31)
+
+
+def student_benefit_is_active(user, on_date=None):
+    on_date = on_date or timezone.localdate()
+    if not getattr(user, 'student_benefit_enabled', False):
+        return False
+    activated_on = getattr(user, 'student_benefit_activated_on', None)
+    expires_on = getattr(user, 'student_benefit_expires_on', None)
+    if activated_on and activated_on > on_date:
+        return False
+    if not expires_on or expires_on < on_date:
+        return False
+    return True
+
+
+def plan_is_monthly(plan):
+    return plan.plan_type == Plan.PlanType.MONTHLY
+
+
+def _percent(value):
+    pct = money(value)
+    if pct < 0:
+        return Decimal('0.00')
+    if pct > 100:
+        return Decimal('100.00')
+    return pct
+
+
+def quote_plan_purchase(*, student, plan, on_date=None, override_discount_percentage=None):
+    on_date = on_date or timezone.localdate()
+    original = money(plan.price)
+    plan_discount = _percent(plan.discount_percentage or 0)
+    student_discount = Decimal('0.00')
+    student_applicable = False
+
+    if plan_is_monthly(plan) and student_benefit_is_active(student, on_date):
+        student_applicable = True
+        student_discount = _percent(getattr(plan.organization, 'student_discount_percentage', 0))
+
+    if override_discount_percentage is not None:
+        discount = _percent(override_discount_percentage)
+        source = DISCOUNT_SOURCE_PLAN if discount > 0 else ''
+    elif student_discount > plan_discount:
+        discount = student_discount
+        source = DISCOUNT_SOURCE_STUDENT if discount > 0 else ''
+    else:
+        discount = plan_discount
+        source = DISCOUNT_SOURCE_PLAN if discount > 0 else ''
+
+    final_amount = money(original * (Decimal('1') - (discount / Decimal('100'))))
+    if final_amount < 0:
+        final_amount = Decimal('0.00')
+    discount_amount = original - final_amount
+    if discount_amount < 0:
+        discount_amount = Decimal('0.00')
+    return PlanPurchaseQuote(
+        original_amount=original,
+        discount_percentage=discount,
+        discount_amount=discount_amount,
+        final_amount=final_amount,
+        discount_source=source,
+        student_discount_percentage=student_discount,
+        student_discount_applicable=student_applicable and student_discount > 0,
+        plan_discount_percentage=plan_discount,
+    )
+
+
 def enrollment_fee_due_from_paid_at(paid_at):
     if paid_at is None:
         return None
@@ -460,7 +557,11 @@ def current_valid_enrollment_fee_membership(*, student, organization, on_date):
 
 @dataclass(frozen=True)
 class AssignmentQuote:
+    plan_original_amount: Decimal
     plan_amount: Decimal
+    discount_percentage: Decimal
+    discount_amount: Decimal
+    discount_source: str
     enrollment_fee_amount: Decimal
     line_items_total: Decimal
     total: Decimal
@@ -471,7 +572,11 @@ class AssignmentQuote:
 
     def payload(self):
         return {
+            'plan_original_amount': str(self.plan_original_amount),
             'plan_amount': str(self.plan_amount),
+            'discount_percentage': str(self.discount_percentage),
+            'discount_amount': str(self.discount_amount),
+            'discount_source': self.discount_source,
             'enrollment_fee_amount': str(self.enrollment_fee_amount),
             'line_items_total': str(self.line_items_total),
             'total': str(self.total),
@@ -495,10 +600,13 @@ def quote_student_plan_assignment(*, student, plan, discount_percentage=None,
             'El plan no pertenece a la organización del alumno.'
         )
     on_date = on_date or timezone.localdate()
-    discount = discount_percentage if discount_percentage is not None else (plan.discount_percentage or 0)
-    plan_amount = money(money(plan.price) * (Decimal('1') - (money(discount) / Decimal('100'))))
-    if plan_amount < 0:
-        plan_amount = Decimal('0.00')
+    purchase_quote = quote_plan_purchase(
+        student=student,
+        plan=plan,
+        on_date=on_date,
+        override_discount_percentage=discount_percentage,
+    )
+    plan_amount = purchase_quote.final_amount
     line_items_total = sum((money(item['amount']) for item in (line_items or [])), Decimal('0.00'))
 
     student_pays_enrollment_fee = getattr(student, 'pays_enrollment_fee', True)
@@ -514,7 +622,11 @@ def quote_student_plan_assignment(*, student, plan, discount_percentage=None,
         enrollment_fee_amount = annual_fee
 
     return AssignmentQuote(
+        plan_original_amount=purchase_quote.original_amount,
         plan_amount=plan_amount,
+        discount_percentage=purchase_quote.discount_percentage,
+        discount_amount=purchase_quote.discount_amount,
+        discount_source=purchase_quote.discount_source,
         enrollment_fee_amount=enrollment_fee_amount,
         line_items_total=line_items_total,
         total=plan_amount + enrollment_fee_amount + line_items_total,
@@ -638,7 +750,7 @@ def _repoint_recurring_series_to_renewed_membership(new_student_plan, *, on_date
 
 
 def activate_student_plan(*, student, plan, start_date, discount_percentage=None,
-                          enrollment_fee=None, enrollment_fee_paid_at=None,
+                          discount_source='', enrollment_fee=None, enrollment_fee_paid_at=None,
                           enrollment_fee_due_at=None):
     # La membresía la vende `plan.organization` y solo la consume un alumno de esa misma
     # organización: `get_active_student_plan` y `my-memberships` filtran por ahí, así que
@@ -650,9 +762,16 @@ def activate_student_plan(*, student, plan, start_date, discount_percentage=None
             'El plan no pertenece a la organización del alumno.'
         )
 
-    discount = discount_percentage if discount_percentage is not None else (plan.discount_percentage or 0)
+    purchase_quote = quote_plan_purchase(
+        student=student,
+        plan=plan,
+        on_date=start_date,
+        override_discount_percentage=discount_percentage,
+    )
+    discount = float(purchase_quote.discount_percentage)
+    source = discount_source or purchase_quote.discount_source
     end_date = start_date + timedelta(days=max(plan.duration_days - 1, 0))
-    final_price = max(float(plan.price) * (1 - (discount / 100)), 0)
+    final_price = float(purchase_quote.final_amount)
     with transaction.atomic():
         # Activar NO desactiva nada. Un alumno puede tener varias membresías vigentes a la
         # vez en la misma organización (dos disciplinas, p. ej. 4 BJJ + 8 kickboxing), así
@@ -678,6 +797,7 @@ def activate_student_plan(*, student, plan, start_date, discount_percentage=None
             total_classes=plan.total_classes,
             unlimited_classes=plan.unlimited_classes,
             discount_percentage=discount,
+            discount_source=source,
             final_price=final_price,
             enrollment_fee=money(enrollment_fee) if enrollment_fee is not None else Decimal('0.00'),
             enrollment_fee_paid_at=enrollment_fee_paid_at,

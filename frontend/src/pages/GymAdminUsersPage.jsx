@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { branchesApi, usersApi } from '../api/client'
+import { useAuth } from '../auth/AuthContext'
 import Avatar from '../components/Avatar'
 import ConfirmDialog from '../components/ConfirmDialog'
 import DashboardHeader from '../components/DashboardHeader'
@@ -25,10 +26,12 @@ const userInitialForm = {
   profile_image: null,
   is_active_member: true,
   pays_enrollment_fee: true,
+  student_benefit_enabled: false,
   is_active: true,
 }
 
 export default function GymAdminUsersPage() {
+  const { user: currentUser } = useAuth()
   const navigate = useNavigate()
   const [branches, setBranches] = useState([])
   const [users, setUsers] = useState([])
@@ -65,6 +68,7 @@ export default function GymAdminUsersPage() {
   const roleFilterOptions = useMemo(() => [{ value: '', label: 'Todos' }, ...assignableRoles], [assignableRoles])
 
   const canManage = (role) => assignableRoles.some((option) => option.value === role)
+  const canEditStudentBenefit = currentUser?.role === 'gym_admin'
 
   const defaultRoleValue = () => (assignableRoles.find((option) => option.value === 'teacher') || assignableRoles[0])?.value || ''
 
@@ -89,6 +93,7 @@ export default function GymAdminUsersPage() {
       profile_image: null,
       is_active_member: Boolean(user.is_active_member),
       pays_enrollment_fee: user.pays_enrollment_fee !== false,
+      student_benefit_enabled: Boolean(user.student_benefit_enabled),
       is_active: Boolean(user.is_active),
     })
     setFormError('')
@@ -114,6 +119,9 @@ export default function GymAdminUsersPage() {
     }
     if (!payload.password) {
       delete payload.password
+    }
+    if (!canEditStudentBenefit) {
+      delete payload.student_benefit_enabled
     }
 
     try {
@@ -171,6 +179,25 @@ export default function GymAdminUsersPage() {
         ),
       },
       { key: 'role', label: 'Rol', mobile: 'meta', render: (row) => <RoleBadge role={row.role} /> },
+      {
+        key: 'student_benefit',
+        label: 'Beneficio estudiante',
+        mobile: 'secondary',
+        render: (row) => {
+          const discount = Number(row.organization_detail?.student_discount_percentage || 0)
+          if (!row.student_benefit_enabled) {
+            return <span className="text-xs text-brand-muted">Inactivo</span>
+          }
+          return (
+            <div className="text-xs">
+              <p className={row.student_benefit_active ? 'text-emerald-200' : 'text-amber-200'}>
+                {row.student_benefit_active ? 'Activo' : 'Vencido'}
+              </p>
+              <p className="text-brand-muted">Hasta {row.student_benefit_expires_on || '31/12'} · {discount}%</p>
+            </div>
+          )
+        },
+      },
       { key: 'branch', label: 'Sucursal', mobile: 'secondary', render: (row) => row.branch_detail?.name || 'Sin sucursal' },
       { key: 'status', label: 'Estado', mobile: 'meta', render: (row) => <ValueBadge kind="user_status" value={row.is_active ? 'active' : 'inactive'} /> },
       {
@@ -373,6 +400,28 @@ export default function GymAdminUsersPage() {
             />
             Cobra matricula anual
           </label>
+          {canEditStudentBenefit ? (
+            <div className="md:col-span-2 rounded-lg border border-brand-line bg-black/20 p-3">
+              <label className="flex items-center gap-2 text-sm font-semibold">
+                <input
+                  type="checkbox"
+                  checked={form.student_benefit_enabled}
+                  onChange={(event) => setForm((prev) => ({ ...prev, student_benefit_enabled: event.target.checked }))}
+                />
+                Beneficio estudiante
+              </label>
+              <p className="mt-1 text-xs text-brand-muted">
+                Al activarlo, la vigencia se calcula hasta el 31 de diciembre del año actual.
+              </p>
+              {editing ? (
+                <p className="mt-2 text-xs text-brand-muted">
+                  Estado: {editing.student_benefit_active ? 'activo' : 'inactivo o vencido'} · Vigencia:{' '}
+                  {editing.student_benefit_activated_on || '-'} a {editing.student_benefit_expires_on || '31 de diciembre'} ·
+                  Porcentaje: {Number(editing.organization_detail?.student_discount_percentage || 0)}%
+                </p>
+              ) : null}
+            </div>
+          ) : null}
           <div className="md:col-span-2 flex justify-end">
             <button type="submit" className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white">
               Guardar

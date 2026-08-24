@@ -17,15 +17,18 @@ const isPurchasable = (plan) =>
 
 function planPricing(plan) {
   const price = Number(plan.price) || 0
-  const discount = Number(plan.discount_percentage) || 0
-  const final = Math.max(0, Math.round(price * (1 - discount / 100)))
-  return { price, discount, final }
+  const discount = Number(plan.effective_discount_percentage ?? plan.discount_percentage) || 0
+  const discountAmount = Number(plan.effective_discount_amount) || 0
+  const final = Math.max(0, Math.round(Number(plan.effective_price ?? price * (1 - discount / 100))))
+  const source = plan.effective_discount_source || (discount > 0 ? 'plan' : '')
+  return { price, discount, discountAmount, final, source }
 }
 
 function PlanCard({ plan, onPay, paying }) {
-  const { price, discount, final } = planPricing(plan)
+  const { price, discount, discountAmount, final, source } = planPricing(plan)
   const typeLabel = PLAN_TYPE_LABEL[plan.plan_type] || plan.plan_type
   const classesLabel = plan.unlimited_classes ? 'Clases ilimitadas' : `${plan.total_classes} clases`
+  const isStudentDiscount = source === 'student_benefit'
 
   return (
     <article className="relative flex flex-col overflow-hidden rounded-2xl border border-brand-line bg-brand-soft/80 p-5 shadow-soft backdrop-blur-sm transition duration-200 ease-snap hover:-translate-y-0.5 hover:border-brand-orange/50">
@@ -35,16 +38,37 @@ function PlanCard({ plan, onPay, paying }) {
         <span className="badge-accent shrink-0">{typeLabel}</span>
       </div>
 
-      <div className="mt-4">
+      <div className="mt-4 space-y-2">
         {discount > 0 ? (
           <div className="mb-1 flex items-center gap-2">
             <span className="text-sm text-brand-dim line-through">{clp(price)}</span>
             <span className="inline-flex items-center rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-200">
-              -{discount}%
+              {isStudentDiscount ? 'Descuento estudiante' : 'Descuento'} -{discount}%
             </span>
           </div>
         ) : null}
         <p className="font-display text-3xl font-bold leading-none text-brand-white tabular-nums">{clp(final)}</p>
+        <div className="rounded-lg border border-brand-line bg-black/20 px-3 py-2 text-xs">
+          <div className="flex justify-between gap-3">
+            <span className="text-brand-muted">Precio</span>
+            <span className="font-medium text-brand-white">{clp(price)}</span>
+          </div>
+          {isStudentDiscount ? (
+            <div className="flex justify-between gap-3">
+              <span className="text-brand-muted">Descuento estudiante</span>
+              <span className="font-medium text-emerald-200">{discount}% ({clp(discountAmount)})</span>
+            </div>
+          ) : discount > 0 ? (
+            <div className="flex justify-between gap-3">
+              <span className="text-brand-muted">Descuento del plan</span>
+              <span className="font-medium text-emerald-200">{discount}% ({clp(discountAmount)})</span>
+            </div>
+          ) : null}
+          <div className="mt-1 flex justify-between gap-3 border-t border-brand-line pt-1">
+            <span className="text-brand-muted">Total</span>
+            <span className="font-semibold text-brand-white">{clp(final)}</span>
+          </div>
+        </div>
       </div>
 
       <dl className="mt-4 grid grid-cols-2 gap-2 text-sm">
