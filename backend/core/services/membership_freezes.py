@@ -5,7 +5,6 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from core.models import Enrollment, StudentPlan, StudentPlanChangeLog, StudentPlanFreeze
-from core.services.plans import PlanStatus, describe_student_plan
 from core.services.reservations import cancel_enrollment_with_refund
 
 
@@ -65,10 +64,9 @@ def _record_change(*, membership, actor, field, old_value='', new_value='', reas
 
 
 def _validate_freezable_membership(membership, start_date):
-    state = describe_student_plan(membership, start_date)
-    if state.status != PlanStatus.ACTIVE:
+    if not membership.is_active:
         raise MembershipFreezeError(
-            'Solo se puede congelar una membresía vigente y utilizable.',
+            'Solo se puede congelar una membresía activa.',
             code='membership_not_freezable',
         )
 

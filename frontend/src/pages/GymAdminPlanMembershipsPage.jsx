@@ -407,7 +407,7 @@ export default function GymAdminPlanMembershipsPage() {
             ) : (
               <button
                 type="button"
-                disabled={working || row.validity_status !== 'active'}
+                disabled={working}
                 onClick={() => openFreeze(row)}
                 className="rounded border border-brand-line px-2 py-1 text-xs text-brand-white disabled:opacity-50"
               >

@@ -185,7 +185,7 @@ function MembershipSummaryCard({ membership, onFreeze, onLiberate, working }) {
         ) : (
           <button
             type="button"
-            disabled={working || membership.validity_status !== 'active'}
+            disabled={working}
             onClick={() => onFreeze(membership)}
             className="rounded-lg border border-brand-line px-3 py-1.5 text-xs font-semibold text-brand-white disabled:opacity-50"
           >
@@ -433,7 +433,7 @@ function detailColumns(type, actions = {}) {
           ) : (
             <button
               type="button"
-              disabled={actions.working || membership.validity_status !== 'active'}
+              disabled={actions.working}
               onClick={() => actions.onFreeze?.(membership)}
               className="rounded border border-brand-line px-2 py-1 text-xs text-brand-white disabled:opacity-50"
             >
