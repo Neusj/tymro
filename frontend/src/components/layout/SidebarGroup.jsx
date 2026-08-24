@@ -18,7 +18,13 @@ function ChevronIcon({ expanded }) {
 export default function SidebarGroup({ label, icon, items, isOpen, isMobile, onNavigate, onRequestOpen }) {
   const location = useLocation()
   const expandedSidebar = isMobile || isOpen
-  const hasActiveChild = items.some((item) => location.pathname === item.to || location.pathname.startsWith(`${item.to}/`))
+  const itemIsActive = (item) => {
+    if (item.type === 'section') {
+      return (item.children || []).some(itemIsActive)
+    }
+    return location.pathname === item.to || location.pathname.startsWith(`${item.to}/`)
+  }
+  const hasActiveChild = items.some(itemIsActive)
   const [expanded, setExpanded] = useState(hasActiveChild)
 
   useEffect(() => {
@@ -80,25 +86,57 @@ export default function SidebarGroup({ label, icon, items, isOpen, isMobile, onN
       >
         <ul className="min-h-0 space-y-1 pl-8 pt-1">
           {items.map((item) => (
-            <li key={item.to}>
-              <NavLink
-                to={item.to}
-                onClick={() => {
-                  if (isMobile) {
-                    onNavigate()
+            <li key={item.type === 'section' ? item.label : item.to}>
+              {item.type === 'section' ? (
+                <div className="pt-2">
+                  <p className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-brand-dim">
+                    {item.label}
+                  </p>
+                  <ul className="space-y-1">
+                    {(item.children || []).map((child) => (
+                      <li key={child.to}>
+                        <NavLink
+                          to={child.to}
+                          onClick={() => {
+                            if (isMobile) {
+                              onNavigate()
+                            }
+                          }}
+                          className={({ isActive }) =>
+                            [
+                              'block rounded-lg px-2 py-2 text-sm transition duration-200',
+                              isActive
+                                ? 'bg-brand-orange/20 text-brand-white'
+                                : 'text-brand-muted hover:bg-brand-soft hover:text-brand-white',
+                            ].join(' ')
+                          }
+                        >
+                          {child.label}
+                        </NavLink>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : (
+                <NavLink
+                  to={item.to}
+                  onClick={() => {
+                    if (isMobile) {
+                      onNavigate()
+                    }
+                  }}
+                  className={({ isActive }) =>
+                    [
+                      'block rounded-lg px-2 py-2 text-sm transition duration-200',
+                      isActive
+                        ? 'bg-brand-orange/20 text-brand-white'
+                        : 'text-brand-muted hover:bg-brand-soft hover:text-brand-white',
+                    ].join(' ')
                   }
-                }}
-                className={({ isActive }) =>
-                  [
-                    'block rounded-lg px-2 py-2 text-sm transition duration-200',
-                    isActive
-                      ? 'bg-brand-orange/20 text-brand-white'
-                      : 'text-brand-muted hover:bg-brand-soft hover:text-brand-white',
-                  ].join(' ')
-                }
-              >
-                {item.label}
-              </NavLink>
+                >
+                  {item.label}
+                </NavLink>
+              )}
             </li>
           ))}
         </ul>

@@ -119,10 +119,15 @@ describe('Sidebar - configuracion de clases personalizadas', () => {
 
     await user.click(screen.getByRole('button', { name: 'Configuraciones' }))
 
+    expect(screen.getByText('Pagos')).toBeInTheDocument()
+    expect(screen.getByText('Comunicación')).toBeInTheDocument()
+    expect(screen.getByText('Membresías')).toBeInTheDocument()
+    expect(screen.getByText('Operación')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Clases personalizadas' })).toHaveAttribute(
       'href',
       '/gym-admin/settings/personalized-classes',
     )
+    expect(screen.getByRole('link', { name: 'MercadoPago' })).toHaveAttribute('href', '/ajustes/pagos')
   })
 
   it('muestra las clases personalizadas dentro de Mis clases del alumno cuando estan activadas', async () => {

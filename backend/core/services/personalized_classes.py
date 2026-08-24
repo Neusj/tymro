@@ -190,6 +190,17 @@ def _validate_personalized_session_staff_actor(actor, session, action):
         raise PersonalizedClassError('Las clases personalizadas no estÃƒÂ¡n habilitadas para esta organizaciÃƒÂ³n.')
 
 
+def _validate_personalized_session_admin_actor(actor, session, action):
+    if not actor or not getattr(actor, 'organization_id', None):
+        raise PersonalizedClassError(f'Solo el administrador del gimnasio puede {action} clases personalizadas.')
+    if actor.organization_id != session.organization_id:
+        raise PersonalizedClassError(f'No tienes permisos para {action} esta clase personalizada.', code='forbidden')
+    if actor.role != 'gym_admin':
+        raise PersonalizedClassError(f'Solo el administrador del gimnasio puede {action} clases personalizadas.', code='forbidden')
+    if not session.organization.personalized_classes_enabled:
+        raise PersonalizedClassError('Las clases personalizadas no estÃƒÂ¡n habilitadas para esta organizaciÃƒÂ³n.')
+
+
 @transaction.atomic
 def cancel_personalized_session(*, session_id, actor, reason=''):
     session = (
@@ -199,7 +210,7 @@ def cancel_personalized_session(*, session_id, actor, reason=''):
         .get(pk=session_id)
     )
 
-    _validate_personalized_session_staff_actor(actor, session, 'anular')
+    _validate_personalized_session_admin_actor(actor, session, 'anular')
     if session.status == PersonalizedClassSession.Status.CANCELLED:
         return session
     if session.status not in {

@@ -1463,10 +1463,19 @@ def _can_manage_personalized_session(user, session):
     return _is_teacher(user) and session.teacher_id == user.id
 
 
+def _can_cancel_personalized_session(user, session):
+    return (
+        bool(user and getattr(user, 'organization_id', None))
+        and user.organization_id == session.organization_id
+        and _is_gym_admin(user)
+    )
+
+
 def _serialize_personalized_session(session, remaining_classes=None, actor=None):
     started_at = session.confirmed_at or session.qr_issued_at
     ended_at = session.finished_at or session.cancelled_at or session.confirmed_at or session.qr_expires_at
     can_manage = _can_manage_personalized_session(actor, session)
+    can_cancel = _can_cancel_personalized_session(actor, session)
     return {
         'id': session.id,
         'name': 'Clase personalizada',
@@ -1494,7 +1503,7 @@ def _serialize_personalized_session(session, remaining_classes=None, actor=None)
         'student_plan_id': session.student_plan_id,
         'student_plan_name': session.student_plan.plan.name if session.student_plan_id else '',
         'can_finish': can_manage and session.status == PersonalizedClassSession.Status.CONFIRMED,
-        'can_cancel': can_manage and session.status in {
+        'can_cancel': can_cancel and session.status in {
             PersonalizedClassSession.Status.CONFIRMED,
             PersonalizedClassSession.Status.FINISHED,
         },

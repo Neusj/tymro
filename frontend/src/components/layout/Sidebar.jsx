@@ -222,17 +222,41 @@ const navByRole = {
       label: 'Configuraciones',
       icon: <SettingsIcon />,
       children: [
-        { to: '/gym-admin/pagos/transacciones', label: 'Transacciones' },
-        { to: '/ajustes/pagos', label: 'Pagos (MercadoPago)' },
-        { to: '/gym-admin/settings/trial-followup', label: 'Emails de prueba' },
-        { to: '/gym-admin/settings/expiry-notification', label: 'Avisos de vencimiento' },
-        { to: '/profile', label: 'Notificaciones' },
-        { to: '/gym-admin/settings/enrollment-fee', label: 'Matricula anual' },
-        { to: '/gym-admin/settings/student-discount', label: 'Descuento estudiante' },
-        { to: '/gym-admin/settings/reservation-window', label: 'Anticipacion reservas' },
-        { to: '/gym-admin/settings/attendance-edit', label: 'Edicion asistencia' },
-        { to: '/gym-admin/settings/personalized-classes', label: 'Clases personalizadas' },
-        { to: '/gym-admin/settings/teacher-payment', label: 'Pago al profesor' },
+        {
+          type: 'section',
+          label: 'Pagos',
+          children: [
+            { to: '/gym-admin/pagos/transacciones', label: 'Transacciones' },
+            { to: '/ajustes/pagos', label: 'MercadoPago' },
+            { to: '/gym-admin/settings/teacher-payment', label: 'Pago al profesor' },
+          ],
+        },
+        {
+          type: 'section',
+          label: 'Comunicación',
+          children: [
+            { to: '/gym-admin/settings/trial-followup', label: 'Emails de prueba' },
+            { to: '/gym-admin/settings/expiry-notification', label: 'Avisos de vencimiento' },
+            { to: '/profile', label: 'Notificaciones' },
+          ],
+        },
+        {
+          type: 'section',
+          label: 'Membresías',
+          children: [
+            { to: '/gym-admin/settings/enrollment-fee', label: 'Matricula anual' },
+            { to: '/gym-admin/settings/student-discount', label: 'Descuento estudiante' },
+            { to: '/gym-admin/settings/reservation-window', label: 'Anticipacion reservas' },
+          ],
+        },
+        {
+          type: 'section',
+          label: 'Operación',
+          children: [
+            { to: '/gym-admin/settings/attendance-edit', label: 'Edicion asistencia' },
+            { to: '/gym-admin/settings/personalized-classes', label: 'Clases personalizadas' },
+          ],
+        },
       ],
     },
   ],
@@ -326,7 +350,7 @@ function filterEnabledItems(items, user) {
       if (item.requiresPersonalizedClasses && !personalizedEnabled) {
         return null
       }
-      if (item.type === 'group') {
+      if (item.type === 'group' || item.type === 'section') {
         const children = filterEnabledItems(item.children || [], user)
         if (!children.length) {
           return null

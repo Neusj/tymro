@@ -201,12 +201,15 @@ def test_personalized_classes_are_listed_for_teacher_admin_and_student(api_clien
     assert [item['id'] for item in teacher_items] == [first_session.id]
     assert teacher_items[0]['status'] == PersonalizedClassSession.Status.FINISHED
     assert teacher_items[0]['student_id'] == setup['student'].id
+    assert teacher_items[0]['can_cancel'] is False
 
     api_client.force_authenticate(user=setup['admin'])
     admin_response = api_client.get(LIST_URL)
     assert admin_response.status_code == 200, admin_response.content
     assert admin_response.json()['count'] == 2
-    assert {item['id'] for item in admin_response.json()['results']} == {first_session.id, second_session_id}
+    admin_items = admin_response.json()['results']
+    assert {item['id'] for item in admin_items} == {first_session.id, second_session_id}
+    assert all(item['can_cancel'] is True for item in admin_items)
 
     api_client.force_authenticate(user=setup['student'])
     student_response = api_client.get(LIST_URL)
@@ -323,6 +326,13 @@ def test_personalized_cancel_refunds_plan_and_keeps_traceability(api_client, set
         format='json',
     )
     assert wrong_teacher.status_code == 403
+    api_client.force_authenticate(user=setup['teacher_a'])
+    owner_teacher = api_client.post(
+        f'/api/personalized-classes/{session.id}/cancel/',
+        {'reason': 'Profesor intenta anular'},
+        format='json',
+    )
+    assert owner_teacher.status_code == 403
 
     _finish_personalized(api_client, setup['teacher_a'], session.id)
     summary_before_cancel = build_teacher_payment_summary(setup['org'].id, TODAY, TODAY, class_kind='personalized')
