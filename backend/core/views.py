@@ -52,6 +52,7 @@ from .models import (
     RecurringEnrollment,
     StudentPlan,
     StudentPlanChangeLog,
+    StudentPlanFreeze,
     TeacherPaymentRecord,
     TeacherPaymentRule,
     TeacherPayout,
@@ -97,7 +98,9 @@ from .serializers import (
     StudentPlanAssignmentQuoteSerializer,
     StudentPlanAssignSerializer,
     StudentPlanChangeLogSerializer,
+    StudentPlanFreezeCreateSerializer,
     StudentPlanSerializer,
+    StudentPlanUnfreezeSerializer,
     TeacherPaymentRuleAssignmentsUpdateSerializer,
     TeacherPaymentRecordSerializer,
     TeacherPaymentRuleSerializer,
@@ -128,6 +131,11 @@ from .services.manual_payments import (
 )
 from .services.plans import REASON_PLAN_UNAVAILABLE, AlertLevel, describe_student_plan
 from .services.plans import current_valid_enrollment_fee_membership, effective_enrollment_fee_due_at, money
+from .services.membership_freezes import (
+    MembershipFreezeError,
+    complete_membership_freeze,
+    create_membership_freeze,
+)
 from .services.public_urls import organization_public_base_url, platform_public_base_url
 from .services.reservations import (
     ReservationRuleError,
@@ -5314,7 +5322,7 @@ class MembershipPlanViewSet(ModelViewSet):
                 organization_id=request.user.organization_id,
             )
             .valid_on(today)
-            .prefetch_related('origin_transactions', 'manual_payments', 'charge_line_items')   # eje de pago + desglose sin N+1 por membresia
+            .prefetch_related('origin_transactions', 'manual_payments', 'charge_line_items', 'freezes__created_by')   # eje de pago + desglose sin N+1 por membresia
             .order_by('end_date', '-start_date', '-id')
         )
         serializer = StudentPlanSerializer(queryset, many=True)
@@ -5353,7 +5361,7 @@ class MembershipPlanViewSet(ModelViewSet):
         if _is_superadmin(user):
             memberships_queryset = (
                 StudentPlan.objects.select_related('user', 'plan')
-                .prefetch_related('origin_transactions', 'manual_payments', 'charge_line_items')   # eje de pago + desglose sin N+1 por membresia
+                .prefetch_related('origin_transactions', 'manual_payments', 'charge_line_items', 'freezes__created_by')   # eje de pago + desglose sin N+1 por membresia
                 .filter(plan_id=plan.id)
                 .order_by('-is_active', '-start_date', '-id')
             )
@@ -5364,7 +5372,7 @@ class MembershipPlanViewSet(ModelViewSet):
             # propio plan. La columna no se mueve con el alumno.
             memberships_queryset = (
                 StudentPlan.objects.select_related('user', 'plan')
-                .prefetch_related('origin_transactions', 'manual_payments', 'charge_line_items')   # eje de pago + desglose sin N+1 por membresia
+                .prefetch_related('origin_transactions', 'manual_payments', 'charge_line_items', 'freezes__created_by')   # eje de pago + desglose sin N+1 por membresia
                 .filter(plan_id=plan.id, organization_id=user.organization_id)
                 .order_by('-is_active', '-start_date', '-id')
             )
@@ -5427,7 +5435,88 @@ class MembershipPlanViewSet(ModelViewSet):
 
         membership = (
             StudentPlan.objects.select_related('user', 'plan')
-            .prefetch_related('origin_transactions', 'manual_payments', 'charge_line_items')
+            .prefetch_related('origin_transactions', 'manual_payments', 'charge_line_items', 'freezes__created_by')
+            .get(id=membership.id)
+        )
+        return Response(StudentPlanSerializer(membership).data)
+
+    @staticmethod
+    def _freeze_error_response(exc):
+        return Response(
+            {'detail': exc.message, 'code': exc.code},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    @action(detail=True, methods=['post'], url_path=r'memberships/(?P<membership_id>[^/.]+)/freeze')
+    def freeze_membership(self, request, pk=None, membership_id=None):
+        user = request.user
+        plan = self.get_object()
+        membership = (
+            self._membership_queryset_for_actor(plan, user)
+            .filter(id=membership_id)
+            .first()
+        )
+        if not membership:
+            return Response({'detail': 'Membresia no encontrada para este plan.'}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = StudentPlanFreezeCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            create_membership_freeze(
+                membership=membership,
+                start_date=serializer.validated_data['start_date'],
+                planned_end_date=serializer.validated_data['planned_end_date'],
+                reason=serializer.validated_data['reason'],
+                actor=user,
+            )
+        except MembershipFreezeError as exc:
+            return self._freeze_error_response(exc)
+
+        membership = (
+            StudentPlan.objects.select_related('user', 'plan')
+            .prefetch_related('origin_transactions', 'manual_payments', 'charge_line_items', 'freezes__created_by')
+            .get(id=membership.id)
+        )
+        return Response(StudentPlanSerializer(membership).data)
+
+    @action(detail=True, methods=['post'], url_path=r'memberships/(?P<membership_id>[^/.]+)/unfreeze')
+    def unfreeze_membership(self, request, pk=None, membership_id=None):
+        user = request.user
+        plan = self.get_object()
+        membership = (
+            self._membership_queryset_for_actor(plan, user)
+            .filter(id=membership_id)
+            .first()
+        )
+        if not membership:
+            return Response({'detail': 'Membresia no encontrada para este plan.'}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = StudentPlanUnfreezeSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        freeze = (
+            StudentPlanFreeze.objects
+            .filter(student_plan=membership, status=StudentPlanFreeze.Status.ACTIVE)
+            .order_by('-created_at', '-id')
+            .first()
+        )
+        if freeze is None:
+            return Response(
+                {'detail': 'La membresía no tiene un congelamiento abierto.', 'code': 'active_freeze_not_found'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            complete_membership_freeze(
+                freeze=freeze,
+                actual_end_date=timezone.localdate(),
+                actor=user,
+                reason=serializer.validated_data.get('reason') or 'Descongelamiento anticipado.',
+            )
+        except MembershipFreezeError as exc:
+            return self._freeze_error_response(exc)
+
+        membership = (
+            StudentPlan.objects.select_related('user', 'plan')
+            .prefetch_related('origin_transactions', 'manual_payments', 'charge_line_items', 'freezes__created_by')
             .get(id=membership.id)
         )
         return Response(StudentPlanSerializer(membership).data)

@@ -18,6 +18,7 @@ from .models import (
     Person,
     RecurringEnrollment,
     StudentPlan,
+    StudentPlanFreeze,
     TeacherPaymentRecord,
     TeacherPaymentRule,
     TrialFollowupConfiguration,
@@ -39,6 +40,30 @@ admin.site.register(StudentPlan)
 admin.site.register(ConsumptionLog)
 admin.site.register(TeacherPaymentRule)
 admin.site.register(TeacherPaymentRecord)
+
+
+@admin.register(StudentPlanFreeze)
+class StudentPlanFreezeAdmin(admin.ModelAdmin):
+    list_display = (
+        'student_plan', 'organization', 'status', 'start_date', 'planned_end_date',
+        'actual_end_date', 'extension_days', 'created_by', 'ended_by',
+    )
+    list_filter = ('status', 'organization')
+    search_fields = ('student_plan__user__username', 'student_plan__user__email', 'reason')
+    readonly_fields = (
+        'student_plan', 'organization', 'start_date', 'planned_end_date',
+        'actual_end_date', 'reason', 'status', 'created_by', 'ended_by', 'ended_at',
+        'extension_days', 'cancelled_future_enrollments', 'created_at', 'updated_at',
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(TrialFollowupConfiguration)

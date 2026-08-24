@@ -39,5 +39,6 @@ class Command(BaseCommand):
             f'Resumen: {summary.reminders_sent} recordatorios, '
             f'{summary.expiry_notices_sent} avisos de vencido, '
             f'{summary.plans_deactivated} membresías vencidas, '
+            f'{summary.freezes_completed} congelamientos cerrados, '
             f'{summary.errors} errores'
         ))

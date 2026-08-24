@@ -4,14 +4,23 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('../api/client', () => ({
+  freezePlanMembership: vi.fn(),
   getPlanById: vi.fn(),
   getPlanMembershipChangeLog: vi.fn(),
   getPlanMemberships: vi.fn(),
   removePlanMembership: vi.fn(),
+  unfreezePlanMembership: vi.fn(),
   updatePlanMembership: vi.fn(),
 }))
 
-import { getPlanById, getPlanMembershipChangeLog, getPlanMemberships, updatePlanMembership } from '../api/client'
+import {
+  freezePlanMembership,
+  getPlanById,
+  getPlanMembershipChangeLog,
+  getPlanMemberships,
+  unfreezePlanMembership,
+  updatePlanMembership,
+} from '../api/client'
 import GymAdminPlanMembershipsPage from './GymAdminPlanMembershipsPage'
 
 function membership(overrides = {}) {
@@ -30,6 +39,7 @@ function membership(overrides = {}) {
     days_to_expiry: 20,
     expiry_alert_level: 'safe',
     expiry_alert_message: '20 dias vigentes',
+    active_freeze: null,
     is_active: true,
     ...overrides,
   }
@@ -40,6 +50,8 @@ beforeEach(() => {
   getPlanById.mockResolvedValue({ id: 7, name: 'Pack 10' })
   getPlanMemberships.mockResolvedValue([])
   getPlanMembershipChangeLog.mockResolvedValue([])
+  freezePlanMembership.mockResolvedValue({})
+  unfreezePlanMembership.mockResolvedValue({})
   updatePlanMembership.mockResolvedValue({})
   window.matchMedia = (query) => ({
     matches: query.includes('min-width'),
@@ -230,5 +242,88 @@ describe('GymAdminPlanMembershipsPage — KPI vs columna Estado', () => {
         reason: 'Correccion manual',
       }),
     )
+  })
+
+  it('mantiene visibles las membresias congeladas en el filtro de activas', async () => {
+    getPlanMemberships.mockResolvedValue([
+      membership({
+        validity_status: 'frozen',
+        validity_status_label: 'Congelada',
+        expiry_alert_level: 'warning',
+        expiry_alert_message: 'Membresia congelada',
+        active_freeze: {
+          id: 4,
+          start_date: '2026-07-05',
+          planned_end_date: '2026-07-15',
+          planned_days: 10,
+          projected_end_date: '2026-08-09',
+          reason: 'Lesion',
+        },
+      }),
+    ])
+
+    renderPage()
+
+    await waitFor(() => expect(shown('Congelada')).toBeGreaterThan(0))
+    expect(within(kpi('Membresias activas')).getByText('1')).toBeInTheDocument()
+    expect(screen.queryAllByText(/09-08-2026/).length).toBeGreaterThan(0)
+  })
+
+  it('permite congelar una membresia activa con resumen de extension', async () => {
+    getPlanMemberships.mockResolvedValue([membership()])
+
+    renderPage()
+
+    await waitFor(() => expect(shown('Ana')).toBeGreaterThan(0))
+    await userEvent.click(screen.getAllByRole('button', { name: 'Abrir acciones' })[0])
+    await userEvent.click(await screen.findByRole('button', { name: 'Congelar' }))
+
+    expect(await screen.findByText(/se congelara por 1 dia/i)).toBeInTheDocument()
+    await userEvent.clear(screen.getByLabelText('Termino'))
+    await userEvent.type(screen.getByLabelText('Termino'), '2026-08-30')
+    await userEvent.type(screen.getByLabelText('Motivo'), 'Lesion')
+    await userEvent.click(screen.getByRole('button', { name: 'Congelar membresia' }))
+
+    await waitFor(() => expect(freezePlanMembership).toHaveBeenCalled())
+    expect(freezePlanMembership).toHaveBeenCalledWith(
+      '7',
+      1,
+      expect.objectContaining({
+        planned_end_date: '2026-08-30',
+        reason: 'Lesion',
+      }),
+    )
+  })
+
+  it('permite descongelar una membresia congelada', async () => {
+    getPlanMemberships.mockResolvedValue([
+      membership({
+        validity_status: 'frozen',
+        validity_status_label: 'Congelada',
+        expiry_alert_level: 'warning',
+        expiry_alert_message: 'Membresia congelada',
+        active_freeze: {
+          id: 4,
+          start_date: '2026-07-05',
+          planned_end_date: '2026-07-15',
+          planned_days: 10,
+          projected_end_date: '2026-08-09',
+          reason: 'Lesion',
+        },
+      }),
+    ])
+
+    renderPage()
+
+    await waitFor(() => expect(shown('Congelada')).toBeGreaterThan(0))
+    await userEvent.click(screen.getAllByRole('button', { name: 'Abrir acciones' })[0])
+    await userEvent.click(await screen.findByRole('button', { name: 'Descongelar' }))
+    await userEvent.click(screen.getAllByRole('button', { name: 'Descongelar' }).at(-1))
+
+    await waitFor(() => expect(unfreezePlanMembership).toHaveBeenCalledWith(
+      '7',
+      1,
+      expect.objectContaining({ reason: 'Descongelamiento anticipado.' }),
+    ))
   })
 })

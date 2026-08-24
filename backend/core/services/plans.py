@@ -23,7 +23,7 @@ from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
-from core.models import PaymentTransaction, RecurringEnrollment, StudentPlan
+from core.models import PaymentTransaction, RecurringEnrollment, StudentPlan, StudentPlanFreeze
 
 
 # Umbrales de aviso de vencimiento, en días. FUENTE ÚNICA: estaban duplicados como
@@ -55,6 +55,7 @@ class PlanStatus:
     EXPIRED = 'expired'
     UPCOMING = 'upcoming'
     INACTIVE = 'inactive'
+    FROZEN = 'frozen'
     EXHAUSTED = 'exhausted'
     ACTIVE = 'active'
 
@@ -69,6 +70,7 @@ _LABELS = {
     PlanStatus.EXPIRED: 'Vencido',
     PlanStatus.UPCOMING: 'Por iniciar',
     PlanStatus.INACTIVE: 'Inactivo',
+    PlanStatus.FROZEN: 'Congelada',
     PlanStatus.EXHAUSTED: 'Sin clases disponibles',
     PlanStatus.ACTIVE: 'Vigente',
 }
@@ -134,6 +136,7 @@ _STATIC_ALERTS = {
     PlanStatus.EXPIRED: (AlertLevel.EXPIRED, _LABELS[PlanStatus.EXPIRED]),
     PlanStatus.UPCOMING: (AlertLevel.SAFE, _LABELS[PlanStatus.UPCOMING]),
     PlanStatus.INACTIVE: (AlertLevel.NEUTRAL, 'No vigente'),
+    PlanStatus.FROZEN: (AlertLevel.WARNING, 'Membresía congelada'),
     PlanStatus.EXHAUSTED: (AlertLevel.DANGER, _LABELS[PlanStatus.EXHAUSTED]),
 }
 
@@ -314,6 +317,16 @@ def _enrollment_fee_status(student_plan, on_date):
     return EnrollmentFeeStatus.PENDING
 
 
+def _active_freeze_for_date(student_plan, on_date):
+    freezes = getattr(student_plan, '_prefetched_objects_cache', {}).get('freezes')
+    if freezes is None:
+        freezes = student_plan.freezes.filter(status=StudentPlanFreeze.Status.ACTIVE)
+    for freeze in freezes:
+        if freeze.start_date <= on_date < freeze.planned_end_date:
+            return freeze
+    return None
+
+
 def _state(status, *, expiry_date=None, days_to_expiry=None, remaining_classes=None,
            payment_status=None, enrollment_fee_status=None):
     usable = status == PlanStatus.ACTIVE
@@ -378,6 +391,7 @@ def describe_student_plan(student_plan: Optional[StudentPlan], on_date: date) ->
     # omitiera y el campo apareciera y desapareciera según el estado.
     payment_status = _payment_status(student_plan)
     enrollment_fee_status = _enrollment_fee_status(student_plan, on_date)
+    current_freeze = _active_freeze_for_date(student_plan, on_date)
 
     def build(status):
         return _state(
@@ -389,10 +403,12 @@ def describe_student_plan(student_plan: Optional[StudentPlan], on_date: date) ->
             enrollment_fee_status=enrollment_fee_status,
         )
 
-    if student_plan.end_date and student_plan.end_date < on_date:
-        return build(PlanStatus.EXPIRED)
     if student_plan.start_date and student_plan.start_date > on_date:
         return build(PlanStatus.UPCOMING)
+    if current_freeze is not None:
+        return build(PlanStatus.FROZEN)
+    if student_plan.end_date and student_plan.end_date < on_date:
+        return build(PlanStatus.EXPIRED)
     if not student_plan.is_active:
         return build(PlanStatus.INACTIVE)
     if not student_plan.unlimited_classes and (student_plan.classes_used or 0) >= (student_plan.total_classes or 0):

@@ -769,6 +769,16 @@ export const updatePlanMembership = async (planId, membershipId, payload) => {
   return data
 }
 
+export const freezePlanMembership = async (planId, membershipId, payload) => {
+  const { data } = await api.post(`/plans/${planId}/memberships/${membershipId}/freeze/`, payload)
+  return data
+}
+
+export const unfreezePlanMembership = async (planId, membershipId, payload = {}) => {
+  const { data } = await api.post(`/plans/${planId}/memberships/${membershipId}/unfreeze/`, payload)
+  return data
+}
+
 export const getPlanMembershipChangeLog = async (planId, membershipId) => {
   const { data } = await api.get(`/plans/${planId}/memberships/${membershipId}/change-log/`)
   return data

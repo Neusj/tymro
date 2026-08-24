@@ -149,6 +149,7 @@ def get_active_student_plan(student, on_date=None):
             organization_id=student.organization_id,
         )
         .valid_on(target_date)
+        .prefetch_related('freezes')
         .order_by('-start_date', '-id')
         .first()
     )
@@ -177,6 +178,7 @@ def _usable_student_plan_candidates(student, organization_id, target_date):
         StudentPlan.objects
         .filter(user=student, organization_id=organization_id)
         .valid_on(target_date)
+        .prefetch_related('freezes')
         .order_by('-start_date', '-id')
     )
     return [sp for sp in candidates_qs if describe_student_plan(sp, target_date).is_usable]

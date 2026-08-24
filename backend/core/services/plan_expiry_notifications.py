@@ -35,6 +35,7 @@ from core.models import (
     PlanExpiryNotification,
     StudentPlan,
 )
+from core.services.membership_freezes import complete_due_membership_freezes
 from core.services.plans import PlanStatus, describe_student_plan
 
 logger = logging.getLogger(__name__)
@@ -58,6 +59,7 @@ class RunSummary:
     reminders_sent: int = 0
     expiry_notices_sent: int = 0
     plans_deactivated: int = 0
+    freezes_completed: int = 0
     errors: int = 0
     lines: list = field(default_factory=list)
 
@@ -325,6 +327,21 @@ def _expire(config, today, dry_run, summary):
 def run_expiry_notifications(*, today=None, org_id=None, dry_run=False):
     """Procesa todas las organizaciones con avisos activos. Devuelve un `RunSummary`."""
     today = today or timezone.localdate()
+    summary = RunSummary()
+
+    try:
+        summary.freezes_completed = complete_due_membership_freezes(
+            today=today,
+            org_id=org_id,
+            dry_run=dry_run,
+        )
+        if summary.freezes_completed:
+            prefix = '[DRY-RUN] ' if dry_run else ''
+            summary.note(f'{prefix}{summary.freezes_completed} congelamiento(s) cerrados automáticamente')
+    except Exception as exc:  # noqa: BLE001
+        summary.errors += 1
+        logger.exception('membership freeze completion failed')
+        summary.note(f'error cerrando congelamientos: {exc.__class__.__name__}')
 
     configs = (
         OrganizationExpiryNotificationConfig.objects
@@ -336,7 +353,6 @@ def run_expiry_notifications(*, today=None, org_id=None, dry_run=False):
     if org_id is not None:
         configs = configs.filter(organization_id=org_id)
 
-    summary = RunSummary()
     for config in configs:
         if not config.is_enabled:
             continue

@@ -522,7 +522,7 @@ class StudentOverviewView(APIView):
             StudentPlan.objects.select_related('plan', 'user')
             # Eje de pago + desglose sin N+1 por membresía — mismo prefetch que
             # `MembershipPlanViewSet.memberships`/`my_memberships` (views.py).
-            .prefetch_related('origin_transactions', 'manual_payments', 'charge_line_items')
+            .prefetch_related('origin_transactions', 'manual_payments', 'charge_line_items', 'freezes__created_by')
             .filter(user_id=student.id, organization_id=org_id)
             .order_by('-is_active', '-start_date', '-id')
         )
@@ -732,7 +732,7 @@ class StudentMembershipsDetailView(StudentOverviewDetailBase):
         student, org_id = self._student_scope(request, student_id)
         queryset = (
             StudentPlan.objects.select_related('plan', 'user')
-            .prefetch_related('origin_transactions', 'manual_payments', 'charge_line_items')
+            .prefetch_related('origin_transactions', 'manual_payments', 'charge_line_items', 'freezes__created_by')
             .filter(user_id=student.id, organization_id=org_id)
             .order_by('-is_active', '-start_date', '-id')
         )

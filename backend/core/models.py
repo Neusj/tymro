@@ -753,10 +753,15 @@ class StudentPlanQuerySet(models.QuerySet):
         llamador tiene que declarar contra qué fecha evalúa.
         """
         return self.filter(
+            models.Q(end_date__gte=on_date)
+            | models.Q(
+                freezes__status='active',
+                freezes__start_date__lte=on_date,
+                freezes__planned_end_date__gt=on_date,
+            ),
             is_active=True,
             start_date__lte=on_date,
-            end_date__gte=on_date,
-        )
+        ).distinct()
 
 
 class StudentPlan(TimestampedModel):
@@ -865,6 +870,71 @@ class StudentPlan(TimestampedModel):
         ):
             self.enrollment_fee_due_at = (self.created_at + timedelta(days=365)).date()
             super().save(update_fields=['enrollment_fee_due_at', 'updated_at'])
+
+
+class StudentPlanFreeze(TimestampedModel):
+    class Status(models.TextChoices):
+        ACTIVE = 'active', 'Activa'
+        COMPLETED = 'completed', 'Completada'
+
+    student_plan = models.ForeignKey(
+        StudentPlan,
+        on_delete=models.CASCADE,
+        related_name='freezes',
+    )
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.PROTECT,
+        related_name='student_plan_freezes',
+    )
+    start_date = models.DateField()
+    planned_end_date = models.DateField()
+    actual_end_date = models.DateField(null=True, blank=True)
+    reason = models.TextField()
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.ACTIVE)
+    created_by = models.ForeignKey(
+        'accounts.CustomUser',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='created_student_plan_freezes',
+    )
+    ended_by = models.ForeignKey(
+        'accounts.CustomUser',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='ended_student_plan_freezes',
+    )
+    ended_at = models.DateTimeField(null=True, blank=True)
+    extension_days = models.PositiveIntegerField(default=0)
+    cancelled_future_enrollments = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ['-created_at', '-id']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['student_plan'],
+                condition=models.Q(status='active'),
+                name='uniq_active_freeze_per_student_plan',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['student_plan', 'status']),
+            models.Index(fields=['organization', 'status', 'planned_end_date']),
+        ]
+
+    def __str__(self):
+        return f'Congelamiento {self.student_plan_id} · {self.start_date} → {self.planned_end_date}'
+
+    def clean(self):
+        super().clean()
+        if self.student_plan_id and self.organization_id != self.student_plan.organization_id:
+            raise ValidationError({'organization': 'La organización debe ser la misma que la membresía.'})
+        if self.planned_end_date and self.start_date and self.planned_end_date <= self.start_date:
+            raise ValidationError({'planned_end_date': 'La fecha de término debe ser posterior al inicio.'})
+        if self.actual_end_date and self.start_date and self.actual_end_date < self.start_date:
+            raise ValidationError({'actual_end_date': 'La fecha real de término no puede ser anterior al inicio.'})
 
 
 class ConsumptionLog(TimestampedModel):

@@ -1,6 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom'
-import { getPlanById, getPlanMembershipChangeLog, getPlanMemberships, removePlanMembership, updatePlanMembership } from '../api/client'
+import {
+  freezePlanMembership,
+  getPlanById,
+  getPlanMembershipChangeLog,
+  getPlanMemberships,
+  removePlanMembership,
+  unfreezePlanMembership,
+  updatePlanMembership,
+} from '../api/client'
 import ConfirmDialog from '../components/ConfirmDialog'
 import DashboardHeader from '../components/DashboardHeader'
 import DataTable from '../components/ui/DataTable'
@@ -27,6 +35,35 @@ function firstApiError(detail, fallback) {
 
 function asDateInput(value) {
   return value ? String(value).slice(0, 10) : ''
+}
+
+function todayInput() {
+  return new Date().toISOString().slice(0, 10)
+}
+
+function addDaysInput(value, days) {
+  const base = value ? new Date(`${value}T00:00:00`) : new Date()
+  base.setDate(base.getDate() + days)
+  return base.toISOString().slice(0, 10)
+}
+
+function daysBetween(startDate, endDate) {
+  if (!startDate || !endDate) {
+    return 0
+  }
+  const start = new Date(`${startDate}T00:00:00`)
+  const end = new Date(`${endDate}T00:00:00`)
+  const diff = Math.round((end.getTime() - start.getTime()) / 86400000)
+  return Math.max(diff, 0)
+}
+
+function addDaysToDate(value, days) {
+  if (!value) {
+    return ''
+  }
+  const date = new Date(`${value}T00:00:00`)
+  date.setDate(date.getDate() + days)
+  return date.toISOString().slice(0, 10)
 }
 
 function asDateTimeInput(value) {
@@ -76,6 +113,12 @@ const editInitialForm = {
   reason: '',
 }
 
+const freezeInitialForm = {
+  start_date: '',
+  planned_end_date: '',
+  reason: '',
+}
+
 export default function GymAdminPlanMembershipsPage() {
   const { id } = useParams()
   const [searchParams] = useSearchParams()
@@ -90,6 +133,9 @@ export default function GymAdminPlanMembershipsPage() {
   const [filter, setFilter] = useState('active')
   const [editing, setEditing] = useState(null)
   const [editForm, setEditForm] = useState(editInitialForm)
+  const [freezing, setFreezing] = useState(null)
+  const [freezeForm, setFreezeForm] = useState(freezeInitialForm)
+  const [unfreezing, setUnfreezing] = useState(null)
   const [changeLog, setChangeLog] = useState([])
   const [changeLogLoading, setChangeLogLoading] = useState(false)
 
@@ -116,12 +162,14 @@ export default function GymAdminPlanMembershipsPage() {
   // KPI decía "12 activas" sobre una tabla de 12 filas que decían "Vencido". El endpoint
   // sigue devolviendo el histórico completo: lo que cambia es qué se cuenta de él.
   const activeCount = useMemo(
-    () => memberships.filter((item) => item.validity_status === 'active').length,
+    () => memberships.filter((item) => ['active', 'frozen'].includes(item.validity_status)).length,
     [memberships],
   )
   const displayedMemberships = useMemo(
     () => {
-      const base = filter === 'active' ? memberships.filter((item) => item.validity_status === 'active') : memberships
+      const base = filter === 'active'
+        ? memberships.filter((item) => ['active', 'frozen'].includes(item.validity_status))
+        : memberships
       return studentFilterId ? base.filter((item) => String(item.user) === String(studentFilterId)) : base
     },
     [filter, memberships, studentFilterId],
@@ -171,6 +219,65 @@ export default function GymAdminPlanMembershipsPage() {
       setError(firstApiError(apiError?.response?.data, 'No se pudo cargar la auditoría de la membresía.'))
     } finally {
       setChangeLogLoading(false)
+    }
+  }
+
+  const openFreeze = (membership) => {
+    const start = todayInput()
+    setFreezing(membership)
+    setFreezeForm({
+      start_date: start,
+      planned_end_date: addDaysInput(start, 1),
+      reason: '',
+    })
+    setError('')
+    setNotice('')
+  }
+
+  const saveFreeze = async (event) => {
+    event.preventDefault()
+    if (!freezing) {
+      return
+    }
+    if (!freezeForm.reason.trim()) {
+      setError('Indica el motivo del congelamiento.')
+      return
+    }
+    setWorking(true)
+    setError('')
+    setNotice('')
+    try {
+      await freezePlanMembership(id, freezing.id, {
+        start_date: freezeForm.start_date,
+        planned_end_date: freezeForm.planned_end_date,
+        reason: freezeForm.reason.trim(),
+      })
+      setNotice(`Membresia congelada para ${freezing.user_name || freezing.user_email || 'alumno'}.`)
+      setFreezing(null)
+      await loadData()
+    } catch (apiError) {
+      setError(firstApiError(apiError?.response?.data, 'No se pudo congelar la membresia.'))
+    } finally {
+      setWorking(false)
+    }
+  }
+
+  const unfreezeMembership = async () => {
+    if (!unfreezing) {
+      return
+    }
+    setWorking(true)
+    setError('')
+    setNotice('')
+    try {
+      await unfreezePlanMembership(id, unfreezing.id, { reason: 'Descongelamiento anticipado.' })
+      setNotice(`Membresia descongelada para ${unfreezing.user_name || unfreezing.user_email || 'alumno'}.`)
+      setUnfreezing(null)
+      await loadData()
+    } catch (apiError) {
+      setError(firstApiError(apiError?.response?.data, 'No se pudo descongelar la membresia.'))
+    } finally {
+      setWorking(false)
     }
   }
 
@@ -234,6 +341,25 @@ export default function GymAdminPlanMembershipsPage() {
         render: (row) => <PlanAlertBadge level={row.expiry_alert_level} message={row.validity_status_label} />,
       },
       {
+        key: 'freeze',
+        label: 'Congelamiento',
+        sortable: false,
+        render: (row) => {
+          const freeze = row.active_freeze
+          if (!freeze) {
+            return '-'
+          }
+          return (
+            <div className="space-y-1 text-xs">
+              <p className="font-semibold text-brand-white">
+                {formatDate(freeze.start_date)} - {formatDate(freeze.planned_end_date)}
+              </p>
+              <p className="text-brand-muted">Vence: {formatDate(freeze.projected_end_date)}</p>
+            </div>
+          )
+        },
+      },
+      {
         key: 'alert',
         label: 'Alerta',
         sortable: false,
@@ -253,6 +379,25 @@ export default function GymAdminPlanMembershipsPage() {
             >
               Editar
             </button>
+            {row.active_freeze ? (
+              <button
+                type="button"
+                disabled={working}
+                onClick={() => setUnfreezing(row)}
+                className="rounded border border-amber-400/50 px-2 py-1 text-xs text-amber-100 disabled:opacity-50"
+              >
+                Descongelar
+              </button>
+            ) : (
+              <button
+                type="button"
+                disabled={working || row.validity_status !== 'active'}
+                onClick={() => openFreeze(row)}
+                className="rounded border border-brand-line px-2 py-1 text-xs text-brand-white disabled:opacity-50"
+              >
+                Congelar
+              </button>
+            )}
             <button
               type="button"
               disabled={working || Number(row.classes_used || 0) > 0}
@@ -278,6 +423,9 @@ export default function GymAdminPlanMembershipsPage() {
     ],
     [working],
   )
+
+  const freezeDays = daysBetween(freezeForm.start_date, freezeForm.planned_end_date)
+  const freezeProjectedEnd = freezing ? addDaysToDate(freezing.end_date, freezeDays) : ''
 
   return (
     <div className="space-y-6">
@@ -537,6 +685,86 @@ export default function GymAdminPlanMembershipsPage() {
         </form>
       </FormModal>
 
+      <FormModal
+        open={Boolean(freezing)}
+        title={`Congelar membresia${freezing ? ` · ${freezing.user_name || freezing.user_email || 'Alumno'}` : ''}`}
+        size="md"
+        closeDisabled={working}
+        onClose={() => {
+          setFreezing(null)
+          setError('')
+        }}
+      >
+        <form onSubmit={saveFreeze} className="space-y-5">
+          <div className="grid gap-3 md:grid-cols-2">
+            <label className="min-w-0 space-y-1 text-sm">
+              <span>Inicio</span>
+              <input
+                required
+                type="date"
+                disabled={working}
+                value={freezeForm.start_date}
+                onChange={(event) => {
+                  const nextStart = event.target.value
+                  setFreezeForm((prev) => ({
+                    ...prev,
+                    start_date: nextStart,
+                    planned_end_date: prev.planned_end_date && prev.planned_end_date > nextStart
+                      ? prev.planned_end_date
+                      : addDaysInput(nextStart, 1),
+                  }))
+                }}
+                className="w-full min-w-0 max-w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
+              />
+            </label>
+            <label className="min-w-0 space-y-1 text-sm">
+              <span>Termino</span>
+              <input
+                required
+                type="date"
+                disabled={working}
+                value={freezeForm.planned_end_date}
+                onChange={(event) => setFreezeForm((prev) => ({ ...prev, planned_end_date: event.target.value }))}
+                className="w-full min-w-0 max-w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
+              />
+            </label>
+            <label className="min-w-0 space-y-1 text-sm md:col-span-2">
+              <span>Motivo</span>
+              <textarea
+                required
+                rows={3}
+                disabled={working}
+                value={freezeForm.reason}
+                onChange={(event) => setFreezeForm((prev) => ({ ...prev, reason: event.target.value }))}
+                className="w-full min-w-0 max-w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
+              />
+            </label>
+          </div>
+
+          <div className="rounded-lg border border-brand-line bg-black/20 p-3 text-sm">
+            Esta membresia se congelara por {freezeDays} dia(s) y su vencimiento se extendera en {freezeDays} dia(s).
+            {freezeProjectedEnd ? <span className="block text-brand-muted">Nuevo vencimiento previsto: {formatDate(freezeProjectedEnd)}</span> : null}
+          </div>
+
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              disabled={working}
+              onClick={() => {
+                setFreezing(null)
+                setError('')
+              }}
+              className="rounded-lg border border-brand-line px-3 py-2 text-sm font-semibold text-brand-white disabled:opacity-60"
+            >
+              Cancelar
+            </button>
+            <button type="submit" disabled={working || freezeDays <= 0} className="rounded-lg bg-brand-blue px-3 py-2 text-sm font-semibold text-white disabled:opacity-60">
+              {working ? 'Guardando...' : 'Congelar membresia'}
+            </button>
+          </div>
+        </form>
+      </FormModal>
+
       <ConfirmDialog
         open={Boolean(deleting)}
         title="Quitar membresia"
@@ -545,6 +773,15 @@ export default function GymAdminPlanMembershipsPage() {
         loading={working}
         onCancel={() => setDeleting(null)}
         onConfirm={removeMembership}
+      />
+      <ConfirmDialog
+        open={Boolean(unfreezing)}
+        title="Descongelar membresia"
+        description={`Se cerrara el congelamiento de ${unfreezing?.user_name || unfreezing?.user_email || 'este alumno'} y se extendera el vencimiento solo por los dias realmente congelados.`}
+        confirmLabel="Descongelar"
+        loading={working}
+        onCancel={() => setUnfreezing(null)}
+        onConfirm={unfreezeMembership}
       />
     </div>
   )

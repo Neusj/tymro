@@ -40,6 +40,7 @@ from .models import (
     RecurringEnrollment,
     StudentPlan,
     StudentPlanChangeLog,
+    StudentPlanFreeze,
     TeacherPaymentRecord,
     TeacherPaymentRule,
     TrialFollowupConfiguration,
@@ -1989,6 +1990,7 @@ class StudentPlanSerializer(serializers.ModelSerializer):
     # que repetir ese corte a mano; no alcanza con confiar en `permission_classes`.
     line_items = ChargeLineItemSerializer(source='charge_line_items', many=True, read_only=True)
     line_items_total = serializers.SerializerMethodField()
+    active_freeze = serializers.SerializerMethodField()
 
     class Meta:
         model = StudentPlan
@@ -2021,6 +2023,7 @@ class StudentPlanSerializer(serializers.ModelSerializer):
             'payment_status',
             'line_items',
             'line_items_total',
+            'active_freeze',
             'is_active',
         ]
         read_only_fields = [
@@ -2226,6 +2229,33 @@ class StudentPlanSerializer(serializers.ModelSerializer):
         total = sum((item.amount for item in obj.charge_line_items.all()), Decimal('0.00'))
         return str(total)
 
+    def get_active_freeze(self, obj):
+        today = timezone.localdate()
+        freezes = getattr(obj, '_prefetched_objects_cache', {}).get('freezes')
+        if freezes is None:
+            freezes = obj.freezes.filter(status=StudentPlanFreeze.Status.ACTIVE)
+        current = None
+        for freeze in freezes:
+            if freeze.start_date <= today < freeze.planned_end_date:
+                current = freeze
+                break
+        if current is None:
+            return None
+        planned_days = max((current.planned_end_date - current.start_date).days, 0)
+        projected_end_date = obj.end_date + timedelta(days=planned_days)
+        return {
+            'id': current.id,
+            'start_date': current.start_date.isoformat(),
+            'planned_end_date': current.planned_end_date.isoformat(),
+            'planned_days': planned_days,
+            'projected_end_date': projected_end_date.isoformat(),
+            'reason': current.reason,
+            'created_at': current.created_at.isoformat() if current.created_at else None,
+            'created_by': current.created_by_id,
+            'created_by_name': _user_display_name(getattr(current, 'created_by', None)),
+            'cancelled_future_enrollments': current.cancelled_future_enrollments,
+        }
+
 
 class StudentPlanChangeLogSerializer(serializers.ModelSerializer):
     changed_by_name = serializers.SerializerMethodField()
@@ -2247,6 +2277,31 @@ class StudentPlanChangeLogSerializer(serializers.ModelSerializer):
 
     def get_changed_by_name(self, obj):
         return _user_display_name(getattr(obj, 'changed_by', None))
+
+
+class StudentPlanFreezeCreateSerializer(serializers.Serializer):
+    start_date = serializers.DateField()
+    planned_end_date = serializers.DateField()
+    reason = serializers.CharField(max_length=500, trim_whitespace=True)
+
+    def validate_reason(self, value):
+        if not value.strip():
+            raise serializers.ValidationError('Indica el motivo del congelamiento.')
+        return value.strip()
+
+    def validate(self, attrs):
+        if attrs['planned_end_date'] <= attrs['start_date']:
+            raise serializers.ValidationError({
+                'planned_end_date': 'La fecha de término debe ser posterior al inicio.'
+            })
+        return attrs
+
+
+class StudentPlanUnfreezeSerializer(serializers.Serializer):
+    reason = serializers.CharField(max_length=500, trim_whitespace=True, required=False, allow_blank=True)
+
+    def validate_reason(self, value):
+        return value.strip()
 
 
 class StudentPlanAdminUpdateSerializer(serializers.Serializer):
