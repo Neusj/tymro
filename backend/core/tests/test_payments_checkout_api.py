@@ -1,6 +1,6 @@
 import pytest
 
-from core.models import Plan
+from core.models import PaymentTransaction, Plan
 from core.services import payments
 
 
@@ -30,12 +30,26 @@ def test_checkout_endpoint_returns_redirect_url(api_client, connected_org, make_
     assert 'redirect_url' in resp.data and 'transaction_id' in resp.data
 
 
-def test_checkout_requires_student(api_client, connected_org, make_user):
+def test_checkout_allows_gym_admin_personal_purchase(api_client, connected_org, make_user):
     org = connected_org
     admin = make_user('a', organization=org, role='gym_admin')
     plan = Plan.objects.create(organization=org, name='M', plan_type='monthly', total_classes=1,
                                unlimited_classes=False, duration_days=30, price=1000.0)
     api_client.force_authenticate(user=admin)
+    resp = api_client.post('/api/payments/checkout/', {'plan_id': plan.id}, format='json')
+    assert resp.status_code == 200
+    tx = PaymentTransaction.objects.get(id=resp.data['transaction_id'])
+    assert tx.user_id == admin.id
+    admin.refresh_from_db()
+    assert admin.role == 'gym_admin'
+
+
+def test_checkout_rejects_non_student_subject_roles(api_client, connected_org, make_user):
+    org = connected_org
+    manager = make_user('mgr', organization=org, role='manager')
+    plan = Plan.objects.create(organization=org, name='M', plan_type='monthly', total_classes=1,
+                               unlimited_classes=False, duration_days=30, price=1000.0)
+    api_client.force_authenticate(user=manager)
     resp = api_client.post('/api/payments/checkout/', {'plan_id': plan.id}, format='json')
     assert resp.status_code == 403
 

@@ -64,3 +64,18 @@ describe('Sidebar — menú de Clases (gym_admin)', () => {
     expect(screen.getByRole('link', { name: 'Gestión de clases' })).toHaveAttribute('href', '/gym-admin/class-templates')
   })
 })
+
+describe('Sidebar — flujo personal del gym_admin', () => {
+  it('muestra actividad personal separada de la asignacion administrativa de planes', async () => {
+    renderSidebar({ role: 'gym_admin' })
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'Mi actividad' }))
+    await user.click(screen.getByRole('button', { name: 'Planes' }))
+
+    expect(screen.getByRole('link', { name: 'Comprar para mí' })).toHaveAttribute('href', '/student/plans/comprar')
+    expect(screen.getByRole('link', { name: 'Mis membresías' })).toHaveAttribute('href', '/student/plans')
+    expect(screen.getByRole('link', { name: 'Mis reservas' })).toHaveAttribute('href', '/student/classes/reservations')
+    expect(screen.getByRole('link', { name: 'Asignar plan' })).toHaveAttribute('href', '/gym-admin/plans/assign')
+  })
+})

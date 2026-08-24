@@ -62,7 +62,7 @@ import TeacherDashboard from './pages/TeacherDashboard'
 import TeacherPaymentRulesPage from './pages/TeacherPaymentRulesPage'
 import TeacherPaymentsOverviewPage from './pages/TeacherPaymentsOverviewPage'
 import ProtectedRoute from './routes/ProtectedRoute'
-import { defaultRouteByRole } from './utils/roles'
+import { defaultRouteByRole, studentFlowRoles } from './utils/roles'
 
 function RoleBasedHome() {
   const { user } = useAuth()
@@ -106,7 +106,7 @@ export default function App() {
       <Route
         path="/attendance/check-in"
         element={
-          <ProtectedRoute allowedRoles={['student']}>
+          <ProtectedRoute allowedRoles={studentFlowRoles}>
             <StudentQrCheckInPage />
           </ProtectedRoute>
         }
@@ -675,7 +675,7 @@ export default function App() {
       <Route
         path="/student"
         element={
-          <ProtectedRoute allowedRoles={['student']}>
+          <ProtectedRoute allowedRoles={studentFlowRoles}>
             <Navigate to="/student/classes/available" replace />
           </ProtectedRoute>
         }
@@ -683,7 +683,7 @@ export default function App() {
       <Route
         path="/student/attendance"
         element={
-          <ProtectedRoute allowedRoles={['student']}>
+          <ProtectedRoute allowedRoles={studentFlowRoles}>
             <ShellRoute>
               <StudentAttendanceScanPage />
             </ShellRoute>
@@ -693,7 +693,7 @@ export default function App() {
       <Route
         path="/student/dashboard"
         element={
-          <ProtectedRoute allowedRoles={['student']}>
+          <ProtectedRoute allowedRoles={studentFlowRoles}>
             <ShellRoute>
               <StudentDashboard />
             </ShellRoute>
@@ -703,7 +703,7 @@ export default function App() {
       <Route
         path="/student/classes"
         element={
-          <ProtectedRoute allowedRoles={['student']}>
+          <ProtectedRoute allowedRoles={studentFlowRoles}>
             <Navigate to="/student/classes/available" replace />
           </ProtectedRoute>
         }
@@ -711,7 +711,7 @@ export default function App() {
       <Route
         path="/student/plans"
         element={
-          <ProtectedRoute allowedRoles={['student']}>
+          <ProtectedRoute allowedRoles={studentFlowRoles}>
             <ShellRoute>
               <StudentPlansPage />
             </ShellRoute>
@@ -721,7 +721,7 @@ export default function App() {
       <Route
         path="/student/plans/comprar"
         element={
-          <ProtectedRoute allowedRoles={['student']}>
+          <ProtectedRoute allowedRoles={studentFlowRoles}>
             <ShellRoute>
               <StudentBuyPlanPage />
             </ShellRoute>
@@ -731,7 +731,7 @@ export default function App() {
       <Route
         path="/student/classes/available"
         element={
-          <ProtectedRoute allowedRoles={['student']}>
+          <ProtectedRoute allowedRoles={studentFlowRoles}>
             <ShellRoute>
               <StudentClassesPage mode="available" />
             </ShellRoute>
@@ -741,7 +741,7 @@ export default function App() {
       <Route
         path="/student/classes/reservations"
         element={
-          <ProtectedRoute allowedRoles={['student']}>
+          <ProtectedRoute allowedRoles={studentFlowRoles}>
             <ShellRoute>
               <StudentClassesPage mode="reservations" />
             </ShellRoute>
@@ -751,7 +751,7 @@ export default function App() {
       <Route
         path="/student/classes/recurring"
         element={
-          <ProtectedRoute allowedRoles={['student']}>
+          <ProtectedRoute allowedRoles={studentFlowRoles}>
             <ShellRoute>
               <StudentRecurringEnrollmentsPage />
             </ShellRoute>
@@ -761,7 +761,7 @@ export default function App() {
       <Route
         path="/student/classes/history"
         element={
-          <ProtectedRoute allowedRoles={['student']}>
+          <ProtectedRoute allowedRoles={studentFlowRoles}>
             <ShellRoute>
               <StudentClassesPage mode="history" />
             </ShellRoute>
@@ -784,7 +784,7 @@ export default function App() {
       <Route
         path="/pagos/resultado"
         element={
-          <ProtectedRoute allowedRoles={['student']}>
+          <ProtectedRoute allowedRoles={studentFlowRoles}>
             <ShellRoute>
               <PaymentResultPage />
             </ShellRoute>

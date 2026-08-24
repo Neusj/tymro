@@ -343,10 +343,19 @@ def _is_own_org_student(user, enrollment):
     consumo, descontar un `StudentPlan` de la organizacion que dejo).
     """
     return (
-        _is_student(user)
+        _acts_as_student(user)
         and enrollment.student_id == user.id
         and bool(user.organization_id)
         and enrollment.gym_class.organization_id == user.organization_id
+    )
+
+
+def _is_own_org_recurring_student(user, recurring_enrollment):
+    return (
+        _acts_as_student(user)
+        and recurring_enrollment.student_id == user.id
+        and bool(user.organization_id)
+        and recurring_enrollment.class_template.organization_id == user.organization_id
     )
 
 
@@ -4022,7 +4031,7 @@ class ClassTemplateViewSet(ModelViewSet):
         template = self.get_object()
         user = request.user
 
-        if _is_student(user):
+        if _acts_as_student(user) and str(request.data.get('student') or user.id) == str(user.id):
             if user.organization_id != template.organization_id:
                 raise PermissionDenied('No puedes suscribirte a una plantilla de otra organización.')
             payload = dict(request.data)
@@ -4350,7 +4359,8 @@ class RecurringEnrollmentViewSet(ModelViewSet):
 
     def perform_create(self, serializer):
         user = self.request.user
-        if _is_student(user):
+        student = serializer.validated_data.get('student')
+        if _acts_as_student(user) and student is not None and student.id == user.id:
             serializer.save(student=user, created_by=user)
             return
 
@@ -4363,18 +4373,9 @@ class RecurringEnrollmentViewSet(ModelViewSet):
     def perform_update(self, serializer):
         user = self.request.user
         recurring_enrollment = self.get_object()
-        if _is_student(user) and not (
-            recurring_enrollment.student_id == user.id
-            and user.organization_id
-            and recurring_enrollment.class_template.organization_id == user.organization_id
-        ):
-            raise PermissionDenied('Solo puedes editar tus propias recurrencias.')
-        if roles.is_org_admin(user) and recurring_enrollment.class_template.organization_id != user.organization_id:
-            raise PermissionDenied('No tienes permisos para editar esta recurrencia.')
-        if not (_is_superadmin(user) or roles.is_org_admin(user) or _is_student(user)):
-            raise PermissionDenied('No tienes permisos para editar recurrencias.')
-
-        if _is_student(user):
+        if _acts_as_student(user) and recurring_enrollment.student_id == user.id:
+            if not _is_own_org_recurring_student(user, recurring_enrollment):
+                raise PermissionDenied('Solo puedes editar tus propias recurrencias.')
             payload_keys = {str(key) for key in self.request.data.keys()}
             payload_keys.discard('csrfmiddlewaretoken')
             if payload_keys.difference({'is_active'}):
@@ -4391,6 +4392,13 @@ class RecurringEnrollmentViewSet(ModelViewSet):
                 cancel_future_recurring_enrollments(updated)
             return
 
+        if _is_student(user):
+            raise PermissionDenied('Solo puedes editar tus propias recurrencias.')
+        if roles.is_org_admin(user) and recurring_enrollment.class_template.organization_id != user.organization_id:
+            raise PermissionDenied('No tienes permisos para editar esta recurrencia.')
+        if not (_is_superadmin(user) or roles.is_org_admin(user) or _is_student(user)):
+            raise PermissionDenied('No tienes permisos para editar recurrencias.')
+
         updated = serializer.save()
         if updated.is_active:
             create_enrollments_for_recurring_subscription(recurring_enrollment=updated)
@@ -4404,21 +4412,17 @@ class RecurringEnrollmentViewSet(ModelViewSet):
             cancel_future_recurring_enrollments(instance)
             instance.delete()
 
-        if _is_superadmin(user):
-            _cancel_and_delete()
-            return
-        if roles.is_org_admin(user) and instance.class_template.organization_id == user.organization_id:
-            _cancel_and_delete()
-            return
-        if _is_student(user) and (
-            instance.student_id == user.id
-            and user.organization_id
-            and instance.class_template.organization_id == user.organization_id
-        ):
+        if _is_own_org_recurring_student(user, instance):
             can_modify, reason = _student_can_manage_recurring(instance)
             if not can_modify:
                 raise PermissionDenied(reason)
 
+            _cancel_and_delete()
+            return
+        if _is_superadmin(user):
+            _cancel_and_delete()
+            return
+        if roles.is_org_admin(user) and instance.class_template.organization_id == user.organization_id:
             _cancel_and_delete()
             return
         raise PermissionDenied('No tienes permisos para eliminar esta recurrencia.')
@@ -4522,7 +4526,16 @@ class EnrollmentViewSet(ModelViewSet):
         enrollment = self.get_object()
         user = request.user
 
-        if _is_student(user) and not _is_own_org_student(user, enrollment):
+        if _acts_as_student(user) and enrollment.student_id == user.id:
+            if not _is_own_org_student(user, enrollment):
+                raise PermissionDenied('Solo puedes cancelar tus propias reservas.')
+            can_cancel, reason = _student_can_cancel_enrollment(enrollment)
+            if not can_cancel:
+                return Response({'detail': reason}, status=status.HTTP_400_BAD_REQUEST)
+            cancel_enrollment_with_refund(enrollment, block_recurring_resync=True)
+            return Response(self.get_serializer(enrollment).data)
+
+        if _is_student(user):
             raise PermissionDenied('Solo puedes cancelar tus propias reservas.')
         if roles.is_org_admin(user) and enrollment.gym_class.organization_id != user.organization_id:
             raise PermissionDenied('No tienes permisos para esta reserva.')
@@ -4530,10 +4543,6 @@ class EnrollmentViewSet(ModelViewSet):
             raise PermissionDenied('Solo puedes cancelar inscripciones en tus propias clases.')
         if not (_is_superadmin(user) or roles.is_org_admin(user) or _is_teacher(user) or _is_student(user)):
             raise PermissionDenied('No tienes permisos para cancelar esta reserva.')
-        if _is_student(user):
-            can_cancel, reason = _student_can_cancel_enrollment(enrollment)
-            if not can_cancel:
-                return Response({'detail': reason}, status=status.HTTP_400_BAD_REQUEST)
         if _is_teacher(user):
             if enrollment.gym_class.end_datetime <= timezone.now():
                 return Response(
@@ -4778,10 +4787,12 @@ class EnrollmentViewSet(ModelViewSet):
         student_plan_id = serializer.validated_data.pop('student_plan_id', None)
         user = self.request.user
         student = serializer.validated_data.get('student')
-        if _is_student(user):
+        if _acts_as_student(user) and (student is None or student.id == user.id):
             student = student or user
+            serializer.validated_data['student'] = student
         requested_status = serializer.validated_data.get('status', 'active')
-        should_validate_plan = requested_status == 'active' or _is_teacher(user) or _is_student(user)
+        is_personal_student_flow = _acts_as_student(user) and student is not None and student.id == user.id
+        should_validate_plan = requested_status == 'active' or _is_teacher(user) or is_personal_student_flow
         gym_class = serializer.validated_data.get('gym_class')
 
         # La autorización va ANTES del atajo por estado. El atajo de `status != 'active'`
@@ -4799,7 +4810,7 @@ class EnrollmentViewSet(ModelViewSet):
                 and (
                     roles.is_org_admin(user)
                     or _is_own_class_teacher(user, gym_class)
-                    or _is_student(user)
+                    or is_personal_student_flow
                 )
             )
         ):
@@ -4808,6 +4819,19 @@ class EnrollmentViewSet(ModelViewSet):
         with transaction.atomic():
             if requested_status != 'active':
                 serializer.save()
+                return
+
+            if is_personal_student_flow:
+                try:
+                    enrollment = reserve_student_in_class(
+                        student=user,
+                        gym_class=serializer.validated_data.get('gym_class'),
+                        require_plan=True,
+                        student_plan_id=student_plan_id,
+                    )
+                except ReservationRuleError as exc:
+                    raise ValidationError(reservation_error_payload(exc))
+                serializer.instance = enrollment
                 return
 
             if _is_superadmin(user) or roles.is_org_admin(user):

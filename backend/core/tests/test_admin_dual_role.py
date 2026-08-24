@@ -398,6 +398,53 @@ def test_admin_can_be_enrolled_in_a_class(api_client, world):
     assert membership.classes_used == 1, 'la reserva del admin consume su plan como la de cualquier alumno'
 
 
+def test_admin_can_reserve_for_self_without_student_payload(api_client, world):
+    """Camino de la pantalla /student/classes: no manda `student`, porque el sujeto es el
+    usuario autenticado."""
+    membership = _membership(world['admin'], _plan(world['org']))
+    gym_class = _gym_class(world)
+    api_client.force_authenticate(world['admin'])
+
+    resp = api_client.post('/api/enrollments/', {
+        'gym_class': gym_class.id, 'status': 'active',
+    }, format='json')
+
+    assert resp.status_code == 201, resp.content
+    assert Enrollment.objects.filter(gym_class=gym_class, student=world['admin']).exists()
+    membership.refresh_from_db()
+    assert membership.classes_used == 1
+
+
+def test_admin_reserving_for_self_cannot_use_admin_started_class_tolerance(api_client, world):
+    _membership(world['admin'], _plan(world['org']))
+    started = _gym_class(
+        world,
+        start=timezone.now() - timedelta(minutes=10),
+        status=GymClass.Status.IN_PROGRESS,
+    )
+    api_client.force_authenticate(world['admin'])
+
+    resp = api_client.post('/api/enrollments/', {
+        'gym_class': started.id, 'status': 'active',
+    }, format='json')
+
+    assert resp.status_code == 400, resp.content
+    assert not Enrollment.objects.filter(gym_class=started, student=world['admin']).exists()
+
+
+def test_admin_canceling_own_reservation_uses_student_deadline(api_client, world, settings):
+    settings.STUDENT_CANCEL_DEADLINE_HOURS = 24
+    gym_class = _gym_class(world, start=timezone.now() + timedelta(hours=1))
+    enrollment = Enrollment.objects.create(gym_class=gym_class, student=world['admin'], status='active')
+    api_client.force_authenticate(world['admin'])
+
+    resp = api_client.post(f'/api/enrollments/{enrollment.id}/cancel/')
+
+    assert resp.status_code == 400, resp.content
+    enrollment.refresh_from_db()
+    assert enrollment.status == 'active'
+
+
 def test_admin_without_a_plan_cannot_reserve(api_client, world):
     """La identidad de alumno no trae privilegios: sin plan vigente el admin choca con la
     misma regla de reserva que un alumno sin plan."""

@@ -41,6 +41,8 @@ export const studentSubjectRoles = ['student', 'gym_admin']
 
 export const studentSubjectRoleParam = studentSubjectRoles.join(',')
 
+export const studentFlowRoles = ['student', 'gym_admin']
+
 export const defaultRouteByRole = (role) => roleRoutes[role] || '/login'
 
 // --- Capacidades (espejo de accounts/roles.py) ---

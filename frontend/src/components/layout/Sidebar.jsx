@@ -150,6 +150,20 @@ const navByRole = {
   ],
   gym_admin: [
     { type: 'item', to: '/gym-admin/dashboard', label: 'Dashboard', icon: <DashboardIcon /> },
+    {
+      type: 'group',
+      label: 'Mi actividad',
+      icon: <QrIcon />,
+      children: [
+        { to: '/student/classes/available', label: 'Clases disponibles' },
+        { to: '/student/classes/reservations', label: 'Mis reservas' },
+        { to: '/student/classes/recurring', label: 'Mis recurrencias' },
+        { to: '/student/classes/history', label: 'Historial' },
+        { to: '/student/plans', label: 'Mis membresías' },
+        { to: '/student/plans/comprar', label: 'Comprar para mí' },
+        { to: '/student/attendance', label: 'Marcar asistencia' },
+      ],
+    },
     { type: 'item', to: '/gym-admin/users', label: 'Usuarios', icon: <UsersIcon /> },
     // P4 · Feature B: buscar un alumno y ver su vista integral (membresías, consumo,
     // asistencia, reservas, recurrencias) en una sola pantalla. Sin id preseleccionado —la

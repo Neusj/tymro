@@ -1081,11 +1081,14 @@ class EnrollmentSerializer(serializers.ModelSerializer):
         request = self.context.get('request')
         user = getattr(request, 'user', None)
 
-        if user and user.is_authenticated and user.role == User.Role.STUDENT:
+        personal_actor_roles = {User.Role.STUDENT, User.Role.GYM_ADMIN}
+        if user and user.is_authenticated and user.role in personal_actor_roles:
             if student and student.id != user.id:
-                raise serializers.ValidationError({'student': 'Solo puedes reservar para tu propio usuario.'})
-            student = user
-            attrs['student'] = user
+                if user.role == User.Role.STUDENT:
+                    raise serializers.ValidationError({'student': 'Solo puedes reservar para tu propio usuario.'})
+            else:
+                student = user
+                attrs['student'] = user
 
         if not student:
             raise serializers.ValidationError({'student': 'El alumno es obligatorio.'})
@@ -1120,9 +1123,17 @@ class EnrollmentSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({'gym_class': 'No puedes reservar una clase cancelada.'})
 
         now = timezone.now()
+        personal_student_subject = (
+            user
+            and user.is_authenticated
+            and user.role in STUDENT_SUBJECT_ROLES
+            and student.id == user.id
+            and user.organization_id == gym_class.organization_id
+        )
         admin_can_enroll_ended = (
             user
             and user.is_authenticated
+            and not personal_student_subject
             and (
                 user.role == User.Role.SUPERADMIN
                 or (
@@ -1857,9 +1868,14 @@ class RecurringEnrollmentSerializer(serializers.ModelSerializer):
         student = attrs.get('student', getattr(instance, 'student', None))
         class_template = attrs.get('class_template', getattr(instance, 'class_template', None))
 
-        if user and user.is_authenticated and user.role == User.Role.STUDENT:
-            student = user
-            attrs['student'] = user
+        personal_actor_roles = {User.Role.STUDENT, User.Role.GYM_ADMIN}
+        if user and user.is_authenticated and user.role in personal_actor_roles:
+            if student and student.id != user.id:
+                if user.role == User.Role.STUDENT:
+                    raise serializers.ValidationError({'student': 'Solo puedes reservar para tu propio usuario.'})
+            else:
+                student = user
+                attrs['student'] = user
 
         if not student:
             raise serializers.ValidationError({'student': 'El alumno es obligatorio.'})
@@ -2039,9 +2055,11 @@ class PlanSerializer(serializers.ModelSerializer):
     def _purchase_quote(self, obj):
         request = self.context.get('request')
         user = getattr(request, 'user', None)
-        if not getattr(user, 'is_authenticated', False) or user.role != User.Role.STUDENT:
-            return None
-        if user.organization_id != obj.organization_id:
+        if not (
+            getattr(user, 'is_authenticated', False)
+            and user.role in STUDENT_SUBJECT_ROLES
+            and user.organization_id == obj.organization_id
+        ):
             return None
         if not hasattr(self, '_purchase_quotes'):
             self._purchase_quotes = {}

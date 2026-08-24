@@ -23,7 +23,7 @@ from .serializers import (PaymentAccountSerializer, PaymentCheckoutRequestSerial
                           PaymentTransactionStatusSerializer)
 from .services import payments
 from .services.providers import get_payment_provider
-from .views import _is_gym_admin, _is_student, _is_superadmin   # helpers de rol existentes
+from .views import _acts_as_student, _is_gym_admin, _is_superadmin   # helpers de rol existentes
 
 logger = logging.getLogger(__name__)
 
@@ -208,7 +208,7 @@ class PaymentCheckoutView(APIView):
 
     def post(self, request):
         user = request.user
-        if not _is_student(user):
+        if not _acts_as_student(user):
             return Response({'detail': 'Solo alumnos pueden pagar.'}, status=status.HTTP_403_FORBIDDEN)
         req = PaymentCheckoutRequestSerializer(data=request.data)
         req.is_valid(raise_exception=True)

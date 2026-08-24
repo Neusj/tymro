@@ -54,9 +54,9 @@ describe('StudentBuyPlanPage', () => {
     renderPage()
 
     // 20000 * (1 - 25%) = 15000; precio original tachado 20000; pill -25%
-    expect(await screen.findByText('$15.000')).toBeInTheDocument()
-    expect(screen.getByText('$20.000')).toBeInTheDocument()
-    expect(screen.getByText('-25%')).toBeInTheDocument()
+    expect(await screen.findAllByText('$15.000')).toHaveLength(2)
+    expect(screen.getAllByText('$20.000')).toHaveLength(2)
+    expect(screen.getByText((_, node) => node?.textContent === 'Descuento -25%')).toBeInTheDocument()
   })
 
   it('al pagar llama a checkout con planId y redirige al init_point', async () => {
