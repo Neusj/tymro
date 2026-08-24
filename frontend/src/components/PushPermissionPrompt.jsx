@@ -55,7 +55,7 @@ export default function PushPermissionPrompt() {
       if (result.ok) {
         setPreferences(result.preferences)
       } else if (result.reason === 'not_configured') {
-        setError('Las notificaciones todavia no estan configuradas para este gimnasio.')
+        setError('Las notificaciones todavia no estan configuradas en el servidor.')
       } else {
         const data = await pushApi.getPreferences()
         setPreferences(data)

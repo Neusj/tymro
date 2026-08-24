@@ -224,6 +224,7 @@ const navByRole = {
         { to: '/ajustes/pagos', label: 'Pagos (MercadoPago)' },
         { to: '/gym-admin/settings/trial-followup', label: 'Emails de prueba' },
         { to: '/gym-admin/settings/expiry-notification', label: 'Avisos de vencimiento' },
+        { to: '/profile', label: 'Notificaciones' },
         { to: '/gym-admin/settings/enrollment-fee', label: 'Matricula anual' },
         { to: '/gym-admin/settings/student-discount', label: 'Descuento estudiante' },
         { to: '/gym-admin/settings/reservation-window', label: 'Anticipacion reservas' },

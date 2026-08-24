@@ -44,6 +44,10 @@ export default function ProfilePage() {
       if (result.ok) {
         setPreferences(result.preferences)
         setMessage('Notificaciones activadas en este dispositivo.')
+      } else if (result.reason === 'not_configured') {
+        const data = await pushApi.getPreferences()
+        setPreferences(data)
+        setError('Las notificaciones todavia no estan configuradas en el servidor.')
       } else {
         const data = await pushApi.getPreferences()
         setPreferences(data)
@@ -74,6 +78,8 @@ export default function ProfilePage() {
 
   const browserPermission = browserNotificationPermission()
   const activeCount = preferences?.active_subscriptions_count || 0
+  const serverConfigured = Boolean(preferences?.vapid_public_key)
+  const activationDisabled = loading || !supported || browserPermission === 'denied' || !serverConfigured
 
   return (
     <section className="max-w-3xl">
@@ -99,7 +105,16 @@ export default function ProfilePage() {
                 <dt className="w-36 shrink-0 text-brand-muted">Navegador</dt>
                 <dd className="text-brand-white">{permissionLabel(browserPermission)}</dd>
               </div>
+              <div className="flex gap-2">
+                <dt className="w-36 shrink-0 text-brand-muted">Servidor</dt>
+                <dd className="text-brand-white">{serverConfigured ? 'Configurado' : 'Configuracion pendiente'}</dd>
+              </div>
             </dl>
+            {preferences && !serverConfigured ? (
+              <p className="mt-4 text-sm text-brand-muted">
+                Falta configurar la llave VAPID de push en produccion.
+              </p>
+            ) : null}
             {message ? <p className="mt-4 text-sm text-emerald-300">{message}</p> : null}
             {error ? <p className="mt-4 text-sm text-brand-red">{error}</p> : null}
           </div>
@@ -107,7 +122,7 @@ export default function ProfilePage() {
             <button
               type="button"
               onClick={activate}
-              disabled={loading || !supported || browserPermission === 'denied'}
+              disabled={activationDisabled}
               className="min-h-10 rounded-lg bg-brand-orange px-3 text-sm font-semibold text-brand-black transition hover:bg-brand-orange/90 disabled:opacity-60"
             >
               Activar

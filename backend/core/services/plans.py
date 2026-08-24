@@ -350,7 +350,10 @@ def _active_freeze_for_date(student_plan, on_date):
     if freezes is None:
         freezes = student_plan.freezes.filter(status=StudentPlanFreeze.Status.ACTIVE)
     for freeze in freezes:
-        if freeze.start_date <= on_date < freeze.planned_end_date:
+        if (
+            freeze.status == StudentPlanFreeze.Status.ACTIVE
+            and freeze.start_date <= on_date < freeze.planned_end_date
+        ):
             return freeze
     return None
 

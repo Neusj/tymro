@@ -134,6 +134,23 @@ def test_freeze_interval_start_is_inclusive_and_end_is_exclusive(setup):
     assert describe_student_plan(membership, TODAY + timedelta(days=1)).status == PlanStatus.ACTIVE
 
 
+def test_completed_prefetched_freeze_does_not_mark_membership_frozen(setup):
+    membership = setup['membership']
+    freeze = _freeze(membership, setup['admin'], days=1)
+    complete_membership_freeze(
+        freeze=freeze,
+        actual_end_date=TODAY,
+        actor=setup['admin'],
+        reason='Liberacion anticipada.',
+    )
+
+    membership = StudentPlan.objects.prefetch_related('freezes').get(pk=membership.pk)
+
+    assert membership.freezes.get().status == StudentPlanFreeze.Status.COMPLETED
+    assert describe_student_plan(membership, TODAY).status == PlanStatus.ACTIVE
+    assert StudentPlanSerializer(membership).data['active_freeze'] is None
+
+
 def test_frozen_membership_stays_in_valid_on_until_freeze_end_even_after_original_expiry(setup):
     membership = setup['membership']
     membership.end_date = TODAY + timedelta(days=2)
