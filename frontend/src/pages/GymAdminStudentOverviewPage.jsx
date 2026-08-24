@@ -74,6 +74,18 @@ function EnrollmentFeeNote({ enrollmentFeeStatus }) {
   return <span className="text-[11px] text-brand-dim">{ENROLLMENT_FEE_LABELS[status] || status}</span>
 }
 
+function displayMembershipStatusLabel(membership) {
+  return membership?.active_freeze ? 'Congelada' : membership?.validity_status_label
+}
+
+function displayMembershipStatusLevel(membership) {
+  return membership?.active_freeze ? 'warning' : membership?.expiry_alert_level
+}
+
+function isVisibleActiveMembership(membership) {
+  return Boolean(membership?.active_freeze) || ['active', 'frozen'].includes(membership?.validity_status)
+}
+
 function DetailButton({ children, onClick, disabled }) {
   return (
     <button
@@ -125,7 +137,7 @@ function MembershipSummaryCard({ membership }) {
           <p className="mt-1 text-xs text-brand-muted">{remaining}</p>
           <p className="text-xs text-brand-dim">Hasta {formatDate(membership.end_date)}</p>
         </div>
-        <PlanAlertBadge level={membership.expiry_alert_level} message={membership.validity_status_label} />
+        <PlanAlertBadge level={displayMembershipStatusLevel(membership)} message={displayMembershipStatusLabel(membership)} />
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <PaymentStatusBadge status={membership.payment_status} />
@@ -289,7 +301,7 @@ function normalizeDetailRows(type, rows = []) {
         plan: item.plan_name || 'Plan',
         vigencia: `${formatDate(item.start_date)} - ${formatDate(item.end_date)}`,
         disponibles: item.unlimited_classes ? 'Ilimitadas' : item.remaining_classes ?? 0,
-        estado: item.validity_status_label || item.validity_status || '-',
+        estado: displayMembershipStatusLabel(item) || item.validity_status || '-',
         pago: PAYMENT_STATUS_LABELS[item.payment_status] || item.payment_status || '-',
         matricula: ENROLLMENT_FEE_LABELS[item.enrollment_fee_status?.status] || item.enrollment_fee_status?.status || '-',
         raw: item,
@@ -408,7 +420,7 @@ function detailColumns(type) {
 
 function buildFallbackSummary(data) {
   const memberships = data?.memberships || []
-  const activeItems = memberships.filter((item) => item.validity_status === 'active')
+  const activeItems = memberships.filter(isVisibleActiveMembership)
   return {
     period: { key: '30d', label: 'Ultimos 30 dias', start_date: null, end_date: null },
     memberships: {

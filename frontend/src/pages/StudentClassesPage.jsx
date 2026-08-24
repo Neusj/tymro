@@ -260,7 +260,15 @@ export default function StudentClassesPage({ mode = 'available' }) {
   // Fuente única de saldo: `getMyMemberships` (no se deriva vigencia/saldo en el cliente).
   // `remaining_classes === null` = ilimitado, así que NUNCA entra en la suma de abajo.
   const usableMemberships = useMemo(
-    () => memberships.filter((item) => item.remaining_classes === null || item.remaining_classes > 0),
+    () => memberships.filter((item) => (
+      item.validity_status === 'active'
+      && !item.active_freeze
+      && (item.remaining_classes === null || item.remaining_classes > 0)
+    )),
+    [memberships],
+  )
+  const frozenMemberships = useMemo(
+    () => memberships.filter((item) => item.active_freeze || item.validity_status === 'frozen'),
     [memberships],
   )
   const hasPlanBalance = usableMemberships.length > 0
@@ -1092,6 +1100,11 @@ export default function StudentClassesPage({ mode = 'available' }) {
       <DashboardHeader title="Student · Mis clases" subtitle="Agenda clara para reservas individuales, multiples y proximas clases." />
 
       <MembershipExpiryBanner memberships={memberships} />
+      {frozenMemberships.length ? (
+        <div className="rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+          Membresia congelada: {frozenMemberships.map((item) => item.plan_name || 'Plan').join(', ')}.
+        </div>
+      ) : null}
 
       {error ? <p className="rounded-lg border border-brand-red/50 bg-brand-red/10 px-3 py-2 text-sm text-red-200">{error}</p> : null}
       {notice ? <p className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">{notice}</p> : null}

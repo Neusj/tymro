@@ -397,9 +397,10 @@ def _membership_summary(memberships):
             'expiry_alert_message': item.get('expiry_alert_message'),
             'payment_status': item.get('payment_status'),
             'enrollment_fee_status': item.get('enrollment_fee_status'),
+            'active_freeze': item.get('active_freeze'),
         }
         for item in memberships
-        if item.get('validity_status') == 'active'
+        if item.get('active_freeze') or item.get('validity_status') in {'active', 'frozen'}
     ]
     return {
         'active_count': len(active),
@@ -739,9 +740,15 @@ class StudentMembershipsDetailView(StudentOverviewDetailBase):
         status_value = str(request.query_params.get('status') or '').strip().lower()
         serialized = list(StudentPlanSerializer(queryset, many=True).data)
         if status_value == 'active':
-            serialized = [row for row in serialized if row.get('validity_status') == 'active']
+            serialized = [
+                row for row in serialized
+                if row.get('active_freeze') or row.get('validity_status') in {'active', 'frozen'}
+            ]
         elif status_value in {'history', 'historical'}:
-            serialized = [row for row in serialized if row.get('validity_status') != 'active']
+            serialized = [
+                row for row in serialized
+                if not row.get('active_freeze') and row.get('validity_status') not in {'active', 'frozen'}
+            ]
 
         rows, page_info = _detail_page(serialized, request)
         return self._paginated_response(rows, page_info)

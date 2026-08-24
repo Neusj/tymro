@@ -119,6 +119,22 @@ const freezeInitialForm = {
   reason: '',
 }
 
+function hasOpenFreeze(membership) {
+  return Boolean(membership?.active_freeze)
+}
+
+function displayStatusLabel(membership) {
+  return hasOpenFreeze(membership) ? 'Congelada' : membership.validity_status_label
+}
+
+function displayStatusLevel(membership) {
+  return hasOpenFreeze(membership) ? 'warning' : membership.expiry_alert_level
+}
+
+function isVisibleAsActive(membership) {
+  return hasOpenFreeze(membership) || ['active', 'frozen'].includes(membership.validity_status)
+}
+
 export default function GymAdminPlanMembershipsPage() {
   const { id } = useParams()
   const [searchParams] = useSearchParams()
@@ -162,13 +178,13 @@ export default function GymAdminPlanMembershipsPage() {
   // KPI decía "12 activas" sobre una tabla de 12 filas que decían "Vencido". El endpoint
   // sigue devolviendo el histórico completo: lo que cambia es qué se cuenta de él.
   const activeCount = useMemo(
-    () => memberships.filter((item) => ['active', 'frozen'].includes(item.validity_status)).length,
+    () => memberships.filter(isVisibleAsActive).length,
     [memberships],
   )
   const displayedMemberships = useMemo(
     () => {
       const base = filter === 'active'
-        ? memberships.filter((item) => ['active', 'frozen'].includes(item.validity_status))
+        ? memberships.filter(isVisibleAsActive)
         : memberships
       return studentFilterId ? base.filter((item) => String(item.user) === String(studentFilterId)) : base
     },
@@ -270,12 +286,12 @@ export default function GymAdminPlanMembershipsPage() {
     setError('')
     setNotice('')
     try {
-      await unfreezePlanMembership(id, unfreezing.id, { reason: 'Descongelamiento anticipado.' })
-      setNotice(`Membresia descongelada para ${unfreezing.user_name || unfreezing.user_email || 'alumno'}.`)
+      await unfreezePlanMembership(id, unfreezing.id, { reason: 'Liberacion anticipada.' })
+      setNotice(`Membresia liberada para ${unfreezing.user_name || unfreezing.user_email || 'alumno'}.`)
       setUnfreezing(null)
       await loadData()
     } catch (apiError) {
-      setError(firstApiError(apiError?.response?.data, 'No se pudo descongelar la membresia.'))
+      setError(firstApiError(apiError?.response?.data, 'No se pudo liberar la membresia.'))
     } finally {
       setWorking(false)
     }
@@ -338,7 +354,7 @@ export default function GymAdminPlanMembershipsPage() {
         // Sigue siendo un chip y no texto pelado: en móvil DataTable manda esta celda a la
         // zona `meta`, que NO aporta estilo propio, así que el color tiene que venir del
         // contenido. La severidad la decide el backend; acá no se deriva nada.
-        render: (row) => <PlanAlertBadge level={row.expiry_alert_level} message={row.validity_status_label} />,
+        render: (row) => <PlanAlertBadge level={displayStatusLevel(row)} message={displayStatusLabel(row)} />,
       },
       {
         key: 'freeze',
@@ -386,7 +402,7 @@ export default function GymAdminPlanMembershipsPage() {
                 onClick={() => setUnfreezing(row)}
                 className="rounded border border-amber-400/50 px-2 py-1 text-xs text-amber-100 disabled:opacity-50"
               >
-                Descongelar
+                Liberar
               </button>
             ) : (
               <button
@@ -409,6 +425,7 @@ export default function GymAdminPlanMembershipsPage() {
             </button>
           </div>
         ),
+        mobilePrimaryReplacesDetail: true,
         mobilePrimary: (row) => (
           <button
             type="button"
@@ -776,9 +793,9 @@ export default function GymAdminPlanMembershipsPage() {
       />
       <ConfirmDialog
         open={Boolean(unfreezing)}
-        title="Descongelar membresia"
+        title="Liberar membresia"
         description={`Se cerrara el congelamiento de ${unfreezing?.user_name || unfreezing?.user_email || 'este alumno'} y se extendera el vencimiento solo por los dias realmente congelados.`}
-        confirmLabel="Descongelar"
+        confirmLabel="Liberar"
         loading={working}
         onCancel={() => setUnfreezing(null)}
         onConfirm={unfreezeMembership}

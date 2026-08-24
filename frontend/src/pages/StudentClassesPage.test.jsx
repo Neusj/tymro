@@ -143,6 +143,32 @@ describe('StudentClassesPage — rango por defecto (#18)', () => {
   })
 })
 
+describe('StudentClassesPage - membresias congeladas', () => {
+  it('no cuenta una membresia congelada como saldo usable para reservar', async () => {
+    getMyMemberships.mockResolvedValue([
+      {
+        id: 1,
+        plan_name: 'Plan congelado',
+        remaining_classes: 10,
+        unlimited_classes: false,
+        validity_status: 'active',
+        validity_status_label: 'Vigente',
+        active_freeze: {
+          id: 9,
+          start_date: '2026-08-20',
+          planned_end_date: '2026-08-30',
+        },
+      },
+    ])
+
+    renderPage('available')
+
+    expect(await screen.findByText(/Membresia congelada: Plan congelado/i)).toBeInTheDocument()
+    expect(await screen.findByText('0 clases')).toBeInTheDocument()
+    expect(screen.queryByText('10 clases')).not.toBeInTheDocument()
+  })
+})
+
 const DAY = 24 * 60 * 60 * 1000
 const isoIn = (ms) => new Date(Date.now() + ms).toISOString()
 

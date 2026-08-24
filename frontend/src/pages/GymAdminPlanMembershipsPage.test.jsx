@@ -295,7 +295,7 @@ describe('GymAdminPlanMembershipsPage — KPI vs columna Estado', () => {
     )
   })
 
-  it('permite descongelar una membresia congelada', async () => {
+  it('permite liberar una membresia congelada', async () => {
     getPlanMemberships.mockResolvedValue([
       membership({
         validity_status: 'frozen',
@@ -317,13 +317,13 @@ describe('GymAdminPlanMembershipsPage — KPI vs columna Estado', () => {
 
     await waitFor(() => expect(shown('Congelada')).toBeGreaterThan(0))
     await userEvent.click(screen.getAllByRole('button', { name: 'Abrir acciones' })[0])
-    await userEvent.click(await screen.findByRole('button', { name: 'Descongelar' }))
-    await userEvent.click(screen.getAllByRole('button', { name: 'Descongelar' }).at(-1))
+    await userEvent.click(await screen.findByRole('button', { name: 'Liberar' }))
+    await userEvent.click(screen.getAllByRole('button', { name: 'Liberar' }).at(-1))
 
     await waitFor(() => expect(unfreezePlanMembership).toHaveBeenCalledWith(
       '7',
       1,
-      expect.objectContaining({ reason: 'Descongelamiento anticipado.' }),
+      expect.objectContaining({ reason: 'Liberacion anticipada.' }),
     ))
   })
 })

@@ -2230,13 +2230,12 @@ class StudentPlanSerializer(serializers.ModelSerializer):
         return str(total)
 
     def get_active_freeze(self, obj):
-        today = timezone.localdate()
         freezes = getattr(obj, '_prefetched_objects_cache', {}).get('freezes')
         if freezes is None:
             freezes = obj.freezes.filter(status=StudentPlanFreeze.Status.ACTIVE)
         current = None
         for freeze in freezes:
-            if freeze.start_date <= today < freeze.planned_end_date:
+            if freeze.status == StudentPlanFreeze.Status.ACTIVE:
                 current = freeze
                 break
         if current is None:

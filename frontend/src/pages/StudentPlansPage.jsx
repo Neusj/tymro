@@ -23,6 +23,18 @@ function firstApiError(detail, fallback) {
   return fallback
 }
 
+function displayStatusLabel(row) {
+  return row?.active_freeze ? 'Congelada' : row?.validity_status_label
+}
+
+function displayStatusLevel(row) {
+  return row?.active_freeze ? 'warning' : row?.expiry_alert_level
+}
+
+function displayAlertMessage(row) {
+  return row?.active_freeze ? 'Membresia congelada' : row?.expiry_alert_message
+}
+
 export default function StudentPlansPage() {
   const [plans, setPlans] = useState([])
   const [loading, setLoading] = useState(true)
@@ -93,13 +105,13 @@ export default function StudentPlansPage() {
         // Sigue siendo un chip y no texto pelado: en móvil DataTable manda esta celda a la
         // zona `meta`, que NO aporta estilo propio, así que el color tiene que venir del
         // contenido. La severidad la decide el backend; acá no se deriva nada.
-        render: (row) => <PlanAlertBadge level={row.expiry_alert_level} message={row.validity_status_label} />,
+        render: (row) => <PlanAlertBadge level={displayStatusLevel(row)} message={displayStatusLabel(row)} />,
       },
       {
         key: 'alert',
         label: 'Alerta',
         sortable: false,
-        render: (row) => <PlanAlertBadge level={row.expiry_alert_level} message={row.expiry_alert_message} />,
+        render: (row) => <PlanAlertBadge level={displayStatusLevel(row)} message={displayAlertMessage(row)} />,
       },
       {
         key: 'matricula',

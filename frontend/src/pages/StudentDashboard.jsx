@@ -46,6 +46,9 @@ export default function StudentDashboard() {
   // último día del plan la tarjeta decía "Vencido" mientras el backend —y la reserva— lo
   // seguían aceptando. El estado lo resuelve `describe_student_plan` y viaja ya etiquetado.
   const remaining = Math.max((myPlan?.total_classes || 0) - (myPlan?.classes_used || 0), 0)
+  const statusLabel = myPlan?.active_freeze ? 'Congelada' : myPlan?.validity_status_label
+  const statusLevel = myPlan?.active_freeze ? 'warning' : myPlan?.expiry_alert_level
+  const statusMessage = myPlan?.active_freeze ? 'Membresia congelada' : myPlan?.expiry_alert_message
   const usagePercent = myPlan?.total_classes ? Math.round(((myPlan?.classes_used || 0) / myPlan.total_classes) * 100) : 0
 
   const progressClass = useMemo(() => {
@@ -94,9 +97,9 @@ export default function StudentDashboard() {
                 </div>
                 <div className="rounded-xl border border-brand-line p-3">
                   <p className="text-xs uppercase tracking-wide text-brand-muted">Estado</p>
-                  <p className="mt-1 text-sm font-semibold">{myPlan.validity_status_label || '-'}</p>
+                  <p className="mt-1 text-sm font-semibold">{statusLabel || '-'}</p>
                   <span className="mt-2 block">
-                    <PlanAlertBadge level={myPlan.expiry_alert_level} message={myPlan.expiry_alert_message} />
+                    <PlanAlertBadge level={statusLevel} message={statusMessage} />
                   </span>
                 </div>
                 <div className="rounded-xl border border-brand-line p-3">

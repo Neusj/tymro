@@ -105,6 +105,19 @@ describe('StudentPlansPage — estado de la membresía', () => {
     expect(shown('20 dias vigentes')).toBeGreaterThan(0)
   })
 
+  it('muestra "Congelada" si hay congelamiento abierto aunque el backend marque Vigente', async () => {
+    getMyMemberships.mockResolvedValue([
+      membership({
+        active_freeze: { id: 5, start_date: '2026-08-20', planned_end_date: '2026-08-30' },
+      }),
+    ])
+
+    renderPage()
+
+    await waitFor(() => expect(shown('Congelada')).toBeGreaterThan(0))
+    expect(shown('Vigente')).toBe(0)
+  })
+
   it('el Estado se pinta como chip con color, no como texto pelado', async () => {
     // En móvil DataTable manda esta celda a la zona `meta`, que no aporta estilo: si el
     // render devuelve un string, la tarjeta se queda SIN ninguna señal de color.

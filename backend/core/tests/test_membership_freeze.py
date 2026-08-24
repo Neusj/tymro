@@ -21,6 +21,7 @@ from core.services.membership_freezes import (
     complete_membership_freeze,
     create_membership_freeze,
 )
+from core.serializers import StudentPlanSerializer
 from core.services.plans import PlanStatus, describe_student_plan
 from core.services.recurrence import create_enrollments_for_recurring_subscription
 from core.services.reservations import ReservationRuleError, reserve_student_in_class
@@ -205,6 +206,19 @@ def test_freeze_api_permissions(api_client, setup):
     api_client.force_authenticate(setup['teacher'])
     teacher_response = api_client.post(other_url, payload, format='json')
     assert teacher_response.status_code == 403
+
+
+def test_serializer_exposes_open_freeze_before_start_date(setup):
+    membership = setup['membership']
+    _freeze(membership, setup['admin'], start=TODAY + timedelta(days=3), days=7)
+    membership.refresh_from_db()
+
+    data = StudentPlanSerializer(membership).data
+
+    assert describe_student_plan(membership, TODAY).status == PlanStatus.ACTIVE
+    assert data['validity_status'] == PlanStatus.ACTIVE
+    assert data['validity_status_label'] == 'Vigente'
+    assert data['active_freeze']['start_date'] == (TODAY + timedelta(days=3)).isoformat()
 
 
 def test_freeze_rejects_invalid_states_and_second_active_freeze(setup):
