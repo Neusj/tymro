@@ -51,13 +51,169 @@ const MANUAL_METHOD_OPTIONS = [
   { value: 'check', label: 'Cheque' },
 ]
 
+const STUDENT_SEARCH_DEBOUNCE_MS = 300
+const STUDENT_SEARCH_MIN_CHARS = 2
+const STUDENT_SEARCH_LIMIT = 15
+
+function studentName(item = {}) {
+  return item.name || `${item.first_name || ''} ${item.last_name || ''}`.trim() || item.username || 'Alumno'
+}
+
+function StudentAutocomplete({ disabled, organizationId, selectedStudent, onSelect }) {
+  const [query, setQuery] = useState('')
+  const [results, setResults] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [open, setOpen] = useState(false)
+  const requestIdRef = useRef(0)
+  const lastSubmittedRef = useRef('')
+  const trimmedQuery = query.trim()
+  const canSearch = trimmedQuery.length >= STUDENT_SEARCH_MIN_CHARS
+
+  useEffect(() => {
+    if (disabled || !canSearch) {
+      requestIdRef.current += 1
+      lastSubmittedRef.current = ''
+      setResults([])
+      setLoading(false)
+      setError('')
+      return
+    }
+
+    const requestId = requestIdRef.current + 1
+    requestIdRef.current = requestId
+    setOpen(true)
+    setLoading(true)
+    setError('')
+
+    const timer = window.setTimeout(() => {
+      if (lastSubmittedRef.current === trimmedQuery) {
+        setLoading(false)
+        return
+      }
+      lastSubmittedRef.current = trimmedQuery
+      const params = {
+        role: studentSubjectRoleParam,
+        search: trimmedQuery,
+        limit: STUDENT_SEARCH_LIMIT,
+      }
+      if (organizationId) {
+        params.organization_id = organizationId
+      }
+      usersApi
+        .list(params)
+        .then((response) => {
+          if (requestIdRef.current !== requestId) return
+          setResults(toList(response))
+        })
+        .catch((apiError) => {
+          if (requestIdRef.current !== requestId) return
+          setResults([])
+          setError(firstApiError(apiError?.response?.data, 'No se pudo buscar alumnos.'))
+        })
+        .finally(() => {
+          if (requestIdRef.current === requestId) {
+            setLoading(false)
+          }
+        })
+    }, STUDENT_SEARCH_DEBOUNCE_MS)
+
+    return () => {
+      window.clearTimeout(timer)
+    }
+  }, [canSearch, disabled, organizationId, trimmedQuery])
+
+  const pickStudent = (student) => {
+    onSelect(student)
+    setQuery('')
+    setResults([])
+    setError('')
+    setOpen(false)
+  }
+
+  const clearStudent = () => {
+    onSelect(null)
+    setQuery('')
+    setResults([])
+    setError('')
+    setOpen(false)
+  }
+
+  return (
+    <div className="space-y-2 md:col-span-2">
+      <label className="block space-y-1 text-sm" htmlFor="assign-plan-student-search">
+        <span>Alumno</span>
+        <input
+          id="assign-plan-student-search"
+          type="search"
+          disabled={disabled}
+          value={query}
+          onChange={(event) => {
+            setQuery(event.target.value)
+            setOpen(true)
+          }}
+          onFocus={() => setOpen(true)}
+          placeholder="Buscar por nombre, apellido o correo"
+          className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
+          autoComplete="off"
+        />
+      </label>
+      {selectedStudent ? (
+        <div className="flex flex-col gap-2 rounded-lg border border-brand-blue/40 bg-brand-blue/10 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold text-brand-white">{studentName(selectedStudent)}</p>
+            <p className="truncate text-xs text-brand-muted">{selectedStudent.email || 'Sin correo'}</p>
+          </div>
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={clearStudent}
+            className="self-start rounded-lg border border-brand-line px-2.5 py-1.5 text-xs font-semibold text-brand-white disabled:opacity-60 sm:self-auto"
+          >
+            Cambiar
+          </button>
+        </div>
+      ) : null}
+      {open && query ? (
+        <div className="overflow-hidden rounded-xl border border-brand-line bg-brand-panel shadow-float">
+          {!canSearch ? (
+            <p className="px-3 py-2 text-xs text-brand-muted">Escribe al menos {STUDENT_SEARCH_MIN_CHARS} caracteres.</p>
+          ) : loading ? (
+            <p className="px-3 py-2 text-xs text-brand-muted">Buscando...</p>
+          ) : error ? (
+            <p className="px-3 py-2 text-xs text-red-200">{error}</p>
+          ) : results.length === 0 ? (
+            <p className="px-3 py-2 text-xs text-brand-muted">Sin resultados</p>
+          ) : (
+            <ul className="max-h-72 overflow-y-auto py-1">
+              {results.map((student) => (
+                <li key={student.id}>
+                  <button
+                    type="button"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => pickStudent(student)}
+                    className="block w-full px-3 py-2 text-left transition hover:bg-brand-soft focus:bg-brand-soft focus:outline-none"
+                  >
+                    <span className="block truncate text-sm font-semibold text-brand-white">{studentName(student)}</span>
+                    <span className="block truncate text-xs text-brand-muted">{student.email || 'Sin correo'}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 export default function AssignPlanPage() {
   const { user } = useAuth()
   // Solo el admin del gimnasio puede declarar un pago manual: el backend lo rechaza (400)
   // si un superadmin lo intenta, asi que ni se le muestra la opcion (UX, no la restriccion real).
   const isSuperadmin = user?.role === 'superadmin'
   const [searchParams] = useSearchParams()
-  const [students, setStudents] = useState([])
+  const [selectedStudent, setSelectedStudent] = useState(null)
   const [plans, setPlans] = useState([])
   const [loading, setLoading] = useState(true)
   const [working, setWorking] = useState(false)
@@ -91,6 +247,7 @@ export default function AssignPlanPage() {
   })
 
   const paymentVia = isSuperadmin ? 'free' : paymentMethod
+  const organizationId = searchParams.get('organization_id') || ''
 
   const selectVia = (via) => {
     setPaymentMethod(via)
@@ -149,19 +306,19 @@ export default function AssignPlanPage() {
     setLoading(true)
     setError('')
     try {
-      const organizationId = searchParams.get('organization_id') || ''
       const preselectedUserId = searchParams.get('user_id') || ''
-      const params = {}
-      if (organizationId) {
-        params.organization_id = organizationId
-      }
-      const [usersData, plansData] = await Promise.all([usersApi.list({ ...params, role: studentSubjectRoleParam }), getPlans()])
-      const userList = toList(usersData)
+      const [preselectedUser, plansData] = await Promise.all([
+        preselectedUserId ? usersApi.retrieve(preselectedUserId) : Promise.resolve(null),
+        getPlans(),
+      ])
       const planList = toList(plansData)
-      setStudents(userList)
       setPlans(planList.filter((item) => item.is_active))
-      if (preselectedUserId && userList.some((item) => String(item.id) === String(preselectedUserId))) {
+      if (preselectedUser?.id) {
+        setSelectedStudent(preselectedUser)
         setForm((prev) => ({ ...prev, user: String(preselectedUserId) }))
+      } else {
+        setSelectedStudent(null)
+        setForm((prev) => ({ ...prev, user: '' }))
       }
     } catch (apiError) {
       setError(firstApiError(apiError?.response?.data, 'No se pudieron cargar alumnos o planes.'))
@@ -274,6 +431,7 @@ export default function AssignPlanPage() {
       await assignPlanToUser(payload)
       setNotice('Plan asignado correctamente.')
       setForm((prev) => ({ ...prev, user: '' }))
+      setSelectedStudent(null)
       setLineItems([])
     } catch (apiError) {
       setError(firstApiError(apiError?.response?.data, 'No se pudo asignar el plan.'))
@@ -331,23 +489,15 @@ export default function AssignPlanPage() {
 
       <section className="card-surface overflow-hidden p-5">
         <form onSubmit={submit} className="grid min-w-0 gap-3 md:grid-cols-2">
-          <label className="space-y-1 text-sm md:col-span-2">
-            <span>Alumno</span>
-            <select
-              required
-              disabled={loading || working}
-              value={form.user}
-              onChange={(event) => setForm((prev) => ({ ...prev, user: event.target.value }))}
-              className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
-            >
-              <option value="">Seleccionar alumno</option>
-              {students.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {`${item.first_name || ''} ${item.last_name || ''}`.trim() || item.username}
-                </option>
-              ))}
-            </select>
-          </label>
+          <StudentAutocomplete
+            disabled={loading || working}
+            organizationId={organizationId}
+            selectedStudent={selectedStudent}
+            onSelect={(student) => {
+              setSelectedStudent(student)
+              setForm((prev) => ({ ...prev, user: student?.id ? String(student.id) : '' }))
+            }}
+          />
           <label className="space-y-1 text-sm md:col-span-2">
             <span>Plan</span>
             <select

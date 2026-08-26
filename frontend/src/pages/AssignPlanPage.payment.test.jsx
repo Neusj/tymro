@@ -7,7 +7,7 @@ vi.mock('../api/client', () => ({
   assignPlanToUser: vi.fn(),
   getPlans: vi.fn(),
   quotePlanAssignment: vi.fn(),
-  usersApi: { list: vi.fn() },
+  usersApi: { list: vi.fn(), retrieve: vi.fn() },
 }))
 
 let mockUser
@@ -18,7 +18,7 @@ vi.mock('../auth/AuthContext', () => ({
 import { assignPlanToUser, getPlans, quotePlanAssignment, usersApi } from '../api/client'
 import AssignPlanPage from './AssignPlanPage'
 
-const student = { id: 7, first_name: 'Ana', last_name: 'López', username: 'ana' }
+const student = { id: 7, first_name: 'Ana', last_name: 'López', username: 'ana', email: 'ana@test.local' }
 const activePlan = {
   id: 3,
   name: 'Pack 10',
@@ -34,8 +34,9 @@ function renderPage() {
 }
 
 async function fillUserAndPlan() {
-  await screen.findByRole('option', { name: 'Ana López' })
-  await userEvent.selectOptions(screen.getByLabelText('Alumno'), '7')
+  await screen.findByRole('option', { name: 'Pack 10' })
+  await userEvent.type(screen.getByLabelText('Alumno'), 'Ana')
+  await userEvent.click(await screen.findByRole('button', { name: /Ana/i }))
   await userEvent.selectOptions(screen.getByLabelText('Plan'), '3')
 }
 

@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
@@ -6,7 +7,7 @@ vi.mock('../api/client', () => ({
   assignPlanToUser: vi.fn(),
   getPlans: vi.fn(),
   quotePlanAssignment: vi.fn(),
-  usersApi: { list: vi.fn() },
+  usersApi: { list: vi.fn(), retrieve: vi.fn() },
 }))
 vi.mock('../auth/AuthContext', () => ({
   useAuth: () => ({ user: { role: 'gym_admin' } }),
@@ -18,6 +19,7 @@ import AssignPlanPage from './AssignPlanPage'
 beforeEach(() => {
   vi.clearAllMocks()
   usersApi.list.mockResolvedValue([])
+  usersApi.retrieve.mockResolvedValue(null)
   getPlans.mockResolvedValue([])
   quotePlanAssignment.mockResolvedValue({
     plan_amount: '0.00',
@@ -30,6 +32,67 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers()
+})
+
+describe('AssignPlanPage - buscador de alumnos', () => {
+  it.each([
+    ['nombre', 'Javier'],
+    ['correo', 'javier@test.local'],
+  ])('busca alumnos server-side por %s', async (_label, query) => {
+    usersApi.list.mockResolvedValue([
+      { id: 55, first_name: 'Javier', last_name: 'Neus', username: 'jneus', email: 'javier@test.local' },
+    ])
+
+    render(
+      <MemoryRouter initialEntries={['/gym-admin/plans/assign?organization_id=9']}>
+        <AssignPlanPage />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(screen.getByLabelText('Alumno')).toBeEnabled())
+    await userEvent.type(screen.getByLabelText('Alumno'), query)
+
+    await waitFor(() =>
+      expect(usersApi.list).toHaveBeenLastCalledWith({
+        organization_id: '9',
+        role: 'student,gym_admin',
+        search: query,
+        limit: 15,
+      }),
+    )
+    expect(await screen.findByText('Javier Neus')).toBeInTheDocument()
+    expect(screen.getByText('javier@test.local')).toBeInTheDocument()
+  })
+
+  it('no consulta alumnos con menos de dos caracteres', async () => {
+    render(<MemoryRouter><AssignPlanPage /></MemoryRouter>)
+
+    await waitFor(() => expect(screen.getByLabelText('Alumno')).toBeEnabled())
+    await userEvent.type(screen.getByLabelText('Alumno'), 'J')
+
+    expect(screen.getByText('Escribe al menos 2 caracteres.')).toBeInTheDocument()
+    expect(usersApi.list).not.toHaveBeenCalled()
+  })
+
+  it('mantiene el alumno preseleccionado por user_id', async () => {
+    usersApi.retrieve.mockResolvedValue({
+      id: 7,
+      first_name: 'Ana',
+      last_name: 'Lopez',
+      username: 'ana',
+      email: 'ana@test.local',
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/gym-admin/plans/assign?user_id=7']}>
+        <AssignPlanPage />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(usersApi.retrieve).toHaveBeenCalledWith('7'))
+    expect(await screen.findByText('Ana Lopez')).toBeInTheDocument()
+    expect(screen.getByText('ana@test.local')).toBeInTheDocument()
+  })
 })
 
 describe('AssignPlanPage — fecha de inicio propuesta', () => {
