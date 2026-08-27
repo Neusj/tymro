@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { branchesApi, classTemplatesApi, classTypesApi, disciplinesApi, usersApi } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import BulkActionModal from '../components/BulkActionModal'
@@ -76,6 +77,7 @@ function substitutePayload(form) {
 
 export default function GymAdminClassTemplatesPage() {
   const { user } = useAuth()
+  const navigate = useNavigate()
   // Borrar una serie es solo de gym_admin/superadmin (el backend le da 403 al manager por
   // las dos vias, ver ClassTemplateViewSet). Sin esto el manager veia un boton y una accion
   // masiva que siempre fallaban.
@@ -302,6 +304,10 @@ export default function GymAdminClassTemplatesPage() {
     }
   }
 
+  const openTemplateHistory = (row) => {
+    navigate(`/gym-admin/class-templates/${row.id}/history`)
+  }
+
 
   const columns = useMemo(
     () => [
@@ -338,6 +344,13 @@ export default function GymAdminClassTemplatesPage() {
         sortable: false,
         render: (row) => (
           <>
+            <button
+              type="button"
+              onClick={() => openTemplateHistory(row)}
+              className="w-full rounded-lg border border-brand-blue/40 px-2.5 py-1.5 text-left text-xs text-blue-100 disabled:opacity-60"
+            >
+              Ver historial
+            </button>
             <button
               type="button"
               disabled={workingId === row.id}
@@ -669,6 +682,7 @@ export default function GymAdminClassTemplatesPage() {
           selectedRowIds={selectedIds}
           onSelectedRowIdsChange={setSelectedIds}
           defaultSort={{ key: 'start_date', direction: 'asc' }}
+          onRowClick={openTemplateHistory}
         />
         </section>
       ) : null}

@@ -294,6 +294,29 @@ def test_class_template_list_exposes_delete_guard_reason(api_client, setup):
     assert item['delete_block_reason'] == 'La serie tiene recurrencias de alumnos asociadas.'
 
 
+def test_classes_list_filters_instances_by_class_template(api_client, setup):
+    other = _template(setup['org'], setup['branch'], setup['teacher'], name='Otra serie')
+    start = timezone.now() - timedelta(days=7)
+    target_class = GymClass.objects.create(
+        organization=setup['org'], branch=setup['branch'], teacher=setup['teacher'],
+        class_template=setup['template'], name='Clase del historial',
+        start_datetime=start, end_datetime=start + timedelta(hours=1), capacity=10,
+        status=GymClass.Status.COMPLETED,
+    )
+    GymClass.objects.create(
+        organization=setup['org'], branch=setup['branch'], teacher=setup['teacher'],
+        class_template=other, name='Clase de otra serie',
+        start_datetime=start, end_datetime=start + timedelta(hours=1), capacity=10,
+        status=GymClass.Status.COMPLETED,
+    )
+    _login(api_client, 'admin')
+
+    resp = api_client.get(f'/api/classes/?class_template={setup["template"].id}')
+
+    assert resp.status_code == 200, resp.content
+    assert [row['id'] for row in resp.json()] == [target_class.id]
+
+
 def test_bulk_delete_still_skips_a_series_with_history(api_client, setup):
     """Misma guarda por la vía masiva: se reporta en `skipped`, no se borra."""
     start = timezone.now() - timedelta(days=2)

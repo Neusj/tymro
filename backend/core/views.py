@@ -3370,6 +3370,10 @@ class GymClassViewSet(ModelViewSet):
         discipline = self.request.query_params.get('discipline')
         teacher_id = self.request.query_params.get('teacher_id')
         branch_id = self.request.query_params.get('branch_id')
+        class_template_id = (
+            self.request.query_params.get('class_template')
+            or self.request.query_params.get('class_template_id')
+        )
         has_series = self.request.query_params.get('has_series')
         has_substitute = self.request.query_params.get('has_substitute')
 
@@ -3391,6 +3395,10 @@ class GymClassViewSet(ModelViewSet):
             queryset = queryset.filter(teacher_id=teacher_id)
         if branch_id:
             queryset = queryset.filter(branch_id=branch_id)
+        if class_template_id:
+            if not str(class_template_id).isdigit():
+                return queryset.none()
+            queryset = queryset.filter(class_template_id=class_template_id)
         if start_date_from:
             queryset = queryset.filter(start_datetime__date__gte=start_date_from)
         if start_date_to:

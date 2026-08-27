@@ -422,6 +422,10 @@ export const classTemplatesApi = {
     const { data } = await api.get('/class-templates/', { params })
     return data
   },
+  retrieve: async (id) => {
+    const { data } = await api.get(`/class-templates/${id}/`)
+    return data
+  },
   create: async (payload) => {
     const { data } = await api.post('/class-templates/', payload)
     return data

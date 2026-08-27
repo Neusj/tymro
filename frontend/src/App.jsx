@@ -5,6 +5,7 @@ import OfflineBanner from './components/OfflineBanner'
 import GymAdminClassCreatePage from './pages/GymAdminClassCreatePage'
 import GymAdminClassDetailPage from './pages/GymAdminClassDetailPage'
 import GymAdminClassEditPage from './pages/GymAdminClassEditPage'
+import GymAdminClassTemplateHistoryPage from './pages/GymAdminClassTemplateHistoryPage'
 import GymAdminClassTemplatesPage from './pages/GymAdminClassTemplatesPage'
 import GymAdminClassesPage from './pages/GymAdminClassesPage'
 import GymAdminClassTypesPage from './pages/GymAdminClassTypesPage'
@@ -307,6 +308,16 @@ export default function App() {
           <ProtectedRoute allowedRoles={['gym_admin', 'manager']}>
             <ShellRoute>
               <GymAdminClassTemplatesPage />
+            </ShellRoute>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/gym-admin/class-templates/:id/history"
+        element={
+          <ProtectedRoute allowedRoles={['gym_admin', 'manager']}>
+            <ShellRoute>
+              <GymAdminClassTemplateHistoryPage />
             </ShellRoute>
           </ProtectedRoute>
         }

@@ -45,6 +45,14 @@ function getRowId(row, rowIdKey) {
   return row?.[rowIdKey]
 }
 
+function isInteractiveRowTarget(target) {
+  return Boolean(
+    target?.closest?.(
+      'a, button, input, select, textarea, label, summary, [role="button"], [data-row-click-ignore="true"]',
+    ),
+  )
+}
+
 function isSortableColumn(column) {
   if (isActionsColumn(column)) {
     return false
@@ -115,6 +123,7 @@ export default function DataTable({
   selectAllScope = 'page',
   maxBodyHeight,            // ej: '28rem' | '480px' | '60vh'; undefined = comportamiento actual
   disablePagination = false,
+  onRowClick,
 }) {
   const [query, setQuery] = useState('')
   const [debouncedQuery, setDebouncedQuery] = useState('')
@@ -214,6 +223,23 @@ export default function DataTable({
       }
       return { key: column.key, direction: 'asc' }
     })
+  }
+
+  const handleRowInteraction = (event, row) => {
+    if (!onRowClick || isInteractiveRowTarget(event.target)) {
+      return
+    }
+    onRowClick(row)
+  }
+
+  const handleRowKeyDown = (event, row) => {
+    if (!onRowClick || isInteractiveRowTarget(event.target)) {
+      return
+    }
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      onRowClick(row)
+    }
   }
 
   const toggleAllVisible = (checked) => {
@@ -373,7 +399,13 @@ export default function DataTable({
                 {paginatedData.map((row, index) => {
                   const rowId = getRowId(row, rowIdKey)
                   return (
-                    <tr key={rowId || `${index}-${row?.name || 'row'}`} className="transition-colors hover:bg-brand-soft/50">
+                    <tr
+                      key={rowId || `${index}-${row?.name || 'row'}`}
+                      tabIndex={onRowClick ? 0 : undefined}
+                      onClick={(event) => handleRowInteraction(event, row)}
+                      onKeyDown={(event) => handleRowKeyDown(event, row)}
+                      className={`transition-colors hover:bg-brand-soft/50 ${onRowClick ? 'cursor-pointer focus:outline-none focus:ring-1 focus:ring-brand-blue/60' : ''}`}
+                    >
                       {selectableRows ? (
                         <td className="border-b border-brand-line/60 px-4 py-3 text-sm text-brand-white">
                           <input type="checkbox" className="h-4 w-4 accent-brand-blue" checked={selectedRowIds.includes(rowId)} onChange={(event) => toggleSingle(rowId, event.target.checked)} />
@@ -411,7 +443,10 @@ export default function DataTable({
               return (
                 <article
                   key={rowId || `${index}-${row?.name || 'card'}`}
-                  className={`flex flex-col rounded-xl border bg-brand-panel/70 p-3.5 transition ${isSelected ? 'border-brand-blue/70 ring-1 ring-brand-blue/40' : 'border-brand-line'}`}
+                  tabIndex={onRowClick ? 0 : undefined}
+                  onClick={(event) => handleRowInteraction(event, row)}
+                  onKeyDown={(event) => handleRowKeyDown(event, row)}
+                  className={`flex flex-col rounded-xl border bg-brand-panel/70 p-3.5 transition ${onRowClick ? 'cursor-pointer focus:outline-none focus:ring-1 focus:ring-brand-blue/60' : ''} ${isSelected ? 'border-brand-blue/70 ring-1 ring-brand-blue/40' : 'border-brand-line'}`}
                 >
                   {/* Title row: name + status chips + (optional) select */}
                   <div className="flex items-start justify-between gap-2">
