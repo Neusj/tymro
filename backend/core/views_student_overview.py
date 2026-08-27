@@ -271,6 +271,41 @@ def _class_summary(gym_class):
     }
 
 
+def _enrollment_summary(enrollment):
+    if enrollment is None:
+        return None
+    return {
+        'id': enrollment.id,
+        'created_at': enrollment.created_at,
+        'created_by': enrollment.created_by_id,
+        'created_by_name': _full_name(enrollment.created_by) if enrollment.created_by_id else None,
+        'created_by_role': enrollment.created_by.role if enrollment.created_by_id else None,
+        'created_by_is_student': bool(
+            enrollment.created_by_id and enrollment.created_by_id == enrollment.student_id
+        ),
+    }
+
+
+def _enrollment_map_for_consumption_logs(logs, org_id):
+    class_ids = {log.class_instance_id for log in logs if log.class_instance_id}
+    student_ids = {log.user_id for log in logs if log.class_instance_id}
+    if not class_ids or not student_ids:
+        return {}
+    enrollments = (
+        Enrollment.objects
+        .filter(
+            gym_class_id__in=class_ids,
+            student_id__in=student_ids,
+            gym_class__organization_id=org_id,
+        )
+        .select_related('created_by')
+    )
+    return {
+        (enrollment.gym_class_id, enrollment.student_id): enrollment
+        for enrollment in enrollments
+    }
+
+
 def _personalized_session_summary(session):
     if session is None:
         return None
@@ -312,12 +347,15 @@ def _plan_name_of(student_plan, org_id):
     return student_plan.plan.name
 
 
-def _consumption_row(log, org_id):
+def _consumption_row(log, org_id, enrollment_by_key=None):
     class_payload = (
         _personalized_session_summary(log.personalized_session)
         if log.personalized_session_id
         else _class_summary(log.class_instance)
     )
+    enrollment = None
+    if log.class_instance_id and enrollment_by_key:
+        enrollment = enrollment_by_key.get((log.class_instance_id, log.user_id))
     return {
         'id': log.id,
         'consumed_at': log.consumed_at,
@@ -325,6 +363,7 @@ def _consumption_row(log, org_id):
         'plan_name': _plan_name_of(log.student_plan, org_id),
         'class': class_payload,
         'class_kind': 'personalized' if log.personalized_session_id else 'normal',
+        'enrollment': _enrollment_summary(enrollment),
     }
 
 
@@ -353,6 +392,7 @@ def _reservation_row(enrollment, org_id):
         'created_at': enrollment.created_at,
         'plan_name': _plan_name_of(enrollment.student_plan, org_id),
         'class': _class_summary(enrollment.gym_class),
+        'enrollment': _enrollment_summary(enrollment),
     }
 
 
@@ -448,6 +488,7 @@ def _overview_summary(*, memberships, recurring_qs, student_id, org_id, period):
             gym_class__start_datetime__gte=now,
         )
         .select_related('gym_class', 'gym_class__discipline', 'gym_class__teacher', 'student_plan__plan')
+        .select_related('created_by')
         .order_by('gym_class__start_datetime', 'id')
     )
     upcoming = list(future_reservations[:SUMMARY_PREVIEW_LIMIT])
@@ -580,6 +621,7 @@ class StudentOverviewView(APIView):
             .order_by('-consumed_at', '-id')
         )
         consumption_rows, consumption_has_more = _paged(consumption_qs, consumption_limit)
+        consumption_enrollments = _enrollment_map_for_consumption_logs(consumption_rows, org_id)
 
         attendance_qs = (
             Attendance.objects
@@ -603,6 +645,7 @@ class StudentOverviewView(APIView):
             .filter(student_id=student.id, gym_class__organization_id=org_id)
             .select_related(
                 'gym_class', 'gym_class__discipline', 'gym_class__teacher', 'student_plan__plan',
+                'created_by',
             )
             .order_by('-gym_class__start_datetime', '-id')
         )
@@ -642,7 +685,10 @@ class StudentOverviewView(APIView):
             ),
             'memberships': memberships,
             'consumption': {
-                'items': [_consumption_row(row, org_id) for row in consumption_rows],
+                'items': [
+                    _consumption_row(row, org_id, consumption_enrollments)
+                    for row in consumption_rows
+                ],
                 'limit': consumption_limit,
                 'has_more': consumption_has_more,
             },
@@ -681,6 +727,7 @@ class StudentReservationsDetailView(StudentOverviewDetailBase):
             .filter(student_id=student.id, gym_class__organization_id=org_id)
             .select_related(
                 'gym_class', 'gym_class__discipline', 'gym_class__teacher', 'student_plan__plan',
+                'created_by',
             )
         )
         status_value = request.query_params.get('status')
@@ -791,7 +838,11 @@ class StudentConsumptionDetailView(StudentOverviewDetailBase):
             queryset = queryset.filter(consumed_at__date__lte=date_to)
 
         rows, page_info = _detail_page(queryset.order_by('-consumed_at', '-id'), request)
-        return self._paginated_response([_consumption_row(row, org_id) for row in rows], page_info)
+        consumption_enrollments = _enrollment_map_for_consumption_logs(rows, org_id)
+        return self._paginated_response(
+            [_consumption_row(row, org_id, consumption_enrollments) for row in rows],
+            page_info,
+        )
 
 
 class StudentMembershipsDetailView(StudentOverviewDetailBase):

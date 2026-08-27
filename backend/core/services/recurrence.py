@@ -169,6 +169,7 @@ def _create_enrollment_if_possible(*, recurring_enrollment, gym_class):
             student=recurring_enrollment.student,
             gym_class=gym_class,
             recurring_enrollment=recurring_enrollment,
+            created_by=recurring_enrollment.created_by,
             require_plan=True,
             student_plan_id=student_plan_id,
         )

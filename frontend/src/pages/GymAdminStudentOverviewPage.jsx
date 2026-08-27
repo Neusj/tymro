@@ -63,6 +63,13 @@ function formatDateTime(value) {
   return date.toLocaleString('es-CL', { dateStyle: 'medium', timeStyle: 'short' })
 }
 
+function formatDateOnly(value) {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '-'
+  return date.toLocaleDateString('es-CL', { dateStyle: 'medium' })
+}
+
 function formatDateTimeRange(startValue, endValue) {
   if (!startValue) return '-'
   const start = new Date(startValue)
@@ -80,6 +87,12 @@ function formatDateTimeRange(startValue, endValue) {
 
 function formatTime(value) {
   return value ? value.slice(0, 5) : '-'
+}
+
+function enrolledByLabel(enrollment) {
+  if (!enrollment) return '-'
+  if (enrollment.created_by_is_student) return 'El mismo alumno'
+  return enrollment.created_by_name || 'Sin dato'
 }
 
 function addDaysInput(value, days) {
@@ -377,7 +390,8 @@ function normalizeDetailRows(type, rows = []) {
       return {
         id: item.id,
         clase: item.class?.name || 'Clase',
-        fecha: formatDateTime(item.marked_at),
+        fecha: formatDateOnly(item.marked_at),
+        fecha_sort: item.marked_at || '',
         disciplina: item.class?.discipline_name || 'Sin disciplina',
         profesor: item.class?.teacher_name || 'Sin profesor',
         estado: item.status,
@@ -390,10 +404,12 @@ function normalizeDetailRows(type, rows = []) {
       return {
         id: item.id,
         clase: item.class?.name || 'Clase',
-        fecha: formatDateTime(item.consumed_at),
+        fecha_consumo: formatDateOnly(item.consumed_at),
+        fecha_consumo_sort: item.consumed_at || '',
         horario_clase: formatDateTimeRange(item.class?.start_datetime, item.class?.end_datetime),
         disciplina: item.class?.discipline_name || 'Sin disciplina',
         profesor: item.class?.teacher_name || 'Sin profesor',
+        inscrito_por: enrolledByLabel(item.enrollment),
         plan: item.plan_name || 'Sin plan',
         sede: item.branch_name || 'Sin sucursal',
         raw: item,
@@ -419,6 +435,7 @@ function normalizeDetailRows(type, rows = []) {
       fecha: formatDateTime(item.class?.start_datetime),
       disciplina: item.class?.discipline_name || 'Sin disciplina',
       profesor: item.class?.teacher_name || 'Sin profesor',
+      inscrito_por: enrolledByLabel(item.enrollment),
       estado: item.status,
       tipo: item.is_trial ? 'Clase de prueba' : 'Reserva',
       plan: item.plan_name || 'Sin plan',
@@ -475,7 +492,7 @@ function detailColumns(type, actions = {}) {
         render: (row) => <ValueBadge kind="attendance_status" value={row.estado} />,
         sortAccessor: (row) => row.estado,
       },
-      { key: 'fecha', label: 'Fecha', mobile: 'secondary' },
+      { key: 'fecha', label: 'Fecha', mobile: 'secondary', sortAccessor: (row) => row.fecha_sort },
       { key: 'disciplina', label: 'Disciplina', mobile: 'secondary' },
       { key: 'profesor', label: 'Profesor', mobile: 'secondary' },
       { key: 'fuente', label: 'Fuente' },
@@ -485,10 +502,16 @@ function detailColumns(type, actions = {}) {
   if (type === 'consumption') {
     return [
       { key: 'clase', label: 'Clase', mobile: 'title' },
-      { key: 'fecha', label: 'Fecha', mobile: 'secondary' },
+      {
+        key: 'fecha_consumo',
+        label: 'Fecha consumo',
+        mobile: 'secondary',
+        sortAccessor: (row) => row.fecha_consumo_sort,
+      },
       { key: 'horario_clase', label: 'Horario clase', mobile: 'secondary' },
       { key: 'disciplina', label: 'Disciplina', mobile: 'secondary' },
       { key: 'profesor', label: 'Profesor', mobile: 'secondary' },
+      { key: 'inscrito_por', label: 'Inscrito por', mobile: 'secondary' },
       { key: 'plan', label: 'Plan' },
       { key: 'sede', label: 'Sede' },
     ]
@@ -516,6 +539,7 @@ function detailColumns(type, actions = {}) {
     { key: 'fecha', label: 'Fecha', mobile: 'secondary' },
     { key: 'disciplina', label: 'Disciplina', mobile: 'secondary' },
     { key: 'profesor', label: 'Profesor', mobile: 'secondary' },
+    { key: 'inscrito_por', label: 'Inscrito por', mobile: 'secondary' },
     { key: 'tipo', label: 'Tipo' },
     { key: 'plan', label: 'Plan' },
   ]
@@ -957,7 +981,14 @@ export default function GymAdminStudentOverviewPage() {
               })}
               data={normalizeDetailRows(detail.type, detail.data.items || [])}
               maxBodyHeight="520px"
-              defaultSort={{ key: detail.type === 'memberships' ? 'vigencia' : 'fecha', direction: 'desc' }}
+              defaultSort={{
+                key: detail.type === 'memberships'
+                  ? 'vigencia'
+                  : detail.type === 'consumption'
+                    ? 'fecha_consumo'
+                    : 'fecha',
+                direction: 'desc',
+              }}
             />
           )}
         </section>

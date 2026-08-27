@@ -737,6 +737,7 @@ def reserve_student_in_class(
     student,
     gym_class,
     recurring_enrollment=None,
+    created_by=None,
     require_plan=True,
     is_trial=False,
     student_plan_id=None,
@@ -785,6 +786,9 @@ def reserve_student_in_class(
         existing.recurring_enrollment = recurring_enrollment or existing.recurring_enrollment
         existing.recurring_resync_blocked = False
         update_fields = ['status', 'recurring_enrollment', 'recurring_resync_blocked', 'updated_at']
+        if created_by is not None and existing.created_by_id != created_by.id:
+            existing.created_by = created_by
+            update_fields.append('created_by')
         if is_trial and not existing.is_trial:
             existing.is_trial = True
             update_fields.append('is_trial')
@@ -805,6 +809,7 @@ def reserve_student_in_class(
             status='active',
             is_trial=is_trial,
             student_plan=student_plan,
+            created_by=created_by,
         )
 
     if student_plan:

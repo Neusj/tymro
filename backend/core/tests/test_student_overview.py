@@ -116,6 +116,7 @@ def test_gym_admin_sees_full_overview_of_a_student_in_their_org(api_client, setu
     )
     Enrollment.objects.create(
         gym_class=gym_class, student=student, status='active', student_plan=membership,
+        created_by=setup['admin'],
     )
 
     api_client.force_authenticate(user=setup['admin'])
@@ -136,14 +137,40 @@ def test_gym_admin_sees_full_overview_of_a_student_in_their_org(api_client, setu
 
     assert len(data['consumption']['items']) == 1
     assert data['consumption']['items'][0]['class']['id'] == gym_class.id
+    assert data['consumption']['items'][0]['enrollment']['created_by'] == setup['admin'].id
+    assert data['consumption']['items'][0]['enrollment']['created_by_is_student'] is False
 
     assert len(data['attendance']['items']) == 1
     assert data['attendance']['items'][0]['status'] == 'present'
 
     assert len(data['reservations']['items']) == 1
     assert data['reservations']['items'][0]['status'] == 'active'
+    assert data['reservations']['items'][0]['enrollment']['created_by'] == setup['admin'].id
 
     assert data['recurring_enrollments'] == []
+
+
+def test_consumption_detail_marks_self_enrollment_actor(api_client, setup):
+    student = setup['student']
+    membership = setup['membership']
+    gym_class = setup['gym_class']
+
+    Enrollment.objects.create(
+        gym_class=gym_class, student=student, status='active', student_plan=membership,
+        created_by=student,
+    )
+    ConsumptionLog.objects.create(
+        user=student, student_plan=membership, class_instance=gym_class, branch=setup['branch'],
+    )
+
+    api_client.force_authenticate(user=setup['admin'])
+    resp = api_client.get(f'/api/students/{student.id}/consumption/')
+
+    assert resp.status_code == 200, resp.content
+    enrollment = resp.json()['items'][0]['enrollment']
+    assert enrollment['created_by'] == student.id
+    assert enrollment['created_by_name'] == 'Ana Perez'
+    assert enrollment['created_by_is_student'] is True
 
 
 # --------------------------------------------------------------------------------------

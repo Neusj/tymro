@@ -1466,6 +1466,7 @@ class PublicTrialBookView(APIView):
                 reserve_student_in_class(
                     student=locked_user,
                     gym_class=gym_class,
+                    created_by=locked_user,
                     require_plan=False,
                     is_trial=True,
                 )
@@ -5225,6 +5226,7 @@ class EnrollmentViewSet(ModelViewSet):
         'gym_class__class_type',
         'gym_class__discipline',
         'gym_class__branch',
+        'created_by',
     ).all()
     serializer_class = EnrollmentSerializer
 
@@ -5404,6 +5406,7 @@ class EnrollmentViewSet(ModelViewSet):
                         enrollment = reserve_student_in_class(
                             student=request.user,
                             gym_class=item['gym_class'],
+                            created_by=request.user,
                             require_plan=True,
                             student_plan_id=student_plan_id,
                         )
@@ -5594,7 +5597,7 @@ class EnrollmentViewSet(ModelViewSet):
 
         with transaction.atomic():
             if requested_status != 'active':
-                serializer.save()
+                serializer.save(created_by=user)
                 return
 
             if is_personal_student_flow:
@@ -5602,6 +5605,7 @@ class EnrollmentViewSet(ModelViewSet):
                     enrollment = reserve_student_in_class(
                         student=user,
                         gym_class=serializer.validated_data.get('gym_class'),
+                        created_by=user,
                         require_plan=True,
                         student_plan_id=student_plan_id,
                     )
@@ -5615,6 +5619,7 @@ class EnrollmentViewSet(ModelViewSet):
                     enrollment = reserve_student_in_class(
                         student=student,
                         gym_class=serializer.validated_data.get('gym_class'),
+                        created_by=user,
                         require_plan=should_validate_plan,
                         student_plan_id=student_plan_id,
                         allow_started_class=True,
@@ -5632,6 +5637,7 @@ class EnrollmentViewSet(ModelViewSet):
                 try:
                     enrollment = reserve_student_in_class(
                         student=student, gym_class=gym_class, require_plan=True,
+                        created_by=user,
                         student_plan_id=student_plan_id,
                         allow_started_class=True,
                     )
@@ -5645,6 +5651,7 @@ class EnrollmentViewSet(ModelViewSet):
                     enrollment = reserve_student_in_class(
                         student=user,
                         gym_class=serializer.validated_data.get('gym_class'),
+                        created_by=user,
                         require_plan=True,
                         student_plan_id=student_plan_id,
                     )
@@ -5680,6 +5687,7 @@ class EnrollmentViewSet(ModelViewSet):
                         student=enrollment.student,
                         gym_class=serializer.validated_data.get('gym_class', enrollment.gym_class),
                         recurring_enrollment=enrollment.recurring_enrollment,
+                        created_by=user,
                         require_plan=True,
                         student_plan_id=student_plan_id,
                         allow_started_class=True,

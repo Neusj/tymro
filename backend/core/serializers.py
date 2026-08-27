@@ -987,6 +987,9 @@ class EnrollmentSerializer(serializers.ModelSerializer):
     cancel_block_reason = serializers.SerializerMethodField()
     cancel_policy_message = serializers.SerializerMethodField()
     attendance_status = serializers.SerializerMethodField()
+    created_by_name = serializers.SerializerMethodField()
+    created_by_role = serializers.SerializerMethodField()
+    created_by_is_student = serializers.SerializerMethodField()
     # Elección del alumno de CON QUÉ membresía reservar (9.1), write-only. NO se expone
     # `student_plan` (el FK): ese campo se escribe SOLO a través de
     # `resolve_student_plan_for_reservation`, nunca por asignación directa del
@@ -1024,9 +1027,13 @@ class EnrollmentSerializer(serializers.ModelSerializer):
             'attendance_status',
             'is_trial',
             'student_plan_id',
+            'created_by',
+            'created_by_name',
+            'created_by_role',
+            'created_by_is_student',
             'created_at',
         ]
-        read_only_fields = ['created_at', 'recurring_enrollment', 'is_trial']
+        read_only_fields = ['created_at', 'recurring_enrollment', 'is_trial', 'created_by']
         extra_kwargs = {
             'student': {'required': False},
         }
@@ -1045,6 +1052,15 @@ class EnrollmentSerializer(serializers.ModelSerializer):
 
     def get_reservation_kind(self, obj):
         return 'recurring' if obj.recurring_enrollment_id else 'single'
+
+    def get_created_by_name(self, obj):
+        return _user_display_name(getattr(obj, 'created_by', None)) or None
+
+    def get_created_by_role(self, obj):
+        return obj.created_by.role if obj.created_by_id else None
+
+    def get_created_by_is_student(self, obj):
+        return bool(obj.created_by_id and obj.created_by_id == obj.student_id)
 
     def _cancel_state(self, obj):
         if obj.status != 'active':
@@ -1212,7 +1228,12 @@ class EnrollmentSerializer(serializers.ModelSerializer):
         if existing:
             # Si existe una reserva cancelada, la reactivamos en lugar de crear una nueva.
             existing.status = requested_status
-            existing.save(update_fields=['status', 'updated_at'])
+            update_fields = ['status', 'updated_at']
+            created_by = validated_data.get('created_by')
+            if created_by is not None and existing.created_by_id != created_by.id:
+                existing.created_by = created_by
+                update_fields.append('created_by')
+            existing.save(update_fields=update_fields)
             return existing
 
         return Enrollment.objects.create(**validated_data)

@@ -532,6 +532,13 @@ class Enrollment(TimestampedModel):
 
     gym_class = models.ForeignKey(GymClass, on_delete=models.CASCADE, related_name='enrollments')
     student = models.ForeignKey('accounts.CustomUser', on_delete=models.CASCADE, related_name='class_enrollments')
+    created_by = models.ForeignKey(
+        'accounts.CustomUser',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='created_enrollments',
+    )
     recurring_enrollment = models.ForeignKey(
         'RecurringEnrollment',
         on_delete=models.SET_NULL,

@@ -297,7 +297,7 @@ describe('GymAdminStudentOverviewPage', () => {
     expect(screen.getAllByText('Profe Carla').length).toBeGreaterThan(0)
   })
 
-  it('muestra el profesor en el detalle de consumo', async () => {
+  it('muestra fecha de consumo, horario, profesor e inscrito por en el detalle de consumo', async () => {
     getStudentOverview.mockResolvedValue(overview())
     studentOverviewDetailsApi.consumption.mockResolvedValue({
       items: [
@@ -306,6 +306,11 @@ describe('GymAdminStudentOverviewPage', () => {
           consumed_at: '2026-08-10T15:00:00Z',
           branch_name: 'Central',
           plan_name: 'Pack 10',
+          enrollment: {
+            id: 30,
+            created_by_name: 'Ana Perez',
+            created_by_is_student: true,
+          },
           class: {
             id: 99,
             name: 'Kick 19h',
@@ -335,8 +340,12 @@ describe('GymAdminStudentOverviewPage', () => {
         expect.objectContaining({ page: 1, page_size: 100 }),
       ),
     )
+    const expectedConsumptionDate = new Date('2026-08-10T15:00:00Z').toLocaleDateString('es-CL', { dateStyle: 'medium' }).replace(/\s+/g, ' ')
     const expectedStart = new Date('2026-08-11T19:30:00Z').toLocaleString('es-CL', { dateStyle: 'medium', timeStyle: 'short' }).replace(/\s+/g, ' ')
     const expectedEnd = new Date('2026-08-11T20:45:00Z').toLocaleTimeString('es-CL', { timeStyle: 'short' }).replace(/\s+/g, ' ')
+    expect(screen.getAllByText('Fecha consumo').length).toBeGreaterThan(0)
+    expect(screen.queryByText('Fecha')).not.toBeInTheDocument()
+    expect(screen.getAllByText(expectedConsumptionDate).length).toBeGreaterThan(0)
     expect(screen.getAllByText('Horario clase').length).toBeGreaterThan(0)
     expect(
       screen.getAllByText((_content, element) => {
@@ -346,5 +355,7 @@ describe('GymAdminStudentOverviewPage', () => {
     ).toBeGreaterThan(0)
     expect(screen.getAllByText('Profesor').length).toBeGreaterThan(0)
     expect(screen.getAllByText('Profe Carla').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Inscrito por').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('El mismo alumno').length).toBeGreaterThan(0)
   })
 })
