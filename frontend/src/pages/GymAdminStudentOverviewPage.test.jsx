@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -50,7 +50,7 @@ function summary(overrides = {}) {
         {
           id: 10,
           status: 'active',
-          class: { id: 99, name: 'Kick 19h', start_datetime: '2026-08-10T19:00:00Z', discipline_name: 'Kickboxing' },
+          class: { id: 99, name: 'Kick 19h', start_datetime: '2026-08-10T19:00:00Z', discipline_name: 'Kickboxing', teacher_name: 'Profe Carla' },
         },
       ],
     },
@@ -67,7 +67,7 @@ function summary(overrides = {}) {
     recurring_reservations: {
       active_total: 2,
       preview: [
-        { id: 7, class_template: { name: 'Kick semanal', weekday: 0, start_time: '19:00:00', discipline_name: 'Kickboxing' } },
+        { id: 7, class_template: { name: 'Kick semanal', weekday: 0, start_time: '19:00:00', discipline_name: 'Kickboxing', teacher_name: 'Profe Carla' } },
       ],
     },
     ...overrides,
@@ -271,7 +271,7 @@ describe('GymAdminStudentOverviewPage', () => {
         {
           id: 10,
           status: 'active',
-          class: { id: 99, name: 'Kick 19h', start_datetime: '2026-08-10T19:00:00Z', discipline_name: 'Kickboxing' },
+          class: { id: 99, name: 'Kick 19h', start_datetime: '2026-08-10T19:00:00Z', discipline_name: 'Kickboxing', teacher_name: 'Profe Carla' },
         },
       ],
       count: 1,
@@ -294,5 +294,46 @@ describe('GymAdminStudentOverviewPage', () => {
     )
     expect(getStudentOverview).toHaveBeenCalledTimes(1)
     expect(screen.getAllByText('Kick 19h').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Profe Carla').length).toBeGreaterThan(0)
+  })
+
+  it('muestra el profesor en el detalle de consumo', async () => {
+    getStudentOverview.mockResolvedValue(overview())
+    studentOverviewDetailsApi.consumption.mockResolvedValue({
+      items: [
+        {
+          id: 20,
+          consumed_at: '2026-08-10T19:00:00Z',
+          branch_name: 'Central',
+          plan_name: 'Pack 10',
+          class: {
+            id: 99,
+            name: 'Kick 19h',
+            discipline_name: 'Kickboxing',
+            teacher_name: 'Profe Carla',
+          },
+        },
+      ],
+      count: 1,
+      page: 1,
+      page_size: 20,
+      has_next: false,
+      has_previous: false,
+    })
+
+    renderPage()
+
+    await waitFor(() => expect(screen.getAllByText('Ana Perez').length).toBeGreaterThan(0))
+    const consumptionSection = screen.getByRole('heading', { name: 'Consumo' }).closest('section')
+    fireEvent.click(within(consumptionSection).getByRole('button', { name: 'Ver detalle' }))
+
+    await waitFor(() =>
+      expect(studentOverviewDetailsApi.consumption).toHaveBeenCalledWith(
+        '42',
+        expect.objectContaining({ page: 1, page_size: 100 }),
+      ),
+    )
+    expect(screen.getAllByText('Profesor').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Profe Carla').length).toBeGreaterThan(0)
   })
 })

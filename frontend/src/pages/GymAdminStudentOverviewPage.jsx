@@ -323,7 +323,7 @@ function ClassPreview({ item }) {
         <div className="min-w-0">
           <p className="truncate text-sm font-semibold text-brand-white">{classInfo.name || 'Clase'}</p>
           <p className="text-xs text-brand-muted">{formatDateTime(classInfo.start_datetime)}</p>
-          <p className="text-xs text-brand-dim">{classInfo.discipline_name || 'Sin disciplina'}</p>
+          <p className="text-xs text-brand-dim">{classInfo.discipline_name || 'Sin disciplina'} - {classInfo.teacher_name || 'Sin profesor'}</p>
         </div>
         {item.status ? <ValueBadge kind="enrollment_status" value={item.status} /> : null}
       </div>
@@ -339,6 +339,7 @@ function RecurringPreview({ item }) {
       <p className="text-xs text-brand-muted">
         {template.discipline_name || 'Sin disciplina'} - {WEEKDAY_LABELS[template.weekday] || 'Dia'} - {formatTime(template.start_time)}
       </p>
+      <p className="text-xs text-brand-dim">{template.teacher_name || 'Sin profesor'}</p>
     </article>
   )
 }
@@ -363,6 +364,7 @@ function normalizeDetailRows(type, rows = []) {
         clase: item.class?.name || 'Clase',
         fecha: formatDateTime(item.marked_at),
         disciplina: item.class?.discipline_name || 'Sin disciplina',
+        profesor: item.class?.teacher_name || 'Sin profesor',
         estado: item.status,
         fuente: item.source || '-',
         marcado_por: item.marked_by_name || '-',
@@ -375,6 +377,7 @@ function normalizeDetailRows(type, rows = []) {
         clase: item.class?.name || 'Clase',
         fecha: formatDateTime(item.consumed_at),
         disciplina: item.class?.discipline_name || 'Sin disciplina',
+        profesor: item.class?.teacher_name || 'Sin profesor',
         plan: item.plan_name || 'Sin plan',
         sede: item.branch_name || 'Sin sucursal',
         raw: item,
@@ -386,6 +389,7 @@ function normalizeDetailRows(type, rows = []) {
         id: item.id,
         reserva: template.name || 'Reserva semanal',
         disciplina: template.discipline_name || 'Sin disciplina',
+        profesor: template.teacher_name || 'Sin profesor',
         dia: WEEKDAY_LABELS[template.weekday] || 'Dia',
         hora: `${formatTime(template.start_time)} - ${formatTime(template.end_time)}`,
         vigencia: `${formatDate(item.start_date)} - ${item.end_date ? formatDate(item.end_date) : 'Sin termino'}`,
@@ -398,6 +402,7 @@ function normalizeDetailRows(type, rows = []) {
       clase: item.class?.name || 'Clase',
       fecha: formatDateTime(item.class?.start_datetime),
       disciplina: item.class?.discipline_name || 'Sin disciplina',
+      profesor: item.class?.teacher_name || 'Sin profesor',
       estado: item.status,
       tipo: item.is_trial ? 'Clase de prueba' : 'Reserva',
       plan: item.plan_name || 'Sin plan',
@@ -456,6 +461,7 @@ function detailColumns(type, actions = {}) {
       },
       { key: 'fecha', label: 'Fecha', mobile: 'secondary' },
       { key: 'disciplina', label: 'Disciplina', mobile: 'secondary' },
+      { key: 'profesor', label: 'Profesor', mobile: 'secondary' },
       { key: 'fuente', label: 'Fuente' },
       { key: 'marcado_por', label: 'Marcado por' },
     ]
@@ -465,6 +471,7 @@ function detailColumns(type, actions = {}) {
       { key: 'clase', label: 'Clase', mobile: 'title' },
       { key: 'fecha', label: 'Fecha', mobile: 'secondary' },
       { key: 'disciplina', label: 'Disciplina', mobile: 'secondary' },
+      { key: 'profesor', label: 'Profesor', mobile: 'secondary' },
       { key: 'plan', label: 'Plan' },
       { key: 'sede', label: 'Sede' },
     ]
@@ -474,6 +481,7 @@ function detailColumns(type, actions = {}) {
       { key: 'reserva', label: 'Reserva semanal', mobile: 'title' },
       { key: 'disciplina', label: 'Disciplina', mobile: 'secondary' },
       { key: 'dia', label: 'Dia', mobile: 'secondary' },
+      { key: 'profesor', label: 'Profesor', mobile: 'secondary' },
       { key: 'hora', label: 'Hora' },
       { key: 'vigencia', label: 'Vigencia' },
       { key: 'plan', label: 'Plan' },
@@ -490,6 +498,7 @@ function detailColumns(type, actions = {}) {
     },
     { key: 'fecha', label: 'Fecha', mobile: 'secondary' },
     { key: 'disciplina', label: 'Disciplina', mobile: 'secondary' },
+    { key: 'profesor', label: 'Profesor', mobile: 'secondary' },
     { key: 'tipo', label: 'Tipo' },
     { key: 'plan', label: 'Plan' },
   ]
