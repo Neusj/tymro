@@ -55,7 +55,7 @@ from .services.plans import (
     student_benefit_expiry_for,
     student_benefit_is_active,
 )
-from .services.recurrence import create_enrollments_for_recurring_subscription, recurring_skip_reason_for_instance
+from .services.recurrence import can_delete_template, create_enrollments_for_recurring_subscription, recurring_skip_reason_for_instance
 from .services.reservations import (
     REASON_PLAN_NOT_FOUND,
     ReservationRuleError,
@@ -1584,6 +1584,8 @@ class ClassTemplateSerializer(serializers.ModelSerializer):
     discipline_name = serializers.CharField(source='discipline.name', read_only=True)
     generated_instances_count = serializers.SerializerMethodField()
     has_active_enrollments = serializers.SerializerMethodField()
+    can_delete = serializers.SerializerMethodField()
+    delete_block_reason = serializers.SerializerMethodField()
 
     class Meta:
         model = ClassTemplate
@@ -1622,6 +1624,8 @@ class ClassTemplateSerializer(serializers.ModelSerializer):
             'substitution_assigned_by_name',
             'generated_instances_count',
             'has_active_enrollments',
+            'can_delete',
+            'delete_block_reason',
             'created_by',
             'created_at',
             'updated_at',
@@ -1662,6 +1666,19 @@ class ClassTemplateSerializer(serializers.ModelSerializer):
 
     def get_has_active_enrollments(self, obj):
         return obj.instances.filter(enrollments__status='active').exists()
+
+    def _delete_state(self, obj):
+        if not hasattr(obj, '_cached_delete_state'):
+            obj._cached_delete_state = can_delete_template(obj)
+        return obj._cached_delete_state
+
+    def get_can_delete(self, obj):
+        allowed, _reason = self._delete_state(obj)
+        return allowed
+
+    def get_delete_block_reason(self, obj):
+        allowed, reason = self._delete_state(obj)
+        return '' if allowed else (reason or 'Esta programacion ya tiene historial.')
 
     def validate(self, attrs):
         request = self.context.get('request')

@@ -5,6 +5,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // La pagina carga estos modulos al montar (loadData).
 vi.mock('../api/client', () => ({
+  advanceClassWindowsApi: { run: vi.fn() },
   branchesApi: { list: vi.fn() },
   classesApi: { byDate: vi.fn(), bulkClose: vi.fn() },
   classTemplatesApi: { list: vi.fn(), generate: vi.fn(), update: vi.fn(), remove: vi.fn(), bulkAction: vi.fn(), create: vi.fn(), reactivateFutureCancelled: vi.fn() },
@@ -19,6 +20,7 @@ vi.mock('../auth/AuthContext', () => ({
 }))
 
 import {
+  advanceClassWindowsApi,
   branchesApi,
   classesApi,
   classTemplatesApi,
@@ -51,6 +53,7 @@ beforeEach(() => {
   usersApi.list.mockResolvedValue([])
   classTypesApi.list.mockResolvedValue([])
   disciplinesApi.list.mockResolvedValue([])
+  advanceClassWindowsApi.run.mockResolvedValue({ instances_created: 0 })
   // DataTable consulta matchMedia al montar; jsdom no lo implementa. Mismo patron
   // que GymAdminClassDetailPage.test.jsx / GymAdminPlanMembershipsPage.test.jsx.
   window.matchMedia = (query) => ({
@@ -119,6 +122,35 @@ describe('GymAdminClassTemplatesPage - flujo integrado de clases', () => {
     expect(screen.getByRole('button', { name: /^editar$/i })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /generar clases/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /reactivar futuras canceladas/i })).not.toBeInTheDocument()
+  })
+
+  it('desactiva eliminar programacion cuando el backend indica que ya tiene historial', async () => {
+    classTemplatesApi.list.mockResolvedValue([
+      {
+        id: 7,
+        name: 'Serie con historial',
+        branch: 1,
+        teacher: 2,
+        class_type: 3,
+        discipline: 4,
+        weekday: 1,
+        start_time: '09:00:00',
+        end_time: '10:00:00',
+        capacity: 12,
+        is_active: true,
+        is_trial_eligible: false,
+        can_delete: false,
+        delete_block_reason: 'La serie tiene historial consolidado.',
+      },
+    ])
+
+    await openScheduleTab()
+    await userEvent.click((await screen.findAllByRole('button', { name: /abrir acciones/i }))[0])
+
+    expect(screen.getByRole('button', { name: /eliminar programacion/i })).toBeDisabled()
+
+    await userEvent.click(screen.getByRole('button', { name: /motivo bloqueo/i }))
+    expect(screen.getByText('La serie tiene historial consolidado.')).toBeInTheDocument()
   })
 })
 

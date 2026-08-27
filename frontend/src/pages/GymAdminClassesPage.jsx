@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { classesApi, disciplinesApi } from '../api/client'
+import { advanceClassWindowsApi, classesApi, disciplinesApi } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import { canManageOperational } from '../utils/roles'
 import BulkActionModal from '../components/BulkActionModal'
@@ -66,11 +66,12 @@ function canManageEnrollments(row) {
   return !isVirtualClass(row) && row?.status !== 'cancelled'
 }
 
-export default function GymAdminClassesPage({ embedded = false } = {}) {
+export default function GymAdminClassesPage({ embedded = false, onOpenSchedule } = {}) {
   const location = useLocation()
   const { user } = useAuth()
   const initialClassListState = location.state?.classListState || {}
   const canManage = canManageOperational(user?.role)
+  const canUpdateGeneratedClasses = user?.role === 'gym_admin'
   const [classes, setClasses] = useState([])
   const [selectedDate, setSelectedDate] = useState(() => initialClassListState.selectedDate || todayIsoDate())
   const [disciplines, setDisciplines] = useState([])
@@ -84,6 +85,7 @@ export default function GymAdminClassesPage({ embedded = false } = {}) {
   const [bulkModalOpen, setBulkModalOpen] = useState(false)
   const [working, setWorking] = useState(false)
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
   const [activeStatus, setActiveStatus] = useState(() => initialClassListState.activeStatus || '')
   const [activeDiscipline, setActiveDiscipline] = useState(() => initialClassListState.activeDiscipline || '')
   const [activeSubstitute, setActiveSubstitute] = useState(() => initialClassListState.activeSubstitute || '')
@@ -132,6 +134,10 @@ export default function GymAdminClassesPage({ embedded = false } = {}) {
   }, [filtersParams, selectedDate])
 
   const displayedClasses = useMemo(() => sortClassesByStartTime(classes), [classes])
+  const projectedCount = useMemo(
+    () => displayedClasses.filter((item) => isVirtualClass(item)).length,
+    [displayedClasses],
+  )
   const classListRouteState = useMemo(() => ({
     classListState: { selectedDate, activeStatus, activeDiscipline, activeSubstitute },
     classListBackTo: { pathname: location.pathname, search: location.search },
@@ -146,9 +152,41 @@ export default function GymAdminClassesPage({ embedded = false } = {}) {
     if (!deleting) {
       return
     }
-    await classesApi.remove(deleting.id)
-    setDeleting(null)
-    await loadData()
+    setError('')
+    setNotice('')
+    setWorking(true)
+    try {
+      await classesApi.remove(deleting.id)
+      setNotice('Registro eliminado.')
+      setDeleting(null)
+      await loadData()
+    } catch (apiError) {
+      const detail = apiError?.response?.data
+      setError(detail?.detail || 'No se pudo eliminar el registro de la clase.')
+    } finally {
+      setWorking(false)
+    }
+  }
+
+  const updateGeneratedClasses = async () => {
+    setError('')
+    setNotice('')
+    setWorking(true)
+    try {
+      const summary = await advanceClassWindowsApi.run()
+      const created = Number(summary?.instances_created || 0)
+      setNotice(
+        created > 0
+          ? `Se generaron ${created} clases reales.`
+          : 'Calendario actualizado. No habia clases nuevas por generar.',
+      )
+      await loadData()
+    } catch (apiError) {
+      const detail = apiError?.response?.data
+      setError(detail?.detail || 'No se pudo actualizar el calendario de clases.')
+    } finally {
+      setWorking(false)
+    }
   }
 
   const runBulkAction = async ({ action, comment }) => {
@@ -285,10 +323,11 @@ export default function GymAdminClassesPage({ embedded = false } = {}) {
           isVirtualClass(row) ? (
             <button
               type="button"
-              disabled
-              className="rounded-lg border border-brand-line px-3 py-2 text-center text-xs font-semibold text-brand-white opacity-60"
+              disabled={working || !canUpdateGeneratedClasses}
+              onClick={updateGeneratedClasses}
+              className="rounded-lg border border-brand-orange/60 px-3 py-2 text-center text-xs font-semibold text-brand-white transition hover:border-brand-orange disabled:opacity-60"
             >
-              Asistencia
+              Generar clase real
             </button>
           ) : (
             <Link
@@ -304,8 +343,36 @@ export default function GymAdminClassesPage({ embedded = false } = {}) {
           const canReopen = row.status === 'cancelled'
           const isVirtual = isVirtualClass(row)
           const enrollmentDisabled = !canManageEnrollments(row)
+          const canDeleteRecord = !row.class_template
+          if (isVirtual) {
+            return (
+              <>
+                <p className="rounded-lg border border-brand-line bg-black/20 px-2.5 py-2 text-xs text-brand-muted">
+                  Clase proyectada. Genera el calendario para operar asistencia, inscritos o cancelacion.
+                </p>
+                {canUpdateGeneratedClasses ? (
+                  <button
+                    type="button"
+                    disabled={working}
+                    onClick={updateGeneratedClasses}
+                    className="w-full rounded-lg border border-brand-orange/60 px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-orange disabled:opacity-60"
+                  >
+                    Generar clases reales
+                  </button>
+                ) : null}
+              </>
+            )
+          }
           return canManage ? (
             <>
+              <button
+                type="button"
+                disabled={!canClose || working}
+                onClick={() => requestCloseSingleClass(row, 'cancel')}
+                className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 transition hover:bg-brand-red/10 disabled:opacity-60"
+              >
+                Cancelar clase
+              </button>
               <button
                 type="button"
                 disabled={enrollmentDisabled || working}
@@ -347,14 +414,6 @@ export default function GymAdminClassesPage({ embedded = false } = {}) {
               >
                 Cerrar anticipadamente
               </button>
-              <button
-                type="button"
-                disabled={!canClose || working || isVirtual}
-                onClick={() => requestCloseSingleClass(row, 'cancel')}
-                className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 transition hover:bg-brand-red/10 disabled:opacity-60"
-              >
-                Cancelar
-              </button>
               {canReopen ? (
                 <button
                   type="button"
@@ -365,14 +424,15 @@ export default function GymAdminClassesPage({ embedded = false } = {}) {
                   Reabrir clase
                 </button>
               ) : null}
-              <button
-                type="button"
-                disabled={isVirtual}
-                onClick={() => setDeleting(row)}
-                className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 transition hover:bg-brand-red/10 disabled:opacity-60"
-              >
-                Eliminar
-              </button>
+              {canDeleteRecord ? (
+                <button
+                  type="button"
+                  onClick={() => setDeleting(row)}
+                  className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 transition hover:bg-brand-red/10 disabled:opacity-60"
+                >
+                  Eliminar registro
+                </button>
+              ) : null}
             </>
           ) : null
         },
@@ -381,27 +441,45 @@ export default function GymAdminClassesPage({ embedded = false } = {}) {
           const canReopen = row.status === 'cancelled'
           const isVirtual = isVirtualClass(row)
           const enrollmentDisabled = !canManageEnrollments(row)
+          const canDeleteRecord = !row.class_template
+          if (isVirtual) {
+            return (
+              <>
+                <p className="rounded-lg border border-brand-line bg-black/20 px-2.5 py-2 text-xs text-brand-muted">
+                  Clase proyectada. Todavia no existe como instancia real.
+                </p>
+                {canUpdateGeneratedClasses ? (
+                  <button
+                    type="button"
+                    disabled={working}
+                    onClick={updateGeneratedClasses}
+                    className="w-full rounded-lg border border-brand-orange/60 px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-orange disabled:opacity-60"
+                  >
+                    Generar clases reales
+                  </button>
+                ) : null}
+              </>
+            )
+          }
           return (
             <>
-              {isVirtual ? (
-                <button
-                  type="button"
-                  disabled
-                  className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white opacity-60"
-                >
-                  Detalle
-                </button>
-              ) : (
-                <Link
-                  to={`/gym-admin/classes/${row.id}`}
-                  state={classListRouteState}
-                  className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue"
-                >
-                  Detalle
-                </Link>
-              )}
+              <Link
+                to={`/gym-admin/classes/${row.id}`}
+                state={classListRouteState}
+                className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue"
+              >
+                Detalle
+              </Link>
               {canManage ? (
                 <>
+                  <button
+                    type="button"
+                    disabled={!canClose || working}
+                    onClick={() => requestCloseSingleClass(row, 'cancel')}
+                    className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 transition hover:bg-brand-red/10 disabled:opacity-60"
+                  >
+                    Cancelar clase
+                  </button>
                   <button
                     type="button"
                     disabled={enrollmentDisabled || working}
@@ -443,14 +521,6 @@ export default function GymAdminClassesPage({ embedded = false } = {}) {
                   >
                     Cerrar anticipadamente
                   </button>
-                  <button
-                    type="button"
-                    disabled={!canClose || working || isVirtual}
-                    onClick={() => requestCloseSingleClass(row, 'cancel')}
-                    className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 transition hover:bg-brand-red/10 disabled:opacity-60"
-                  >
-                    Cancelar
-                  </button>
                   {canReopen ? (
                     <button
                       type="button"
@@ -461,14 +531,15 @@ export default function GymAdminClassesPage({ embedded = false } = {}) {
                       Reabrir clase
                     </button>
                   ) : null}
-                  <button
-                    type="button"
-                    disabled={isVirtual}
-                    onClick={() => setDeleting(row)}
-                    className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 transition hover:bg-brand-red/10 disabled:opacity-60"
-                  >
-                    Eliminar
-                  </button>
+                  {canDeleteRecord ? (
+                    <button
+                      type="button"
+                      onClick={() => setDeleting(row)}
+                      className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 transition hover:bg-brand-red/10 disabled:opacity-60"
+                    >
+                      Eliminar registro
+                    </button>
+                  ) : null}
                 </>
               ) : null}
             </>
@@ -476,7 +547,7 @@ export default function GymAdminClassesPage({ embedded = false } = {}) {
         },
       },
     ],
-    [classListRouteState, working, canManage],
+    [classListRouteState, working, canManage, canUpdateGeneratedClasses],
   )
 
   const totals = useMemo(() => {
@@ -538,17 +609,39 @@ export default function GymAdminClassesPage({ embedded = false } = {}) {
         <div className="flex items-center justify-between gap-3">
           <h2 className="panel-title">Detalle de clases (filtrado)</h2>
           {canManage ? (
-            <button
-              type="button"
-              disabled={!selectedIds.length}
-              onClick={() => setBulkModalOpen(true)}
-              className="btn-ghost text-xs"
-            >
-              Acciones masivas ({selectedIds.length})
-            </button>
+            <div className="flex flex-wrap justify-end gap-2">
+              {onOpenSchedule ? (
+                <button
+                  type="button"
+                  onClick={onOpenSchedule}
+                  className="btn-ghost text-xs"
+                >
+                  Ver programacion
+                </button>
+              ) : null}
+              {canUpdateGeneratedClasses && projectedCount > 0 ? (
+                <button
+                  type="button"
+                  disabled={working}
+                  onClick={updateGeneratedClasses}
+                  className="btn-primary text-xs"
+                >
+                  Generar clases reales ({projectedCount})
+                </button>
+              ) : null}
+              <button
+                type="button"
+                disabled={!selectedIds.length}
+                onClick={() => setBulkModalOpen(true)}
+                className="btn-ghost text-xs"
+              >
+                Acciones masivas ({selectedIds.length})
+              </button>
+            </div>
           ) : null}
         </div>
         {error ? <p className="rounded-lg border border-brand-red/50 bg-brand-red/10 px-3 py-2 text-sm text-red-200">{error}</p> : null}
+        {notice ? <p className="rounded-lg border border-brand-blue/40 bg-brand-blue/10 px-3 py-2 text-sm text-brand-white">{notice}</p> : null}
         <DataTable
           columns={columns}
           data={displayedClasses}
@@ -586,9 +679,10 @@ export default function GymAdminClassesPage({ embedded = false } = {}) {
 
       <ConfirmDialog
         open={Boolean(deleting)}
-        title="Eliminar clase"
-        description={`Se eliminara ${deleting?.name || 'esta clase'}.`}
-        confirmLabel="Eliminar"
+        title="Eliminar registro de clase"
+        description={`Se borrara ${deleting?.name || 'esta clase'} del sistema. Para conservar historial operativo normalmente conviene Cancelar, no eliminar.`}
+        confirmLabel="Eliminar registro"
+        loading={working}
         onCancel={() => setDeleting(null)}
         onConfirm={removeClass}
       />

@@ -7,6 +7,7 @@ import DashboardHeader from '../components/DashboardHeader'
 import FormModal from '../components/FormModal'
 import DataTable from '../components/ui/DataTable'
 import MultiSelectDropdown from '../components/ui/MultiSelectDropdown'
+import TouchTooltip from '../components/ui/TouchTooltip'
 import ValueBadge from '../components/ui/ValueBadge'
 import { canManageAdmin, teacherEligibleRoleParam } from '../utils/roles'
 import GymAdminClassesPage from './GymAdminClassesPage'
@@ -351,17 +352,26 @@ export default function GymAdminClassTemplatesPage() {
               onClick={() => toggleTemplate(row)}
               className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white disabled:opacity-60"
             >
-              {row.is_active ? 'Desactivar' : 'Activar'}
+              {row.is_active ? 'Desactivar programacion' : 'Activar programacion'}
             </button>
             {canDeleteSeries ? (
-              <button
-                type="button"
-                disabled={workingId === row.id}
-                onClick={() => setDeletingTemplate(row)}
-                className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 disabled:opacity-60"
-              >
-                Eliminar
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={workingId === row.id || row.can_delete === false}
+                  onClick={() => setDeletingTemplate(row)}
+                  className="min-w-0 flex-1 rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 disabled:cursor-not-allowed disabled:opacity-60"
+                  title={row.can_delete === false ? row.delete_block_reason || 'Esta programacion ya no se puede eliminar.' : undefined}
+                >
+                  Eliminar programacion
+                </button>
+                {row.can_delete === false ? (
+                  <TouchTooltip
+                    label="Motivo bloqueo"
+                    text={row.delete_block_reason || 'Esta programacion ya no se puede eliminar.'}
+                  />
+                ) : null}
+              </div>
             ) : null}
           </>
         ),
@@ -386,8 +396,8 @@ export default function GymAdminClassTemplatesPage() {
 
       <div className="flex flex-wrap gap-2 border-b border-brand-line">
         {[
-          { value: 'classes', label: 'Clases' },
-          { value: 'schedule', label: 'Programación' },
+          { value: 'classes', label: 'Clases por fecha' },
+          { value: 'schedule', label: 'Programacion semanal' },
         ].map((tab) => (
           <button
             key={tab.value}
@@ -405,7 +415,7 @@ export default function GymAdminClassTemplatesPage() {
         ))}
       </div>
 
-      {activeTab === 'classes' ? <GymAdminClassesPage embedded /> : null}
+      {activeTab === 'classes' ? <GymAdminClassesPage embedded onOpenSchedule={() => setActiveTab('schedule')} /> : null}
 
       {!formOpen && error ? <p className="rounded-lg border border-brand-red/50 bg-brand-red/10 px-3 py-2 text-sm text-red-200">{error}</p> : null}
       {!formOpen && notice ? <p className="rounded-lg border border-brand-blue/40 bg-brand-blue/10 px-3 py-2 text-sm text-brand-white">{notice}</p> : null}
@@ -640,7 +650,7 @@ export default function GymAdminClassTemplatesPage() {
       {activeTab === 'schedule' ? (
         <section className="space-y-3">
         <div className="flex items-center justify-between gap-3">
-          <h2 className="panel-title">Clases programadas</h2>
+          <h2 className="panel-title">Programacion semanal</h2>
           <button
             type="button"
             disabled={!selectedIds.length}
@@ -669,8 +679,8 @@ export default function GymAdminClassTemplatesPage() {
         selectedCount={selectedIds.length}
         loading={bulkWorking}
         actions={[
-          { value: 'activate', label: 'Activar clases', description: 'Reanuda la clase para futuras generaciones.' },
-          { value: 'deactivate', label: 'Desactivar clases', description: 'Detiene nuevas generaciones sin borrar historico.' },
+          { value: 'activate', label: 'Activar programacion', description: 'Reanuda la clase para futuras generaciones.' },
+          { value: 'deactivate', label: 'Desactivar programacion', description: 'Detiene nuevas generaciones sin borrar historico.' },
           ...(canDeleteSeries
             ? [{ value: 'delete', label: 'Eliminar clases seguras', description: 'Elimina solo clases sin actividad bloqueante.' }]
             : []),
@@ -684,9 +694,9 @@ export default function GymAdminClassTemplatesPage() {
 
       <ConfirmDialog
         open={Boolean(deletingTemplate)}
-        title="Eliminar clase"
-        description={`Eliminar clase ${deletingTemplate?.name || `#${deletingTemplate?.id || ''}`}? Solo se permite si no tiene historial ni inscritos.`}
-        confirmLabel="Eliminar"
+        title="Eliminar programacion"
+        description={`Eliminar programacion ${deletingTemplate?.name || `#${deletingTemplate?.id || ''}`}? Solo se permite si no tiene historial ni inscritos. Para conservar trazabilidad usa Desactivar.`}
+        confirmLabel="Eliminar programacion"
         loading={workingId === deletingTemplate?.id}
         onConfirm={deleteTemplate}
         onCancel={() => {

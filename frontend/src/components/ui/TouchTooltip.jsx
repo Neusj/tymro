@@ -25,6 +25,7 @@ export default function TouchTooltip({ text, label = 'Info' }) {
     <span ref={wrapRef} className="relative inline-flex">
       <button
         type="button"
+        data-keep-menu-open="true"
         onClick={() => setOpen((prev) => !prev)}
         className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-brand-line text-[10px] text-brand-muted hover:text-brand-white"
         aria-label={label}
@@ -39,4 +40,3 @@ export default function TouchTooltip({ text, label = 'Info' }) {
     </span>
   )
 }
-

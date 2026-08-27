@@ -279,6 +279,21 @@ def test_gym_admin_still_cannot_delete_a_series_with_history(api_client, setup):
     assert ClassTemplate.objects.filter(id=setup['template'].id).exists()
 
 
+def test_class_template_list_exposes_delete_guard_reason(api_client, setup):
+    RecurringEnrollment.objects.create(
+        student=setup['student'], class_template=setup['template'],
+        start_date=timezone.localdate(),
+    )
+    _login(api_client, 'admin')
+
+    resp = api_client.get('/api/class-templates/')
+
+    assert resp.status_code == 200, resp.content
+    item = next(row for row in resp.json() if row['id'] == setup['template'].id)
+    assert item['can_delete'] is False
+    assert item['delete_block_reason'] == 'La serie tiene recurrencias de alumnos asociadas.'
+
+
 def test_bulk_delete_still_skips_a_series_with_history(api_client, setup):
     """Misma guarda por la vía masiva: se reporta en `skipped`, no se borra."""
     start = timezone.now() - timedelta(days=2)

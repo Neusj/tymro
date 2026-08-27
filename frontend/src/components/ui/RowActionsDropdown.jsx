@@ -4,7 +4,7 @@ import { createPortal } from 'react-dom'
 const VIEWPORT_MARGIN = 8
 const MENU_GAP = 8
 const DEFAULT_MENU_WIDTH = 176
-const DEFAULT_MENU_HEIGHT = 160
+const DEFAULT_MENU_HEIGHT = 280
 
 function GearIcon() {
   return (
@@ -117,7 +117,7 @@ export default function RowActionsDropdown({ children, align = 'right' }) {
               style={{ top: menuPosition.top, left: menuPosition.left, maxHeight: menuPosition.maxHeight }}
               onClick={(event) => {
                 const interactive = event.target.closest('button, a')
-                if (interactive) {
+                if (interactive && !interactive.closest('[data-keep-menu-open="true"]')) {
                   setOpen(false)
                 }
               }}
