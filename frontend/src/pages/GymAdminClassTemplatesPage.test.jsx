@@ -140,7 +140,7 @@ describe('GymAdminClassTemplatesPage - flujo integrado de clases', () => {
         is_active: true,
         is_trial_eligible: false,
         can_delete: false,
-        delete_block_reason: 'La serie tiene historial consolidado.',
+        delete_block_reason: 'La programacion tiene clases ya realizadas o finalizadas.',
       },
     ])
 
@@ -150,7 +150,7 @@ describe('GymAdminClassTemplatesPage - flujo integrado de clases', () => {
     expect(screen.getByRole('button', { name: /eliminar programacion/i })).toBeDisabled()
 
     await userEvent.hover(screen.getByLabelText(/motivo bloqueo/i))
-    expect(screen.getByText('La serie tiene historial consolidado.')).toBeInTheDocument()
+    expect(screen.getByText('La programacion tiene clases ya realizadas o finalizadas.')).toBeInTheDocument()
   })
 })
 

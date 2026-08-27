@@ -291,7 +291,7 @@ def test_class_template_list_exposes_delete_guard_reason(api_client, setup):
     assert resp.status_code == 200, resp.content
     item = next(row for row in resp.json() if row['id'] == setup['template'].id)
     assert item['can_delete'] is False
-    assert item['delete_block_reason'] == 'La serie tiene recurrencias de alumnos asociadas.'
+    assert item['delete_block_reason'] == 'La programacion tiene alumnos con reserva recurrente.'
 
 
 def test_classes_list_filters_instances_by_class_template(api_client, setup):

@@ -441,13 +441,13 @@ def apply_template_updates_to_future_instances(template, now=None):
 def can_delete_template(template):
     instances = GymClass.objects.filter(class_template=template)
     if RecurringEnrollment.objects.filter(class_template=template).exists():
-        return False, 'La serie tiene recurrencias de alumnos asociadas.'
+        return False, 'La programacion tiene alumnos con reserva recurrente.'
     if instances.filter(enrollments__isnull=False).exists():
-        return False, 'La serie tiene clases con alumnos inscritos o historial de reservas.'
+        return False, 'La programacion tiene reservas historicas, activas o canceladas.'
     if instances.filter(attendances__isnull=False).exists():
-        return False, 'La serie tiene asistencia registrada.'
+        return False, 'La programacion tiene asistencia registrada.'
     if instances.filter(status__in=[GymClass.Status.COMPLETED, GymClass.Status.COMPLETED_EARLY]).exists():
-        return False, 'La serie tiene historial consolidado.'
+        return False, 'La programacion tiene clases ya realizadas o finalizadas.'
     return True, None
 
 

@@ -378,7 +378,6 @@ export default function GymAdminClassTemplatesPage() {
                     type="button"
                     disabled
                     className="min-w-0 flex-1 rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 opacity-60 disabled:cursor-not-allowed"
-                    title={row.delete_block_reason || 'Esta programacion ya no se puede eliminar.'}
                   >
                     Eliminar programacion
                   </button>

@@ -1,9 +1,40 @@
 import { useEffect, useId, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 
 export default function TouchTooltip({ text, label = 'Info', children, className = 'relative inline-flex' }) {
   const [open, setOpen] = useState(false)
+  const [position, setPosition] = useState({ top: 0, left: 0 })
   const wrapRef = useRef(null)
   const tooltipId = useId()
+
+  useEffect(() => {
+    if (!open) {
+      return undefined
+    }
+
+    const updatePosition = () => {
+      const rect = wrapRef.current?.getBoundingClientRect()
+      if (!rect) {
+        return
+      }
+      const width = 240
+      const gap = 6
+      const viewportWidth = window.innerWidth || document.documentElement.clientWidth
+      const viewportHeight = window.innerHeight || document.documentElement.clientHeight
+      const left = Math.min(Math.max(8, rect.right - width), Math.max(8, viewportWidth - width - 8))
+      const belowTop = rect.bottom + gap
+      const top = belowTop + 48 > viewportHeight ? Math.max(8, rect.top - 54) : belowTop
+      setPosition({ top, left })
+    }
+
+    updatePosition()
+    window.addEventListener('scroll', updatePosition, true)
+    window.addEventListener('resize', updatePosition)
+    return () => {
+      window.removeEventListener('scroll', updatePosition, true)
+      window.removeEventListener('resize', updatePosition)
+    }
+  }, [open])
 
   useEffect(() => {
     if (!open) {
@@ -44,15 +75,19 @@ export default function TouchTooltip({ text, label = 'Info', children, className
           i
         </button>
       )}
-      {open ? (
-        <span
-          id={tooltipId}
-          role="tooltip"
-          className="absolute right-0 top-6 z-20 w-52 rounded-lg border border-brand-line bg-brand-soft px-2 py-1 text-[11px] text-brand-white shadow-glow"
-        >
-          {text}
-        </span>
-      ) : null}
+      {open
+        ? createPortal(
+            <span
+              id={tooltipId}
+              role="tooltip"
+              style={{ top: position.top, left: position.left }}
+              className="fixed z-[9999] w-60 rounded-lg border border-brand-line bg-brand-soft px-2 py-1 text-[11px] text-brand-white shadow-glow"
+            >
+              {text}
+            </span>,
+            document.body,
+          )
+        : null}
     </span>
   )
 }
