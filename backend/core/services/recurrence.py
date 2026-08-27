@@ -523,6 +523,23 @@ def cancel_future_instances_for_template(template, actor=None, comment='Cancelac
 
 
 @transaction.atomic
+def release_future_enrollments_for_inactive_template(template):
+    now = timezone.now()
+    active_enrollments = Enrollment.objects.filter(
+        gym_class__class_template=template,
+        gym_class__start_datetime__gt=now,
+        gym_class__status__in=[GymClass.Status.SCHEDULED, GymClass.Status.IN_PROGRESS],
+        status='active',
+    ).select_related('gym_class')
+
+    released_count = 0
+    for enrollment in active_enrollments:
+        cancel_enrollment_with_refund(enrollment)
+        released_count += 1
+    return {'released_enrollments': released_count}
+
+
+@transaction.atomic
 def activate_template(template):
     if template.is_active:
         return {'updated': False, 'reason': 'already_active'}

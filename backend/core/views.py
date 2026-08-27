@@ -124,6 +124,7 @@ from .services.recurrence import (
     delete_template_safely,
     generate_instances_for_template_range,
     reactivate_future_cancelled_instances_for_template,
+    release_future_enrollments_for_inactive_template,
 )
 from .services.charge_line_items import (
     ChargeLineItemOrganizationMismatch,
@@ -3399,6 +3400,11 @@ class GymClassViewSet(ModelViewSet):
             if not str(class_template_id).isdigit():
                 return queryset.none()
             queryset = queryset.filter(class_template_id=class_template_id)
+        elif getattr(self, 'action', None) in {'list', 'by_date', 'coverable', 'dashboard_summary'}:
+            queryset = queryset.exclude(
+                class_template__is_active=False,
+                start_datetime__gt=timezone.now(),
+            )
         if start_date_from:
             queryset = queryset.filter(start_datetime__date__gte=start_date_from)
         if start_date_to:
@@ -4622,7 +4628,10 @@ class ClassTemplateViewSet(ModelViewSet):
         user = self.request.user
         template = self.get_object()
         if _can_manage_operational_resource(user, template.organization_id):
+            was_active = template.is_active
             updated_template = serializer.save()
+            if was_active and not updated_template.is_active:
+                release_future_enrollments_for_inactive_template(updated_template)
             apply_updates = _parse_bool(self.request.data.get('apply_to_future_instances'), default=True)
             if apply_updates:
                 apply_template_updates_to_future_instances(updated_template, now=timezone.now())
@@ -4907,8 +4916,11 @@ class ClassTemplateViewSet(ModelViewSet):
                 continue
 
             if action_name == 'deactivate':
+                was_active = template.is_active
                 template.is_active = False
                 template.save(update_fields=['is_active', 'updated_at'])
+                if was_active:
+                    release_future_enrollments_for_inactive_template(template)
                 summary['updated_ids'].append(template.id)
                 continue
             if action_name == 'activate':
