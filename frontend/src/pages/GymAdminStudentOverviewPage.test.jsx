@@ -297,7 +297,7 @@ describe('GymAdminStudentOverviewPage', () => {
     expect(screen.getAllByText('Profe Carla').length).toBeGreaterThan(0)
   })
 
-  it('muestra fecha de consumo, horario, profesor e inscrito por en el detalle de consumo', async () => {
+  it('muestra horario y profesor en consumo sin exponer fecha de consumo ni inscrito por', async () => {
     getStudentOverview.mockResolvedValue(overview())
     studentOverviewDetailsApi.consumption.mockResolvedValue({
       items: [
@@ -340,12 +340,9 @@ describe('GymAdminStudentOverviewPage', () => {
         expect.objectContaining({ page: 1, page_size: 100 }),
       ),
     )
-    const expectedConsumptionDate = new Date('2026-08-10T15:00:00Z').toLocaleDateString('es-CL', { dateStyle: 'medium' }).replace(/\s+/g, ' ')
     const expectedStart = new Date('2026-08-11T19:30:00Z').toLocaleString('es-CL', { dateStyle: 'medium', timeStyle: 'short' }).replace(/\s+/g, ' ')
     const expectedEnd = new Date('2026-08-11T20:45:00Z').toLocaleTimeString('es-CL', { timeStyle: 'short' }).replace(/\s+/g, ' ')
-    expect(screen.getAllByText('Fecha consumo').length).toBeGreaterThan(0)
-    expect(screen.queryByText('Fecha')).not.toBeInTheDocument()
-    expect(screen.getAllByText(expectedConsumptionDate).length).toBeGreaterThan(0)
+    expect(screen.queryByText('Fecha consumo')).not.toBeInTheDocument()
     expect(screen.getAllByText('Horario clase').length).toBeGreaterThan(0)
     expect(
       screen.getAllByText((_content, element) => {
@@ -355,7 +352,7 @@ describe('GymAdminStudentOverviewPage', () => {
     ).toBeGreaterThan(0)
     expect(screen.getAllByText('Profesor').length).toBeGreaterThan(0)
     expect(screen.getAllByText('Profe Carla').length).toBeGreaterThan(0)
-    expect(screen.getAllByText('Inscrito por').length).toBeGreaterThan(0)
-    expect(screen.getAllByText('El mismo alumno').length).toBeGreaterThan(0)
+    expect(screen.queryByText('Inscrito por')).not.toBeInTheDocument()
+    expect(screen.queryByText('El mismo alumno')).not.toBeInTheDocument()
   })
 })
