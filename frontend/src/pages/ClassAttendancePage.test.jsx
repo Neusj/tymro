@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -59,11 +59,11 @@ beforeEach(() => {
   vi.clearAllMocks()
   classesApi.retrieve.mockResolvedValue(GYM_CLASS)
   classesApi.enrolledStudents.mockResolvedValue(STUDENTS)
-  classesApi.toggleAttendance.mockResolvedValue({ status: 'present' })
+  classesApi.toggleAttendance.mockImplementation((_id, payload) => Promise.resolve({ status: payload.status }))
 })
 
 describe('ClassAttendancePage - boton de asistencia', () => {
-  it('muestra Confirmar para ausente y Confirmado para presente sin alternar a ausente', async () => {
+  it('permite confirmar y quitar asistencia desde el boton rapido', async () => {
     const user = userEvent.setup()
     renderPage()
 
@@ -78,10 +78,20 @@ describe('ClassAttendancePage - boton de asistencia', () => {
         status: 'present',
       }),
     )
-    expect(await screen.findAllByRole('button', { name: 'Confirmado' })).toHaveLength(2)
+    expect(await screen.findAllByRole('button', { name: 'Quitar' })).toHaveLength(2)
     expect(screen.getAllByText('Presente')).toHaveLength(2)
 
-    await user.click(screen.getAllByRole('button', { name: 'Confirmado' })[0])
-    expect(classesApi.toggleAttendance).toHaveBeenCalledTimes(1)
+    const brunoRow = screen.getByText('Bruno Diaz').closest('article')
+    await user.click(within(brunoRow).getByRole('button', { name: 'Quitar' }))
+
+    await waitFor(() =>
+      expect(classesApi.toggleAttendance).toHaveBeenCalledWith('101', {
+        student_id: 12,
+        status: 'absent',
+      }),
+    )
+    expect(classesApi.toggleAttendance).toHaveBeenCalledTimes(2)
+    expect(screen.getAllByText('Presente')).toHaveLength(1)
+    expect(screen.getAllByText('Ausente')).toHaveLength(1)
   })
 })

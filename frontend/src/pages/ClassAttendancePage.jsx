@@ -87,10 +87,7 @@ export default function ClassAttendancePage() {
     }
 
     const currentStatus = attendanceMap[student.student_id] || 'absent'
-    if (currentStatus === 'present') {
-      return
-    }
-    const nextStatus = 'present'
+    const nextStatus = currentStatus === 'present' ? 'absent' : 'present'
     const previousStatus = currentStatus
 
     setSavingStudentId(student.student_id)
@@ -201,15 +198,15 @@ export default function ClassAttendancePage() {
                 <button
                   type="button"
                   aria-pressed={present}
-                  disabled={!canToggle || savingStudentId !== null || present}
+                  disabled={!canToggle || savingStudentId !== null}
                   onClick={() => toggleStudent(student)}
                   className={`min-h-11 shrink-0 rounded-lg border px-4 py-2 text-sm font-semibold transition disabled:opacity-60 ${
                     present
-                      ? 'border-emerald-500/60 bg-emerald-500/15 text-emerald-100'
+                      ? 'border-brand-red/60 bg-brand-red/10 text-red-100 hover:border-brand-red'
                       : 'border-brand-blue/70 bg-brand-blue/15 text-brand-white hover:border-brand-blue'
                   }`}
                 >
-                  {saving ? 'Guardando...' : present ? 'Confirmado' : 'Confirmar'}
+                  {saving ? 'Guardando...' : present ? 'Quitar' : 'Confirmar'}
                 </button>
               </div>
             </article>
