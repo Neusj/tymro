@@ -610,25 +610,6 @@ export default function GymAdminClassesPage({ embedded = false, onOpenSchedule }
           <h2 className="panel-title">Detalle de clases (filtrado)</h2>
           {canManage ? (
             <div className="flex flex-wrap justify-end gap-2">
-              {onOpenSchedule ? (
-                <button
-                  type="button"
-                  onClick={onOpenSchedule}
-                  className="btn-ghost text-xs"
-                >
-                  Ver programacion
-                </button>
-              ) : null}
-              {canUpdateGeneratedClasses && projectedCount > 0 ? (
-                <button
-                  type="button"
-                  disabled={working}
-                  onClick={updateGeneratedClasses}
-                  className="btn-primary text-xs"
-                >
-                  Generar clases reales ({projectedCount})
-                </button>
-              ) : null}
               <button
                 type="button"
                 disabled={!selectedIds.length}

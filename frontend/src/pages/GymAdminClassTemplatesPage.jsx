@@ -368,23 +368,40 @@ export default function GymAdminClassTemplatesPage() {
               {row.is_active ? 'Desactivar programacion' : 'Activar programacion'}
             </button>
             {canDeleteSeries ? (
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  disabled={workingId === row.id || row.can_delete === false}
-                  onClick={() => setDeletingTemplate(row)}
-                  className="min-w-0 flex-1 rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 disabled:cursor-not-allowed disabled:opacity-60"
-                  title={row.can_delete === false ? row.delete_block_reason || 'Esta programacion ya no se puede eliminar.' : undefined}
+              row.can_delete === false ? (
+                <TouchTooltip
+                  label="Motivo bloqueo"
+                  text={row.delete_block_reason || 'Esta programacion ya no se puede eliminar.'}
+                  className="flex items-center gap-2"
                 >
-                  Eliminar programacion
-                </button>
-                {row.can_delete === false ? (
-                  <TouchTooltip
-                    label="Motivo bloqueo"
-                    text={row.delete_block_reason || 'Esta programacion ya no se puede eliminar.'}
-                  />
-                ) : null}
-              </div>
+                  <button
+                    type="button"
+                    disabled
+                    className="min-w-0 flex-1 rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 opacity-60 disabled:cursor-not-allowed"
+                    title={row.delete_block_reason || 'Esta programacion ya no se puede eliminar.'}
+                  >
+                    Eliminar programacion
+                  </button>
+                  <span
+                    tabIndex={0}
+                    aria-label="Motivo bloqueo"
+                    className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-brand-line text-[10px] text-brand-muted hover:text-brand-white focus:outline-none focus:ring-1 focus:ring-brand-blue/60"
+                  >
+                    i
+                  </span>
+                </TouchTooltip>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={workingId === row.id}
+                    onClick={() => setDeletingTemplate(row)}
+                    className="min-w-0 flex-1 rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    Eliminar programacion
+                  </button>
+                </div>
+              )
             ) : null}
           </>
         ),

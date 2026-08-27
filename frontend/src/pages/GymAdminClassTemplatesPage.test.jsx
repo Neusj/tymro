@@ -149,7 +149,7 @@ describe('GymAdminClassTemplatesPage - flujo integrado de clases', () => {
 
     expect(screen.getByRole('button', { name: /eliminar programacion/i })).toBeDisabled()
 
-    await userEvent.click(screen.getByRole('button', { name: /motivo bloqueo/i }))
+    await userEvent.hover(screen.getByLabelText(/motivo bloqueo/i))
     expect(screen.getByText('La serie tiene historial consolidado.')).toBeInTheDocument()
   })
 })
