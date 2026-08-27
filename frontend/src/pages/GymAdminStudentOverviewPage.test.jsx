@@ -303,12 +303,14 @@ describe('GymAdminStudentOverviewPage', () => {
       items: [
         {
           id: 20,
-          consumed_at: '2026-08-10T19:00:00Z',
+          consumed_at: '2026-08-10T15:00:00Z',
           branch_name: 'Central',
           plan_name: 'Pack 10',
           class: {
             id: 99,
             name: 'Kick 19h',
+            start_datetime: '2026-08-11T19:30:00Z',
+            end_datetime: '2026-08-11T20:45:00Z',
             discipline_name: 'Kickboxing',
             teacher_name: 'Profe Carla',
           },
@@ -333,6 +335,15 @@ describe('GymAdminStudentOverviewPage', () => {
         expect.objectContaining({ page: 1, page_size: 100 }),
       ),
     )
+    const expectedStart = new Date('2026-08-11T19:30:00Z').toLocaleString('es-CL', { dateStyle: 'medium', timeStyle: 'short' }).replace(/\s+/g, ' ')
+    const expectedEnd = new Date('2026-08-11T20:45:00Z').toLocaleTimeString('es-CL', { timeStyle: 'short' }).replace(/\s+/g, ' ')
+    expect(screen.getAllByText('Horario clase').length).toBeGreaterThan(0)
+    expect(
+      screen.getAllByText((_content, element) => {
+        const text = element.textContent.replace(/\s+/g, ' ')
+        return text.includes(expectedStart) && text.includes(expectedEnd)
+      }).length,
+    ).toBeGreaterThan(0)
     expect(screen.getAllByText('Profesor').length).toBeGreaterThan(0)
     expect(screen.getAllByText('Profe Carla').length).toBeGreaterThan(0)
   })

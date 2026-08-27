@@ -63,6 +63,21 @@ function formatDateTime(value) {
   return date.toLocaleString('es-CL', { dateStyle: 'medium', timeStyle: 'short' })
 }
 
+function formatDateTimeRange(startValue, endValue) {
+  if (!startValue) return '-'
+  const start = new Date(startValue)
+  if (Number.isNaN(start.getTime())) return '-'
+  const startLabel = start.toLocaleString('es-CL', { dateStyle: 'medium', timeStyle: 'short' })
+  if (!endValue) return startLabel
+  const end = new Date(endValue)
+  if (Number.isNaN(end.getTime())) return startLabel
+  const sameDay = start.toDateString() === end.toDateString()
+  const endLabel = sameDay
+    ? end.toLocaleTimeString('es-CL', { timeStyle: 'short' })
+    : end.toLocaleString('es-CL', { dateStyle: 'medium', timeStyle: 'short' })
+  return `${startLabel} - ${endLabel}`
+}
+
 function formatTime(value) {
   return value ? value.slice(0, 5) : '-'
 }
@@ -376,6 +391,7 @@ function normalizeDetailRows(type, rows = []) {
         id: item.id,
         clase: item.class?.name || 'Clase',
         fecha: formatDateTime(item.consumed_at),
+        horario_clase: formatDateTimeRange(item.class?.start_datetime, item.class?.end_datetime),
         disciplina: item.class?.discipline_name || 'Sin disciplina',
         profesor: item.class?.teacher_name || 'Sin profesor',
         plan: item.plan_name || 'Sin plan',
@@ -470,6 +486,7 @@ function detailColumns(type, actions = {}) {
     return [
       { key: 'clase', label: 'Clase', mobile: 'title' },
       { key: 'fecha', label: 'Fecha', mobile: 'secondary' },
+      { key: 'horario_clase', label: 'Horario clase', mobile: 'secondary' },
       { key: 'disciplina', label: 'Disciplina', mobile: 'secondary' },
       { key: 'profesor', label: 'Profesor', mobile: 'secondary' },
       { key: 'plan', label: 'Plan' },
