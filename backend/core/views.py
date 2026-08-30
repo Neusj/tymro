@@ -4496,6 +4496,99 @@ def _parse_weekdays_param(raw):
     return sorted(days)
 
 
+def _materialize_template_instance(*, organization_id, class_template_id, raw_date):
+    """Hace EXISTIR la clase de una serie para una fecha puntual. Devuelve `(gym_class, creada)`.
+
+    FUENTE ÚNICA de la materialización on-demand: la comparten la reserva del alumno
+    (`POST /api/enrollments/` con `class_template_id` + `date`) y la materialización del
+    admin (`POST /api/class-templates/{id}/materialize/`). Que sea una sola función es a
+    propósito: son el MISMO acto de negocio —hacer existir una clase proyectada— y si
+    divergieran, el admin podría crear clases que el alumno no puede reservar, o al revés.
+
+    El rango permitido es UNO SOLO para los dos: `Organization.max_reservation_window_days`,
+    vía `validate_reservation_window_for_date`. El admin NO tiene bypass; el tope de
+    `class_generation_window_days` es de la generación por lote (alta de serie y job), no de
+    este camino, y meterlo acá sería una segunda definición del rango compitiendo con la
+    que ya obedece el alumno.
+
+    `organization_id` llega SIEMPRE del actor o de un recurso que ya pasó las guardas de
+    pertenencia de la view, nunca del payload: es lo que hace que el lookup de abajo sea el
+    control de aislamiento y no una validación cosmética.
+    """
+    if not organization_id:
+        raise NotFound('Plantilla no encontrada.')
+
+    try:
+        template_id = int(class_template_id)
+    except (TypeError, ValueError):
+        raise NotFound('Plantilla no encontrada.')
+
+    # Pertenencia PRIMERO: el lookup acotado por organizacion hace indistinguibles
+    # "no existe" y "existe en otro tenant". Recién después se leen reglas de negocio
+    # de la plantilla o la ventana de reserva.
+    template = ClassTemplate.objects.select_related(
+        'organization', 'branch', 'teacher', 'class_type', 'discipline', 'created_by'
+    ).filter(pk=template_id, organization_id=organization_id).first()
+    if template is None:
+        raise NotFound('Plantilla no encontrada.')
+
+    if not raw_date:
+        raise ValidationError({'date': 'Este parametro es obligatorio.'})
+    target_date = parse_date(str(raw_date))
+    if target_date is None or str(raw_date) != target_date.isoformat():
+        raise ValidationError({'date': 'Formato invalido. Usa YYYY-MM-DD.'})
+
+    today = timezone.localdate()
+    if target_date < today:
+        raise ValidationError({'date': 'No puedes reservar clases pasadas.'})
+    try:
+        validate_reservation_window_for_date(template.organization, target_date, today=today)
+    except ReservationRuleError as exc:
+        raise ValidationError(reservation_error_payload(exc))
+
+    if target_date.weekday() != template.weekday:
+        raise ValidationError({'date': 'La fecha no corresponde al dia de la plantilla.'})
+    if target_date < template.start_date or (template.end_date and target_date > template.end_date):
+        raise ValidationError({'date': 'La plantilla no esta vigente para esa fecha.'})
+    if not template.is_active:
+        raise ValidationError({'class_template_id': 'Solo puedes reservar plantillas activas.'})
+
+    start_datetime = timezone.make_aware(
+        datetime.combine(target_date, template.start_time),
+        timezone.get_current_timezone(),
+    )
+    end_datetime = timezone.make_aware(
+        datetime.combine(target_date, template.end_time),
+        timezone.get_current_timezone(),
+    )
+    return GymClass.objects.get_or_create(
+        class_template=template,
+        start_datetime=start_datetime,
+        defaults={
+            'organization': template.organization,
+            'branch': template.branch,
+            'teacher': template.teacher,
+            'class_type': template.class_type,
+            'discipline': template.discipline,
+            'name': template.name or (
+                template.class_type.name if template.class_type else f'Clase {template.get_weekday_display()}'
+            ),
+            'end_datetime': end_datetime,
+            'capacity': template.capacity,
+            'is_trial_eligible': template.is_trial_eligible,
+            'status': GymClass.Status.SCHEDULED,
+            'created_by': template.created_by,
+            'is_active': True,
+            'has_substitute': template.has_substitute,
+            'substitute_name': template.substitute_name,
+            'substitute_teacher': template.substitute_teacher,
+            'substitution_source': template.substitution_source,
+            'substitution_assigned_at': template.substitution_assigned_at,
+            'substitution_assigned_by': template.substitution_assigned_by,
+        },
+    )
+
+
 class ClassTemplateViewSet(ModelViewSet):
     queryset = ClassTemplate.objects.select_related('organization', 'branch', 'teacher', 'class_type', 'discipline', 'created_by').all()
     serializer_class = ClassTemplateSerializer
@@ -4674,6 +4767,37 @@ class ClassTemplateViewSet(ModelViewSet):
             )
         delete_template_safely(template)
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @action(detail=True, methods=['post'], url_path='materialize')
+    def materialize(self, request, pk=None):
+        """`POST /api/class-templates/{id}/materialize/` — hace existir UNA clase proyectada.
+
+        Es la mitad admin del camino on-demand que el alumno ya tenía: el listado por fecha
+        mezcla clases reales con filas `virtual:<template>:<fecha>` que todavía no existen en
+        la BD, y sobre esas el admin no podía inscribir, editar ni pasar asistencia porque no
+        hay PK contra la cual operar. Este endpoint la crea y devuelve la clase real, así el
+        front reabre el modal de inscripción contra un id de verdad.
+
+        Deliberadamente NO inscribe a nadie: materializar y inscribir son dos pasos, para que
+        abrir el modal y arrepentirse no deje una reserva colgada. La clase creada queda
+        idéntica a la que habría creado la generación por lote (mismo `get_or_create`
+        compartido), así que un segundo POST devuelve la misma clase con 200 en vez de 201 y
+        no duplica nada.
+        """
+        template = self.get_object()
+        if not _can_manage_operational_resource(request.user, template.organization_id):
+            raise PermissionDenied('No tienes permisos para crear clases de esta plantilla.')
+
+        gym_class, created = _materialize_template_instance(
+            organization_id=template.organization_id,
+            class_template_id=template.id,
+            raw_date=request.data.get('date'),
+        )
+        serializer = GymClassSerializer(gym_class, context={'request': request})
+        return Response(
+            serializer.data,
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
 
     @action(detail=True, methods=['post'], url_path='generate')
     def generate_instances(self, request, pk=None):
@@ -5472,13 +5596,6 @@ class EnrollmentViewSet(ModelViewSet):
     def _request_has_virtual_class_reference(data):
         return data.get('class_template_id') not in (None, '') or data.get('date') not in (None, '')
 
-    @staticmethod
-    def _template_datetime(template, target_date, value_time):
-        return timezone.make_aware(
-            datetime.combine(target_date, value_time),
-            timezone.get_current_timezone(),
-        )
-
     def _actor_organization_id_for_virtual_reservation(self):
         user = self.request.user
         if getattr(user, 'organization_id', None):
@@ -5486,72 +5603,10 @@ class EnrollmentViewSet(ModelViewSet):
         return None
 
     def _materialize_virtual_class_for_reservation(self, *, class_template_id, raw_date):
-        organization_id = self._actor_organization_id_for_virtual_reservation()
-        if not organization_id:
-            raise NotFound('Plantilla no encontrada.')
-
-        try:
-            template_id = int(class_template_id)
-        except (TypeError, ValueError):
-            raise NotFound('Plantilla no encontrada.')
-
-        # Pertenencia PRIMERO: el lookup acotado por organizacion hace indistinguibles
-        # "no existe" y "existe en otro tenant". Recién después se leen reglas de negocio
-        # de la plantilla o la ventana de reserva.
-        template = ClassTemplate.objects.select_related(
-            'organization', 'branch', 'teacher', 'class_type', 'discipline', 'created_by'
-        ).filter(pk=template_id, organization_id=organization_id).first()
-        if template is None:
-            raise NotFound('Plantilla no encontrada.')
-
-        if not raw_date:
-            raise ValidationError({'date': 'Este parametro es obligatorio.'})
-        target_date = parse_date(str(raw_date))
-        if target_date is None or str(raw_date) != target_date.isoformat():
-            raise ValidationError({'date': 'Formato invalido. Usa YYYY-MM-DD.'})
-
-        today = timezone.localdate()
-        if target_date < today:
-            raise ValidationError({'date': 'No puedes reservar clases pasadas.'})
-        try:
-            validate_reservation_window_for_date(template.organization, target_date, today=today)
-        except ReservationRuleError as exc:
-            raise ValidationError(reservation_error_payload(exc))
-
-        if target_date.weekday() != template.weekday:
-            raise ValidationError({'date': 'La fecha no corresponde al dia de la plantilla.'})
-        if target_date < template.start_date or (template.end_date and target_date > template.end_date):
-            raise ValidationError({'date': 'La plantilla no esta vigente para esa fecha.'})
-        if not template.is_active:
-            raise ValidationError({'class_template_id': 'Solo puedes reservar plantillas activas.'})
-
-        start_datetime = self._template_datetime(template, target_date, template.start_time)
-        end_datetime = self._template_datetime(template, target_date, template.end_time)
-        gym_class, _created = GymClass.objects.get_or_create(
-            class_template=template,
-            start_datetime=start_datetime,
-            defaults={
-                'organization': template.organization,
-                'branch': template.branch,
-                'teacher': template.teacher,
-                'class_type': template.class_type,
-                'discipline': template.discipline,
-                'name': template.name or (
-                    template.class_type.name if template.class_type else f'Clase {template.get_weekday_display()}'
-                ),
-                'end_datetime': end_datetime,
-                'capacity': template.capacity,
-                'is_trial_eligible': template.is_trial_eligible,
-                'status': GymClass.Status.SCHEDULED,
-                'created_by': template.created_by,
-                'is_active': True,
-                'has_substitute': template.has_substitute,
-                'substitute_name': template.substitute_name,
-                'substitute_teacher': template.substitute_teacher,
-                'substitution_source': template.substitution_source,
-                'substitution_assigned_at': template.substitution_assigned_at,
-                'substitution_assigned_by': template.substitution_assigned_by,
-            },
+        gym_class, _created = _materialize_template_instance(
+            organization_id=self._actor_organization_id_for_virtual_reservation(),
+            class_template_id=class_template_id,
+            raw_date=raw_date,
         )
         return gym_class
 

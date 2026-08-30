@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { classesApi, disciplinesApi } from '../api/client'
+import { classesApi, classTemplatesApi, disciplinesApi } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import { canManageOperational } from '../utils/roles'
+import { firstApiError } from '../utils/format'
 import BulkActionModal from '../components/BulkActionModal'
 import ClassEnrollmentModal from '../components/ClassEnrollmentModal'
 import ConfirmDialog from '../components/ConfirmDialog'
@@ -62,8 +63,30 @@ function isVirtualClass(row) {
   return String(row?.id || '').startsWith('virtual:')
 }
 
+// El id sintetico es `virtual:<serie>:<YYYY-MM-DD>`. La fecha se lee de ahi y no de
+// `start_datetime` ni de `selectedDate` a proposito: es exactamente la fecha con la que el
+// backend proyecto la fila, asi que materializar no puede caer en otro dia por una
+// conversion de zona horaria.
+function projectedDateFromId(row) {
+  const parts = String(row?.id || '').split(':')
+  return parts.length === 3 ? parts[2] : ''
+}
+
+// Una clase proyectada YA NO bloquea inscripciones: se materializa al abrir el modal.
+// Pero `by_date` proyecta filas para CUALQUIER fecha —no hay piso ni techo en
+// `_virtual_template_queryset`, y el selector de dia deja ir al pasado—, asi que ofrecer el
+// boton sobre una fecha que el backend va a rechazar seguro es un callejon sin salida.
+// `reservable` lo calcula el backend (ventana de reserva de la org); el piso de hoy hay que
+// mirarlo aparte porque la ventana solo tiene techo.
 function canManageEnrollments(row) {
-  return !isVirtualClass(row) && row?.status !== 'cancelled'
+  if (row?.status === 'cancelled') {
+    return false
+  }
+  if (!isVirtualClass(row)) {
+    return true
+  }
+  const projectedDate = projectedDateFromId(row)
+  return row?.reservable !== false && Boolean(projectedDate) && projectedDate >= todayIsoDate()
 }
 
 export default function GymAdminClassesPage({ embedded = false, onOpenSchedule } = {}) {
@@ -200,13 +223,33 @@ export default function GymAdminClassesPage({ embedded = false, onOpenSchedule }
     setSingleAction({ gymClass, actionName })
   }
 
-  const openEnrollmentModal = (gymClass, initialView = 'enroll') => {
+  const openEnrollmentModal = async (gymClass, initialView = 'enroll') => {
     if (!canManageEnrollments(gymClass)) {
-      setError('No puedes modificar inscripciones en una clase cancelada o proyectada.')
+      setError('No puedes modificar inscripciones en una clase cancelada.')
       return
     }
     setError('')
-    setEnrollmentClass(gymClass)
+
+    // Una fila proyectada no tiene PK, y el modal la necesita para leer inscribibles e
+    // inscritos. Se materializa primero y el modal abre contra la clase real; si el backend
+    // la rechaza (fuera de la ventana configurada, serie inactiva) no se abre nada.
+    let target = gymClass
+    if (isVirtualClass(gymClass)) {
+      setWorking(true)
+      try {
+        target = await classTemplatesApi.materialize(gymClass.class_template, {
+          date: projectedDateFromId(gymClass),
+        })
+        await loadData()
+      } catch (apiError) {
+        setError(firstApiError(apiError?.response?.data, 'No se pudo crear la clase proyectada.'))
+        return
+      } finally {
+        setWorking(false)
+      }
+    }
+
+    setEnrollmentClass(target)
     setEnrollmentInitialView(initialView)
   }
 
@@ -312,7 +355,21 @@ export default function GymAdminClassesPage({ embedded = false, onOpenSchedule }
           const enrollmentDisabled = !canManageEnrollments(row)
           const canDeleteRecord = !row.class_template
           if (isVirtual) {
-            return (
+            return canManage ? (
+              <>
+                <button
+                  type="button"
+                  disabled={enrollmentDisabled || working}
+                  onClick={() => openEnrollmentModal(row, 'enroll')}
+                  className="w-full rounded-lg border border-brand-blue/60 px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue disabled:opacity-60"
+                >
+                  Inscribir alumnos
+                </button>
+                <p className="rounded-lg border border-brand-line bg-black/20 px-2.5 py-2 text-xs text-brand-muted">
+                  Clase proyectada: se crea al abrir la inscripcion.
+                </p>
+              </>
+            ) : (
               <p className="rounded-lg border border-brand-line bg-black/20 px-2.5 py-2 text-xs text-brand-muted">
                 Clase proyectada. Todavia no existe como instancia real.
               </p>
@@ -398,7 +455,21 @@ export default function GymAdminClassesPage({ embedded = false, onOpenSchedule }
           const enrollmentDisabled = !canManageEnrollments(row)
           const canDeleteRecord = !row.class_template
           if (isVirtual) {
-            return (
+            return canManage ? (
+              <>
+                <button
+                  type="button"
+                  disabled={enrollmentDisabled || working}
+                  onClick={() => openEnrollmentModal(row, 'enroll')}
+                  className="w-full rounded-lg border border-brand-blue/60 px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue disabled:opacity-60"
+                >
+                  Inscribir alumnos
+                </button>
+                <p className="rounded-lg border border-brand-line bg-black/20 px-2.5 py-2 text-xs text-brand-muted">
+                  Clase proyectada: se crea al abrir la inscripcion.
+                </p>
+              </>
+            ) : (
               <p className="rounded-lg border border-brand-line bg-black/20 px-2.5 py-2 text-xs text-brand-muted">
                 Clase proyectada. Todavia no existe como instancia real.
               </p>
