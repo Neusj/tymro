@@ -88,6 +88,29 @@ function canManageEnrollments(row) {
   return row?.reservable !== false && Boolean(projectedDate) && projectedDate >= todayIsoDate()
 }
 
+// Ocupacion de la clase para el pie de la tarjeta. El numero manda (va en blanco, que es lo
+// que se lee de un vistazo) y la palabra lo desambigua: sin ella, "7/10" al lado de un horario
+// como "07:00 - 08:00" se lee como otra hora. Se tine de rojo solo cuando no quedan cupos,
+// siguiendo el mismo par de tokens que ya usa BalanceBadge para "sin saldo".
+function CapacityChip({ row }) {
+  const capacity = Number(row?.capacity) || 0
+  const taken = Number(row?.enrollments_count) || 0
+  const isFull = capacity > 0 && taken >= capacity
+  return (
+    <span
+      title={`${taken} de ${capacity} cupos ocupados`}
+      className={`inline-flex items-baseline gap-1.5 rounded-full border px-2.5 py-1 ${
+        isFull ? 'border-brand-red/40' : 'border-brand-line'
+      }`}
+    >
+      <span className="text-[10px] font-semibold uppercase tracking-wide text-brand-dim">Cupos</span>
+      <span className={`text-[13px] font-semibold ${isFull ? 'text-red-200' : 'text-brand-white'}`}>
+        {taken}/{capacity}
+      </span>
+    </span>
+  )
+}
+
 export default function GymAdminClassesPage({ embedded = false, onOpenSchedule } = {}) {
   const location = useLocation()
   const { user } = useAuth()
@@ -307,8 +330,12 @@ export default function GymAdminClassesPage({ embedded = false, onOpenSchedule }
       {
         key: 'capacity',
         label: 'Cupos',
+        // En tarjeta va anclada abajo a la derecha, junto a las acciones: es el dato que se
+        // mira para decidir si todavia se puede inscribir a alguien.
+        mobile: 'footer',
         sortAccessor: (row) => row.capacity,
         render: (row) => `${row.enrollments_count || 0}/${row.capacity}`,
+        mobileRender: (row) => <CapacityChip row={row} />,
       },
       { key: 'status', label: 'Estado', render: (row) => <ValueBadge kind="class_status" value={row.status} /> },
       {

@@ -152,6 +152,12 @@ export default function DataTable({
       title: withZone.find((item) => item.zone === 'title')?.column || detailColumns[0] || null,
       meta: withZone.filter((item) => item.zone === 'meta').sort(bySort).map((item) => item.column),
       secondary: withZone.filter((item) => item.zone === 'secondary').sort(bySort).map((item) => item.column),
+      // Zona opcional: un dato compacto anclado a la derecha del pie de la tarjeta, junto a
+      // las acciones. Para metricas de un vistazo (ocupacion, saldo) que no merecen una
+      // celda etiquetada en la grilla pero si estar visibles sin abrir el detalle. Una sola
+      // columna puede ocuparla; el resto de las paginas no cambia porque nadie opta por
+      // `mobile: 'footer'` salvo quien la pide.
+      footer: withZone.find((item) => item.zone === 'footer')?.column || null,
     }
   }, [detailColumns])
 
@@ -486,9 +492,9 @@ export default function DataTable({
                     </dl>
                   ) : null}
 
-                  {/* Footer: primary action + detail + overflow menu */}
+                  {/* Footer: primary action + detail + footer metric + overflow menu */}
                   <div className="mt-3.5 flex items-center gap-2 border-t border-brand-line pt-3">
-                    {primaryAction ? <div className="flex-1 [&_button]:min-h-11 [&_button]:w-full">{primaryAction}</div> : null}
+                    {primaryAction ? <div className="min-w-0 flex-1 [&_button]:min-h-11 [&_button]:w-full">{primaryAction}</div> : null}
                     {!primaryReplacesDetail ? (
                       <button
                         type="button"
@@ -497,6 +503,9 @@ export default function DataTable({
                       >
                         {mobileDetailLabel}
                       </button>
+                    ) : null}
+                    {mobileZones.footer ? (
+                      <div className="ml-auto shrink-0 whitespace-nowrap">{renderPlainCell(mobileZones.footer, row)}</div>
                     ) : null}
                     {hasMenuActions && (!primaryAction || primaryReplacesDetail) ? (
                       <div className="shrink-0 [&_button]:min-h-9 [&_button]:text-xs">
