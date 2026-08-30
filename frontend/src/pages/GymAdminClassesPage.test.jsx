@@ -15,7 +15,7 @@ vi.mock('../api/client', () => ({
     enrollableStudents: vi.fn(),
   },
   disciplinesApi: { list: vi.fn() },
-  classTemplatesApi: { materialize: vi.fn() },
+  classTemplatesApi: { enrollableStudents: vi.fn() },
   enrollmentsApi: { create: vi.fn(), cancel: vi.fn() },
 }))
 
@@ -24,7 +24,7 @@ vi.mock('../auth/AuthContext', () => ({
   useAuth: () => ({ user: { role: mockRole } }),
 }))
 
-import { classesApi, classTemplatesApi, disciplinesApi } from '../api/client'
+import { classesApi, classTemplatesApi, disciplinesApi, enrollmentsApi } from '../api/client'
 import GymAdminClassesPage from './GymAdminClassesPage'
 
 const PROJECTED_DATE = '2026-09-15'
@@ -47,7 +47,17 @@ const projectedRow = {
   status: 'scheduled',
 }
 
-const materializedClass = { ...projectedRow, id: 501, class_template: 77 }
+const realClass = { ...projectedRow, id: 501, class_template: 77 }
+
+const candidate = {
+  id: 9,
+  name: 'Ana Perez',
+  username: 'ana',
+  email: 'ana@gym.cl',
+  available_classes: 5,
+  has_available_classes: true,
+  unlimited_classes: false,
+}
 
 function renderPage() {
   return render(
@@ -64,6 +74,10 @@ async function openRowActions(user) {
   await user.click(gears[0])
 }
 
+async function clickEnroll(user) {
+  await user.click(await screen.findByRole('button', { name: /inscribir alumnos/i }))
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   mockRole = 'gym_admin'
@@ -71,7 +85,8 @@ beforeEach(() => {
   classesApi.enrolledStudents.mockResolvedValue([])
   classesApi.enrollableStudents.mockResolvedValue([])
   disciplinesApi.list.mockResolvedValue([])
-  classTemplatesApi.materialize.mockResolvedValue(materializedClass)
+  classTemplatesApi.enrollableStudents.mockResolvedValue([candidate])
+  enrollmentsApi.create.mockResolvedValue({ id: 1, gym_class: 501 })
   window.matchMedia = (query) => ({
     matches: query.includes('min-width'),
     media: query,
@@ -93,84 +108,88 @@ describe('inscripcion sobre una clase proyectada', () => {
     expect(await screen.findByRole('button', { name: /inscribir alumnos/i })).toBeEnabled()
   })
 
-  it('materializa la serie en esa fecha antes de abrir el modal', async () => {
-    const user = userEvent.setup()
-    renderPage()
-    await openRowActions(user)
-
-    await user.click(await screen.findByRole('button', { name: /inscribir alumnos/i }))
-
-    await waitFor(() => {
-      expect(classTemplatesApi.materialize).toHaveBeenCalledWith(77, { date: PROJECTED_DATE })
-    })
-    // El modal tiene que abrirse contra la PK real que devolvio el backend, no contra
-    // el id sintetico: es lo unico que hace usables enrollable-students / enrolled-students.
-    await waitFor(() => {
-      expect(classesApi.enrollableStudents).toHaveBeenCalledWith(501)
-    })
-  })
-
-  it('recarga el listado para que la fila deje de estar proyectada', async () => {
-    const user = userEvent.setup()
-    renderPage()
-    await waitFor(() => expect(classesApi.byDate).toHaveBeenCalledTimes(1))
-    await openRowActions(user)
-
-    await user.click(await screen.findByRole('button', { name: /inscribir alumnos/i }))
-
-    await waitFor(() => expect(classesApi.byDate).toHaveBeenCalledTimes(2))
-  })
-
-  it('muestra el error del backend y no abre el modal si la fecha esta fuera de rango', async () => {
-    const user = userEvent.setup()
-    classTemplatesApi.materialize.mockRejectedValue({
-      response: { data: { detail: 'No puedes reservar con más de 7 días de anticipación.' } },
-    })
-    renderPage()
-    await openRowActions(user)
-
-    await user.click(await screen.findByRole('button', { name: /inscribir alumnos/i }))
-
-    expect(await screen.findByText(/más de 7 días de anticipación/i)).toBeInTheDocument()
-    expect(classesApi.enrollableStudents).not.toHaveBeenCalled()
-  })
-
   it('no ofrece inscribir en una fila proyectada de una fecha pasada', async () => {
     const user = userEvent.setup()
     // `by_date` proyecta filas para CUALQUIER fecha y el selector de dia deja ir al pasado:
     // ahi el POST daria 400 garantizado, asi que el boton no debe invitar al callejon.
-    classesApi.byDate.mockResolvedValue([
-      { ...projectedRow, id: 'virtual:77:2020-01-06' },
-    ])
+    classesApi.byDate.mockResolvedValue([{ ...projectedRow, id: 'virtual:77:2020-01-06' }])
     renderPage()
     await openRowActions(user)
 
     expect(await screen.findByRole('button', { name: /inscribir alumnos/i })).toBeDisabled()
   })
 
-  it('muestra el motivo real cuando el backend rechaza por un campo y no por detail', async () => {
+  it('abre el picker contra la SERIE y no crea la clase', async () => {
     const user = userEvent.setup()
-    // Solo el error de ventana viene como `detail`; los otros cuatro llegan por campo.
-    classTemplatesApi.materialize.mockRejectedValue({
-      response: { data: { date: ['La fecha no corresponde al dia de la plantilla.'] } },
+    renderPage()
+    await openRowActions(user)
+
+    await clickEnroll(user)
+
+    // Mirar no materializa: el roster sale de la serie, no de una clase que no existe.
+    await waitFor(() => {
+      expect(classTemplatesApi.enrollableStudents).toHaveBeenCalledWith(77)
+    })
+    expect(classesApi.enrollableStudents).not.toHaveBeenCalled()
+    expect(enrollmentsApi.create).not.toHaveBeenCalled()
+  })
+
+  it('inscribir materializa e inscribe en un solo acto', async () => {
+    const user = userEvent.setup()
+    renderPage()
+    await openRowActions(user)
+    await clickEnroll(user)
+
+    await user.click((await screen.findAllByRole('checkbox')).slice(-1)[0])
+    await user.click(await screen.findByRole('button', { name: /inscribir seleccionados/i }))
+
+    // El mismo contrato que ya usa el alumno al reservar: la clase nace CON la inscripcion,
+    // que es donde corresponde que se descuente el plan.
+    await waitFor(() => {
+      expect(enrollmentsApi.create).toHaveBeenCalledWith({
+        class_template_id: 77,
+        date: PROJECTED_DATE,
+        student: candidate.id,
+        status: 'active',
+      })
+    })
+  })
+
+  it('tras inscribir, el listado se recarga para que la fila deje de estar proyectada', async () => {
+    const user = userEvent.setup()
+    renderPage()
+    await waitFor(() => expect(classesApi.byDate).toHaveBeenCalledTimes(1))
+    await openRowActions(user)
+    await clickEnroll(user)
+
+    await user.click((await screen.findAllByRole('checkbox')).slice(-1)[0])
+    await user.click(await screen.findByRole('button', { name: /inscribir seleccionados/i }))
+
+    await waitFor(() => expect(classesApi.byDate).toHaveBeenCalledTimes(2))
+  })
+
+  it('muestra el error del backend si el picker de la serie falla', async () => {
+    const user = userEvent.setup()
+    classTemplatesApi.enrollableStudents.mockRejectedValue({
+      response: { data: { detail: 'No tienes permisos para listar alumnos inscribibles en esta serie.' } },
     })
     renderPage()
     await openRowActions(user)
 
-    await user.click(await screen.findByRole('button', { name: /inscribir alumnos/i }))
+    await clickEnroll(user)
 
-    expect(await screen.findByText(/no corresponde al dia de la plantilla/i)).toBeInTheDocument()
+    expect(await screen.findByText(/no tienes permisos para listar alumnos/i)).toBeInTheDocument()
   })
 
-  it('no materializa cuando la clase ya es real', async () => {
+  it('una clase real sigue usando el picker de la clase', async () => {
     const user = userEvent.setup()
-    classesApi.byDate.mockResolvedValue([materializedClass])
+    classesApi.byDate.mockResolvedValue([realClass])
     renderPage()
     await openRowActions(user)
 
-    await user.click(await screen.findByRole('button', { name: /inscribir alumnos/i }))
+    await clickEnroll(user)
 
     await waitFor(() => expect(classesApi.enrollableStudents).toHaveBeenCalledWith(501))
-    expect(classTemplatesApi.materialize).not.toHaveBeenCalled()
+    expect(classTemplatesApi.enrollableStudents).not.toHaveBeenCalled()
   })
 })

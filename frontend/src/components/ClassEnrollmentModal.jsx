@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { classesApi, enrollmentsApi } from '../api/client'
+import { classesApi, classTemplatesApi, enrollmentsApi } from '../api/client'
 import { firstApiError } from '../utils/format'
 import FormModal from './FormModal'
 import PlanAlertBadge from './ui/PlanAlertBadge'
@@ -49,22 +49,41 @@ export default function ClassEnrollmentModal({
   const [working, setWorking] = useState(false)
   const [error, setError] = useState('')
 
-  const classId = gymClass?.id
+  // Una fila `virtual:<serie>:<fecha>` es una clase PROYECTADA: la serie dice que ese dia hay
+  // clase, pero todavia no existe la fila en la BD. El modal sabe operar sobre eso sin
+  // crearla: mirar a quien se podria inscribir no puede tener el efecto de materializar.
+  const projectedParts = String(gymClass?.id || '').split(':')
+  const isProjected = projectedParts[0] === 'virtual' && projectedParts.length === 3
+  const projectedDate = isProjected ? projectedParts[2] : ''
+  const templateId = gymClass?.class_template
 
-  const loadRoster = async () => {
-    if (!classId) {
+  // La primera inscripcion hace nacer la clase. Desde ahi el modal deja de hablarle a la
+  // serie y pasa a la PK real, para que quitar inscritos y recargar funcionen igual que
+  // sobre una clase de siempre.
+  const [materializedId, setMaterializedId] = useState(null)
+  const classId = materializedId || (isProjected ? null : gymClass?.id)
+
+  const loadRoster = async (targetId = classId) => {
+    if (!targetId && !(isProjected && templateId)) {
       return
     }
 
     setLoading(true)
     setError('')
     try {
-      const [candidates, enrolled] = await Promise.all([
-        classesApi.enrollableStudents(classId),
-        classesApi.enrolledStudents(classId),
-      ])
-      setEnrollStudents(candidates)
-      setEnrolledStudents(enrolled)
+      if (!targetId) {
+        // Clase inexistente: los candidatos salen de la serie y no hay inscritos que leer.
+        const candidates = await classTemplatesApi.enrollableStudents(templateId)
+        setEnrollStudents(candidates)
+        setEnrolledStudents([])
+      } else {
+        const [candidates, enrolled] = await Promise.all([
+          classesApi.enrollableStudents(targetId),
+          classesApi.enrolledStudents(targetId),
+        ])
+        setEnrollStudents(candidates)
+        setEnrolledStudents(enrolled)
+      }
     } catch (apiError) {
       setError(firstApiError(apiError?.response?.data, 'No se pudo cargar la lista de alumnos.'))
     } finally {
@@ -77,6 +96,7 @@ export default function ClassEnrollmentModal({
       return
     }
     setView(initialView)
+    setMaterializedId(null)
     setEnrollSelectedIds([])
     setEnrolledSelectedIds([])
     setEnrollSearch('')
@@ -95,7 +115,7 @@ export default function ClassEnrollmentModal({
   )
 
   const submitEnrollments = async () => {
-    if (!classId || enrollSelectedIds.length === 0) {
+    if ((!classId && !(isProjected && templateId)) || enrollSelectedIds.length === 0) {
       return
     }
 
@@ -109,17 +129,27 @@ export default function ClassEnrollmentModal({
     setWorking(true)
     setError('')
     try {
+      // Sobre una clase proyectada se manda `class_template_id` + `date`: es el MISMO
+      // contrato que ya usa el alumno al reservar, y materializa e inscribe en un solo acto,
+      // asi que el descuento del plan ocurre junto con la inscripcion y no antes. El
+      // `get_or_create` del backend es idempotente, por eso todo el lote puede mandar la
+      // misma referencia de serie sin duplicar la clase.
+      let realClassId = classId
       for (const studentId of enrollSelectedIds) {
         // eslint-disable-next-line no-await-in-loop
-        await enrollmentsApi.create({
-          gym_class: classId,
-          student: studentId,
-          status: 'active',
-        })
+        const created = await enrollmentsApi.create(
+          realClassId
+            ? { gym_class: realClassId, student: studentId, status: 'active' }
+            : { class_template_id: templateId, date: projectedDate, student: studentId, status: 'active' },
+        )
+        realClassId = realClassId || created?.gym_class || null
+      }
+      if (realClassId && realClassId !== classId) {
+        setMaterializedId(realClassId)
       }
       setEnrollSelectedIds([])
       setEnrollSearch('')
-      await loadRoster()
+      await loadRoster(realClassId)
       await onChanged?.()
     } catch (apiError) {
       const detail = apiError?.response?.data

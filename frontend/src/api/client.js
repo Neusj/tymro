@@ -437,11 +437,10 @@ export const classTemplatesApi = {
   remove: async (id) => {
     await api.delete(`/class-templates/${id}/`)
   },
-  // Hace existir UNA clase proyectada (la fila `virtual:<serie>:<fecha>` del listado por
-  // fecha) y devuelve la clase real. Es el equivalente admin del camino on-demand que el
-  // alumno ya tenia al reservar.
-  materialize: async (id, payload) => {
-    const { data } = await api.post(`/class-templates/${id}/materialize/`, payload)
+  // Picker de una serie PROYECTADA: a quien se podria inscribir sin que la clase exista
+  // todavia. No escribe nada; la clase nace recien con la inscripcion.
+  enrollableStudents: async (id) => {
+    const { data } = await api.get(`/class-templates/${id}/enrollable-students/`)
     return data
   },
   generate: async (id, payload = {}) => {

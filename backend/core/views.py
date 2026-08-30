@@ -3335,6 +3335,74 @@ class HolidayViewSet(ModelViewSet):
         raise PermissionDenied('No tienes permisos para eliminar festivos.')
 
 
+def _enrollable_students_payload(*, user, organization_id, teacher_id, active_enrolled_ids):
+    """Candidatos inscribibles, calculados SIN necesitar una GymClass.
+
+    Lo comparten el picker de una clase real (`/classes/{id}/enrollable-students/`) y el de
+    una serie proyectada (`/class-templates/{id}/enrollable-students/`), que todavia no tiene
+    fila en la BD. Se parametrizo justamente para no tener que materializar la clase solo
+    para poder MIRAR a quien se podria inscribir: crear es efecto de INSCRIBIR, no de abrir
+    el picker.
+
+    `active_enrolled_ids` llega vacio para una serie proyectada, que es la verdad: una clase
+    que no existe no tiene inscritos.
+    """
+    expose_reason = _may_see_plan_reason(user)
+    # P4: el `gym_admin` también es sujeto inscribible, así que tiene que aparecer en el
+    # picker o la doble identidad queda inalcanzable por UI. El aislamiento es
+    # `organization_id=organization_id` y no se toca: un admin de otra
+    # organización no entra acá, igual que no entraba un alumno ajeno.
+    candidates = User.objects.filter(
+        role__in=STUDENT_SUBJECT_ROLES,
+        organization_id=organization_id,
+        is_active=True,
+    ).order_by('first_name', 'last_name', 'username')
+    # El PROFESOR de esta clase no se ofrece como alumno de esta clase. Con la doble
+    # identidad, quien la dicta puede ser `gym_admin` y por lo tanto sujeto inscribible:
+    # sin esto, el picker le ofrecía inscribirse en su propia clase y marcarse presente,
+    # y esa asistencia alimenta SU liquidación (`teacher_payments`: `per_student` y el
+    # umbral de mínimo de alumnos cuentan `Attendance.PRESENT`). Autoservicio sobre el
+    # propio pago, que es justo lo que los candados de P4 cierran en las otras vías.
+    # Condicionado porque `GymClass.teacher` es nullable (SET_NULL).
+    if teacher_id:
+        candidates = candidates.exclude(id=teacher_id)
+    candidate_ids = list(candidates.values_list('id', flat=True))
+    active_plan_by_student = _get_active_student_plan_map(candidate_ids, organization_id)
+    latest_plan_by_student = _get_latest_student_plan_map(candidate_ids, organization_id)
+    today = timezone.localdate()
+
+    results = []
+    for student in candidates:
+        if student.id in active_enrolled_ids:
+            continue
+        student_plan = _resolve_roster_student_plan(
+            student.id, active_plan_by_student, latest_plan_by_student
+        )
+        state = describe_student_plan(student_plan, today)
+        remaining_classes, has_available, unlimited = _roster_plan_balance(student_plan, state)
+        # Sin ejes financieros: ver `_plan_status_payload`. El picker publica saldo y
+        # vigencia —que es lo que decide si se puede inscribir—, nunca estado de pago.
+        plan_status = _plan_status_payload(
+            state, expose_reason=expose_reason, include_financial_axes=False
+        )
+        full_name = f'{student.first_name} {student.last_name}'.strip()
+        results.append(
+            {
+                'id': student.id,
+                'username': student.username,
+                'name': full_name or student.username,
+                'email': student.email,
+                'branch_id': student.branch_id,
+                'available_classes': remaining_classes,
+                'has_available_classes': has_available,
+                'unlimited_classes': unlimited,
+                **plan_status,
+            }
+        )
+
+    return results
+
+
 class GymClassViewSet(ModelViewSet):
     queryset = GymClass.objects.select_related(
         'branch',
@@ -3966,61 +4034,13 @@ class GymClassViewSet(ModelViewSet):
         ):
             raise PermissionDenied('No tienes permisos para listar alumnos inscribibles en esta clase.')
 
-        expose_reason = _may_see_plan_reason(user)
         active_enrolled_ids = set(gym_class.enrollments.filter(status='active').values_list('student_id', flat=True))
-        # P4: el `gym_admin` también es sujeto inscribible, así que tiene que aparecer en el
-        # picker o la doble identidad queda inalcanzable por UI. El aislamiento es
-        # `organization_id=gym_class.organization_id` y no se toca: un admin de otra
-        # organización no entra acá, igual que no entraba un alumno ajeno.
-        candidates = User.objects.filter(
-            role__in=STUDENT_SUBJECT_ROLES,
+        return Response(_enrollable_students_payload(
+            user=user,
             organization_id=gym_class.organization_id,
-            is_active=True,
-        ).order_by('first_name', 'last_name', 'username')
-        # El PROFESOR de esta clase no se ofrece como alumno de esta clase. Con la doble
-        # identidad, quien la dicta puede ser `gym_admin` y por lo tanto sujeto inscribible:
-        # sin esto, el picker le ofrecía inscribirse en su propia clase y marcarse presente,
-        # y esa asistencia alimenta SU liquidación (`teacher_payments`: `per_student` y el
-        # umbral de mínimo de alumnos cuentan `Attendance.PRESENT`). Autoservicio sobre el
-        # propio pago, que es justo lo que los candados de P4 cierran en las otras vías.
-        # Condicionado porque `GymClass.teacher` es nullable (SET_NULL).
-        if gym_class.teacher_id:
-            candidates = candidates.exclude(id=gym_class.teacher_id)
-        candidate_ids = list(candidates.values_list('id', flat=True))
-        active_plan_by_student = _get_active_student_plan_map(candidate_ids, gym_class.organization_id)
-        latest_plan_by_student = _get_latest_student_plan_map(candidate_ids, gym_class.organization_id)
-        today = timezone.localdate()
-
-        results = []
-        for student in candidates:
-            if student.id in active_enrolled_ids:
-                continue
-            student_plan = _resolve_roster_student_plan(
-                student.id, active_plan_by_student, latest_plan_by_student
-            )
-            state = describe_student_plan(student_plan, today)
-            remaining_classes, has_available, unlimited = _roster_plan_balance(student_plan, state)
-            # Sin ejes financieros: ver `_plan_status_payload`. El picker publica saldo y
-            # vigencia —que es lo que decide si se puede inscribir—, nunca estado de pago.
-            plan_status = _plan_status_payload(
-                state, expose_reason=expose_reason, include_financial_axes=False
-            )
-            full_name = f'{student.first_name} {student.last_name}'.strip()
-            results.append(
-                {
-                    'id': student.id,
-                    'username': student.username,
-                    'name': full_name or student.username,
-                    'email': student.email,
-                    'branch_id': student.branch_id,
-                    'available_classes': remaining_classes,
-                    'has_available_classes': has_available,
-                    'unlimited_classes': unlimited,
-                    **plan_status,
-                }
-            )
-
-        return Response(results)
+            teacher_id=gym_class.teacher_id,
+            active_enrolled_ids=active_enrolled_ids,
+        ))
 
     @action(detail=True, methods=['post'], url_path='attendance')
     def attendance(self, request, pk=None):
@@ -4768,36 +4788,37 @@ class ClassTemplateViewSet(ModelViewSet):
         delete_template_safely(template)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
-    @action(detail=True, methods=['post'], url_path='materialize')
-    def materialize(self, request, pk=None):
-        """`POST /api/class-templates/{id}/materialize/` — hace existir UNA clase proyectada.
+    @action(detail=True, methods=['get'], url_path='enrollable-students')
+    def enrollable_students(self, request, pk=None):
+        """`GET /api/class-templates/{id}/enrollable-students/` — picker de una serie PROYECTADA.
 
-        Es la mitad admin del camino on-demand que el alumno ya tenía: el listado por fecha
-        mezcla clases reales con filas `virtual:<template>:<fecha>` que todavía no existen en
-        la BD, y sobre esas el admin no podía inscribir, editar ni pasar asistencia porque no
-        hay PK contra la cual operar. Este endpoint la crea y devuelve la clase real, así el
-        front reabre el modal de inscripción contra un id de verdad.
+        El listado por fecha mezcla clases reales con filas `virtual:<serie>:<fecha>` que
+        todavia no existen en la BD. Para inscribir en una de esas, el admin necesita ver a
+        quien puede inscribir ANTES de que la clase exista: materializarla solo para poder
+        mirar dejaria una clase creada por un clic arrepentido, y creada ademas por fuera del
+        ciclo que corre la generacion por lote.
 
-        Deliberadamente NO inscribe a nadie: materializar y inscribir son dos pasos, para que
-        abrir el modal y arrepentirse no deje una reserva colgada. La clase creada queda
-        idéntica a la que habría creado la generación por lote (mismo `get_or_create`
-        compartido), así que un segundo POST devuelve la misma clase con 200 en vez de 201 y
-        no duplica nada.
+        Por eso este endpoint NO escribe nada. La clase nace recien cuando hay una
+        inscripcion de verdad, via `POST /api/enrollments/` con `class_template_id` + `date`
+        —el mismo contrato que ya usa el alumno al reservar—, que es donde corresponde que se
+        descuente la clase del plan.
         """
         template = self.get_object()
-        if not _can_manage_operational_resource(request.user, template.organization_id):
-            raise PermissionDenied('No tienes permisos para crear clases de esta plantilla.')
+        user = request.user
 
-        gym_class, created = _materialize_template_instance(
+        if not (
+            _is_superadmin(user)
+            or ((roles.is_org_admin(user) or _is_monitor(user)) and template.organization_id == user.organization_id)
+        ):
+            raise PermissionDenied('No tienes permisos para listar alumnos inscribibles en esta serie.')
+
+        return Response(_enrollable_students_payload(
+            user=user,
             organization_id=template.organization_id,
-            class_template_id=template.id,
-            raw_date=request.data.get('date'),
-        )
-        serializer = GymClassSerializer(gym_class, context={'request': request})
-        return Response(
-            serializer.data,
-            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
-        )
+            teacher_id=template.teacher_id,
+            # Una clase que todavia no existe no tiene inscritos: el picker los muestra a todos.
+            active_enrolled_ids=set(),
+        ))
 
     @action(detail=True, methods=['post'], url_path='generate')
     def generate_instances(self, request, pk=None):

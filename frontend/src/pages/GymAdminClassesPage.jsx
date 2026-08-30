@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { classesApi, classTemplatesApi, disciplinesApi } from '../api/client'
+import { classesApi, disciplinesApi } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import { canManageOperational } from '../utils/roles'
-import { firstApiError } from '../utils/format'
 import BulkActionModal from '../components/BulkActionModal'
 import ClassEnrollmentModal from '../components/ClassEnrollmentModal'
 import ConfirmDialog from '../components/ConfirmDialog'
@@ -223,33 +222,15 @@ export default function GymAdminClassesPage({ embedded = false, onOpenSchedule }
     setSingleAction({ gymClass, actionName })
   }
 
-  const openEnrollmentModal = async (gymClass, initialView = 'enroll') => {
+  const openEnrollmentModal = (gymClass, initialView = 'enroll') => {
     if (!canManageEnrollments(gymClass)) {
       setError('No puedes modificar inscripciones en una clase cancelada.')
       return
     }
+    // Abrir NO materializa. El modal sabe operar contra una fila proyectada y la clase nace
+    // recien con la inscripcion, que es donde corresponde que se descuente el plan.
     setError('')
-
-    // Una fila proyectada no tiene PK, y el modal la necesita para leer inscribibles e
-    // inscritos. Se materializa primero y el modal abre contra la clase real; si el backend
-    // la rechaza (fuera de la ventana configurada, serie inactiva) no se abre nada.
-    let target = gymClass
-    if (isVirtualClass(gymClass)) {
-      setWorking(true)
-      try {
-        target = await classTemplatesApi.materialize(gymClass.class_template, {
-          date: projectedDateFromId(gymClass),
-        })
-        await loadData()
-      } catch (apiError) {
-        setError(firstApiError(apiError?.response?.data, 'No se pudo crear la clase proyectada.'))
-        return
-      } finally {
-        setWorking(false)
-      }
-    }
-
-    setEnrollmentClass(target)
+    setEnrollmentClass(gymClass)
     setEnrollmentInitialView(initialView)
   }
 
