@@ -201,8 +201,13 @@ export const registrationApi = {
     const { data } = await api.get('/public/trial-classes/', { params })
     return data
   },
-  bookTrial: async (gymClassId) => {
-    const { data } = await api.post('/public/trial/book/', { gym_class: gymClassId })
+  bookTrial: async (gymClass) => {
+    const payload = typeof gymClass === 'object' && gymClass !== null
+      ? (gymClass.is_virtual
+        ? { class_template_id: gymClass.class_template, date: String(gymClass.start_datetime || '').slice(0, 10) }
+        : { gym_class: gymClass.id })
+      : { gym_class: gymClass }
+    const { data } = await api.post('/public/trial/book/', payload)
     return data
   },
 }
@@ -572,6 +577,17 @@ export const reservationWindowConfigApi = {
   },
   update: async (orgId, payload) => {
     const { data } = await api.put(`/organizations/${orgId}/reservation-window-config/`, payload)
+    return data
+  },
+}
+
+export const trialWindowConfigApi = {
+  get: async (orgId) => {
+    const { data } = await api.get(`/organizations/${orgId}/trial-window-config/`)
+    return data
+  },
+  update: async (orgId, payload) => {
+    const { data } = await api.put(`/organizations/${orgId}/trial-window-config/`, payload)
     return data
   },
 }

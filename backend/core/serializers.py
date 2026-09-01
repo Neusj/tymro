@@ -838,6 +838,23 @@ class OrganizationReservationWindowConfigSerializer(serializers.ModelSerializer)
         fields = ['max_reservation_window_days']
 
 
+class OrganizationTrialWindowConfigSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Organization
+        fields = ['trial_validity_days']
+
+    def validate_trial_validity_days(self, value):
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            raise serializers.ValidationError('Ingresa un numero entero.')
+        if value < 1:
+            raise serializers.ValidationError('El valor debe ser mayor o igual a 1.')
+        if value > 366:
+            raise serializers.ValidationError('El valor debe ser menor o igual a 366.')
+        return value
+
+
 class OrganizationAttendanceEditConfigSerializer(serializers.ModelSerializer):
     class Meta:
         model = Organization
@@ -3067,25 +3084,37 @@ class PublicRegistrationSerializer(serializers.Serializer):
 
 
 class PublicTrialClassSerializer(serializers.ModelSerializer):
+    branch = serializers.ReadOnlyField(source='branch_id')
     branch_name = serializers.CharField(source='branch.name', read_only=True)
+    teacher = serializers.ReadOnlyField(source='teacher_id')
     teacher_name = serializers.SerializerMethodField()
+    class_type = serializers.ReadOnlyField(source='class_type_id')
     class_type_name = serializers.CharField(source='class_type.name', read_only=True)
+    discipline = serializers.ReadOnlyField(source='discipline_id')
     discipline_name = serializers.CharField(source='discipline.name', read_only=True, allow_null=True)
+    class_template = serializers.ReadOnlyField(source='class_template_id')
     seats_left = serializers.SerializerMethodField()
+    is_virtual = serializers.SerializerMethodField()
 
     class Meta:
         model = GymClass
         fields = [
             'id',
             'name',
+            'branch',
             'branch_name',
+            'teacher',
             'teacher_name',
+            'class_type',
             'class_type_name',
+            'discipline',
             'discipline_name',
+            'class_template',
             'start_datetime',
             'end_datetime',
             'capacity',
             'seats_left',
+            'is_virtual',
         ]
 
     def get_teacher_name(self, obj):
@@ -3099,6 +3128,9 @@ class PublicTrialClassSerializer(serializers.ModelSerializer):
         if active is None:
             active = obj.enrollments.filter(status='active').count()
         return max(0, obj.capacity - active)
+
+    def get_is_virtual(self, obj):
+        return False
 
 
 class PushPreferenceSerializer(serializers.ModelSerializer):

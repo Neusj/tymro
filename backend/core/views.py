@@ -89,6 +89,7 @@ from .serializers import (
     OrganizationSerializer,
     OrganizationStudentDiscountConfigSerializer,
     OrganizationTeacherPaymentConfigSerializer,
+    OrganizationTrialWindowConfigSerializer,
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
     PlanSerializer,
@@ -1322,68 +1323,133 @@ class PublicTrialClassesView(APIView):
             .filter(active_enrollments__lt=models.F('capacity'))
         )
 
-    @staticmethod
-    def _filter_options(queryset):
-        def _values(field_id, field_name):
-            rows = (
-                queryset
-                .filter(**{f'{field_id}__isnull': False})
-                .values(id_value=models.F(field_id), name_value=models.F(field_name))
-                .order_by('name_value')
-                .distinct()
-            )
-            return [{'id': row['id_value'], 'name': row['name_value']} for row in rows if row['name_value']]
-
-        branches = _values('branch_id', 'branch__name')
-        disciplines = _values('discipline_id', 'discipline__name')
-
-        teacher_rows = (
-            queryset
-            .filter(teacher_id__isnull=False)
-            .annotate(
-                teacher_full_name=Trim(
-                    Concat('teacher__first_name', models.Value(' '), 'teacher__last_name')
-                )
-            )
-            .values('teacher_id', 'teacher_full_name', 'teacher__username')
-            .order_by('teacher_full_name', 'teacher__username')
-            .distinct()
-        )
-        teachers = []
-        for row in teacher_rows:
-            name = row['teacher_full_name'] or row['teacher__username'] or ''
-            if name:
-                teachers.append({'id': row['teacher_id'], 'name': name})
-
+    def _filter_spec(self, request):
         return {
-            'branches': branches,
-            'disciplines': disciplines,
-            'teachers': teachers,
+            'branch_id': self._optional_int_param(request, 'branch_id'),
+            'discipline_id': self._optional_int_param(request, 'discipline_id'),
+            'teacher_id': self._optional_int_param(request, 'teacher_id'),
+            'query': (request.query_params.get('q') or '').strip().lower(),
         }
 
-    def _apply_filters(self, queryset, request):
-        branch_id = self._optional_int_param(request, 'branch_id')
-        discipline_id = self._optional_int_param(request, 'discipline_id')
-        teacher_id = self._optional_int_param(request, 'teacher_id')
-        query = (request.query_params.get('q') or '').strip()
+    @staticmethod
+    def _filter_options(items):
+        def _values(id_key, name_key):
+            seen = set()
+            options = []
+            for item in items:
+                item_id = item.get(id_key)
+                name = item.get(name_key) or ''
+                if not item_id or not name or item_id in seen:
+                    continue
+                seen.add(item_id)
+                options.append({'id': item_id, 'name': name})
+            return sorted(options, key=lambda option: option['name'])
 
-        if branch_id:
-            queryset = queryset.filter(branch_id=branch_id)
-        if discipline_id:
-            queryset = queryset.filter(discipline_id=discipline_id)
-        if teacher_id:
-            queryset = queryset.filter(teacher_id=teacher_id)
-        if query:
-            queryset = queryset.filter(
-                models.Q(name__icontains=query)
-                | models.Q(class_type__name__icontains=query)
-                | models.Q(discipline__name__icontains=query)
-                | models.Q(branch__name__icontains=query)
-                | models.Q(teacher__first_name__icontains=query)
-                | models.Q(teacher__last_name__icontains=query)
-                | models.Q(teacher__username__icontains=query)
+        return {
+            'branches': _values('branch', 'branch_name'),
+            'disciplines': _values('discipline', 'discipline_name'),
+            'teachers': _values('teacher', 'teacher_name'),
+        }
+
+    @staticmethod
+    def _apply_filters(items, filters):
+        def _matches(item):
+            if filters['branch_id'] and item.get('branch') != filters['branch_id']:
+                return False
+            if filters['discipline_id'] and item.get('discipline') != filters['discipline_id']:
+                return False
+            if filters['teacher_id'] and item.get('teacher') != filters['teacher_id']:
+                return False
+            query = filters['query']
+            if query:
+                haystack = ' '.join(
+                    str(item.get(key) or '')
+                    for key in ['name', 'class_type_name', 'discipline_name', 'branch_name', 'teacher_name']
+                ).lower()
+                if query not in haystack:
+                    return False
+            return True
+
+        return [item for item in items if _matches(item)]
+
+    @staticmethod
+    def _template_payload(template, target_date):
+        current_tz = timezone.get_current_timezone()
+        start_datetime = timezone.make_aware(datetime.combine(target_date, template.start_time), current_tz)
+        end_datetime = timezone.make_aware(datetime.combine(target_date, template.end_time), current_tz)
+        teacher_name = _user_display_name(template.teacher) if template.teacher else ''
+        return {
+            'id': f'virtual:{template.id}:{target_date.isoformat()}',
+            'name': template.name or (
+                template.class_type.name if template.class_type else f'Clase {template.get_weekday_display()}'
+            ),
+            'branch': template.branch_id,
+            'branch_name': template.branch.name if template.branch else '',
+            'teacher': template.teacher_id,
+            'teacher_name': teacher_name,
+            'class_type': template.class_type_id,
+            'class_type_name': template.class_type.name if template.class_type else '',
+            'discipline': template.discipline_id,
+            'discipline_name': template.discipline.name if template.discipline else '',
+            'class_template': template.id,
+            'start_datetime': start_datetime.isoformat(),
+            'end_datetime': end_datetime.isoformat(),
+            'capacity': template.capacity,
+            'seats_left': template.capacity,
+            'is_virtual': True,
+        }
+
+    def _virtual_items(self, user, *, now, window_end, target_date):
+        today = timezone.localdate(now)
+        start_date = target_date or today
+        end_date = target_date or timezone.localdate(window_end)
+        if end_date < start_date:
+            return []
+
+        templates = list(
+            ClassTemplate.objects.select_related(
+                'organization', 'branch', 'teacher', 'class_type', 'discipline'
+            ).filter(
+                organization_id=user.organization_id,
+                is_active=True,
+                is_trial_eligible=True,
+                start_date__lte=end_date,
+            ).filter(
+                models.Q(end_date__isnull=True) | models.Q(end_date__gte=start_date)
             )
-        return queryset
+        )
+        if not templates:
+            return []
+
+        template_ids = [template.id for template in templates]
+        materialized = {
+            (template_id, timezone.localtime(start_datetime).date())
+            for template_id, start_datetime in GymClass.objects.filter(
+                class_template_id__in=template_ids,
+                start_datetime__date__gte=start_date,
+                start_datetime__date__lte=end_date,
+            ).values_list('class_template_id', 'start_datetime')
+        }
+
+        items = []
+        total_days = (end_date - start_date).days
+        for day_offset in range(total_days + 1):
+            occurrence_date = start_date + timedelta(days=day_offset)
+            for template in templates:
+                if occurrence_date.weekday() != template.weekday:
+                    continue
+                if occurrence_date < template.start_date or (template.end_date and occurrence_date > template.end_date):
+                    continue
+                if (template.id, occurrence_date) in materialized:
+                    continue
+                start_datetime = timezone.make_aware(
+                    datetime.combine(occurrence_date, template.start_time),
+                    timezone.get_current_timezone(),
+                )
+                if start_datetime <= now or start_datetime > window_end:
+                    continue
+                items.append(self._template_payload(template, occurrence_date))
+        return items
 
     def get(self, request):
         user = request.user
@@ -1396,15 +1462,24 @@ class PublicTrialClassesView(APIView):
             return Response([], status=status.HTTP_200_OK)
 
         now = timezone.now()
-        window_end = now + timedelta(days=_trial_window_days(user.organization))
+        window_days = _trial_window_days(user.organization)
+        window_end = now + timedelta(days=window_days)
         target_date = self._target_date(request)
         base_queryset = self._available_queryset(user, now=now, window_end=window_end, target_date=target_date)
-        filtered_queryset = self._apply_filters(base_queryset, request).order_by('start_datetime', 'id')
-        total = filtered_queryset.count()
+        real_data = list(PublicTrialClassSerializer(
+            base_queryset.order_by('start_datetime', 'id'),
+            many=True,
+            context={'request': request},
+        ).data)
+        virtual_data = self._virtual_items(user, now=now, window_end=window_end, target_date=target_date)
+        base_items = [*real_data, *virtual_data]
+
+        filters = self._filter_spec(request)
+        filtered_items = self._apply_filters(base_items, filters)
+        filtered_items.sort(key=lambda item: (item['start_datetime'], str(item['id'])))
+        total = len(filtered_items)
         limit = self._parse_limit(request)
-        queryset = filtered_queryset[:limit]
-        serializer = PublicTrialClassSerializer(queryset, many=True, context={'request': request})
-        data = serializer.data
+        data = filtered_items[:limit]
 
         if request.query_params.get('include_filters') == '1':
             return Response({
@@ -1412,7 +1487,10 @@ class PublicTrialClassesView(APIView):
                 'count': total,
                 'limit': limit,
                 'has_more': total > limit,
-                'filters': self._filter_options(base_queryset),
+                'filters': self._filter_options(base_items),
+                'window_days': window_days,
+                'window_start': timezone.localdate(now).isoformat(),
+                'window_end': timezone.localdate(window_end).isoformat(),
             })
         return Response(data)
 
@@ -1423,13 +1501,122 @@ class PublicTrialBookView(APIView):
 
     permission_classes = [IsAuthenticated]
 
+    @staticmethod
+    def _virtual_request(data):
+        gym_class_id = data.get('gym_class')
+        if gym_class_id and str(gym_class_id).startswith('virtual:'):
+            parts = str(gym_class_id).split(':')
+            if len(parts) == 3:
+                return parts[1], parts[2]
+        return data.get('class_template_id'), data.get('date')
+
+    @staticmethod
+    def _trial_projection_not_available():
+        raise ValidationError({'detail': 'Esa clase no está disponible para prueba.'})
+
+    def _materialize_trial_projection(self, user, *, class_template_id, raw_date):
+        if not user.organization_id:
+            self._trial_projection_not_available()
+        try:
+            template_id = int(class_template_id)
+        except (TypeError, ValueError):
+            self._trial_projection_not_available()
+
+        target_date = parse_date(str(raw_date or ''))
+        if target_date is None or str(raw_date) != target_date.isoformat():
+            raise ValidationError({'date': 'Formato invalido. Usa YYYY-MM-DD.'})
+
+        template = ClassTemplate.objects.select_related(
+            'organization', 'branch', 'teacher', 'class_type', 'discipline', 'created_by',
+            'substitute_teacher', 'substitution_assigned_by',
+        ).filter(
+            pk=template_id,
+            organization_id=user.organization_id,
+            is_active=True,
+            is_trial_eligible=True,
+        ).first()
+        if template is None:
+            self._trial_projection_not_available()
+        if target_date.weekday() != template.weekday:
+            self._trial_projection_not_available()
+        if target_date < template.start_date or (template.end_date and target_date > template.end_date):
+            self._trial_projection_not_available()
+
+        now = timezone.now()
+        current_tz = timezone.get_current_timezone()
+        start_datetime = timezone.make_aware(datetime.combine(target_date, template.start_time), current_tz)
+        end_datetime = timezone.make_aware(datetime.combine(target_date, template.end_time), current_tz)
+        if start_datetime <= now:
+            raise ValidationError({'detail': 'No puedes reservar clases pasadas o ya iniciadas.'})
+
+        window_end = now + timedelta(days=_trial_window_days(template.organization))
+        if start_datetime > window_end:
+            raise ValidationError({'detail': 'Esa clase está fuera de la ventana para agendar tu clase de prueba.'})
+
+        try:
+            validate_reservation_window_for_date(template.organization, target_date, today=timezone.localdate(now))
+        except ReservationRuleError as exc:
+            raise ValidationError(reservation_error_payload(exc))
+
+        gym_class, _created = GymClass.objects.get_or_create(
+            class_template=template,
+            start_datetime=start_datetime,
+            defaults={
+                'organization': template.organization,
+                'branch': template.branch,
+                'teacher': template.teacher,
+                'class_type': template.class_type,
+                'discipline': template.discipline,
+                'name': template.name or (
+                    template.class_type.name if template.class_type else f'Clase {template.get_weekday_display()}'
+                ),
+                'end_datetime': end_datetime,
+                'capacity': template.capacity,
+                'is_trial_eligible': True,
+                'status': GymClass.Status.SCHEDULED,
+                'created_by': template.created_by,
+                'is_active': True,
+                'has_substitute': template.has_substitute,
+                'substitute_name': template.substitute_name,
+                'substitute_teacher': template.substitute_teacher,
+                'substitution_source': template.substitution_source,
+                'substitution_assigned_at': template.substitution_assigned_at,
+                'substitution_assigned_by': template.substitution_assigned_by,
+            },
+        )
+        if not gym_class.is_trial_eligible:
+            self._trial_projection_not_available()
+        return gym_class
+
+    def _resolve_trial_class(self, user, data):
+        class_template_id, raw_date = self._virtual_request(data)
+        if class_template_id and raw_date:
+            return self._materialize_trial_projection(
+                user,
+                class_template_id=class_template_id,
+                raw_date=raw_date,
+            )
+
+        gym_class_id = data.get('gym_class')
+        if not gym_class_id:
+            return None
+        try:
+            return GymClass.objects.get(
+                pk=gym_class_id,
+                organization_id=user.organization_id,
+                is_trial_eligible=True,
+            )
+        except (GymClass.DoesNotExist, TypeError, ValueError):
+            return None
+
     def post(self, request):
         user = request.user
         if not _is_student(user):
             raise PermissionDenied('Solo alumnos pueden agendar una clase de prueba.')
 
         gym_class_id = request.data.get('gym_class')
-        if not gym_class_id:
+        class_template_id, raw_date = self._virtual_request(request.data)
+        if not gym_class_id and not (class_template_id and raw_date):
             return Response({'detail': 'Falta la clase (gym_class).'}, status=status.HTTP_400_BAD_REQUEST)
 
         with transaction.atomic():
@@ -1450,13 +1637,8 @@ class PublicTrialBookView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            try:
-                gym_class = GymClass.objects.get(
-                    pk=gym_class_id,
-                    organization_id=locked_user.organization_id,
-                    is_trial_eligible=True,
-                )
-            except GymClass.DoesNotExist:
+            gym_class = self._resolve_trial_class(locked_user, request.data)
+            if gym_class is None:
                 return Response(
                     {'detail': 'Esa clase no está disponible para prueba.'},
                     status=status.HTTP_400_BAD_REQUEST,
@@ -2746,6 +2928,25 @@ class OrganizationViewSet(ModelViewSet):
             return Response(OrganizationReservationWindowConfigSerializer(organization).data)
 
         serializer = OrganizationReservationWindowConfigSerializer(
+            organization, data=request.data, partial=True,
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['get', 'put'], url_path='trial-window-config')
+    def trial_window_config(self, request, pk=None):
+        """Cantidad de días hacia adelante para ofrecer clases de prueba."""
+        organization = Organization.objects.filter(pk=pk).first()
+        if organization is None:
+            raise NotFound('Organización no encontrada.')
+        if not _can_manage_org_resource(request.user, organization.id):
+            raise PermissionDenied('No tienes permisos para gestionar esta configuración.')
+
+        if request.method == 'GET':
+            return Response(OrganizationTrialWindowConfigSerializer(organization).data)
+
+        serializer = OrganizationTrialWindowConfigSerializer(
             organization, data=request.data, partial=True,
         )
         serializer.is_valid(raise_exception=True)

@@ -11,6 +11,7 @@ import GymAdminClassesPage from './pages/GymAdminClassesPage'
 import GymAdminClassTypesPage from './pages/GymAdminClassTypesPage'
 import GymAdminDisciplinesPage from './pages/GymAdminDisciplinesPage'
 import GymAdminHolidaysPage from './pages/GymAdminHolidaysPage'
+import GymAdminTrialWindowConfigPage from './pages/GymAdminTrialWindowConfigPage'
 import GymAdminTrialFollowupPage from './pages/GymAdminTrialFollowupPage'
 import GymAdminExpiryNotificationConfigPage from './pages/GymAdminExpiryNotificationConfigPage'
 import GymAdminEnrollmentFeeConfigPage from './pages/GymAdminEnrollmentFeeConfigPage'
@@ -493,6 +494,16 @@ export default function App() {
           <ProtectedRoute allowedRoles={['gym_admin']}>
             <ShellRoute>
               <GymAdminTrialFollowupPage />
+            </ShellRoute>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/gym-admin/settings/trial-window"
+        element={
+          <ProtectedRoute allowedRoles={['gym_admin']}>
+            <ShellRoute>
+              <GymAdminTrialWindowConfigPage />
             </ShellRoute>
           </ProtectedRoute>
         }

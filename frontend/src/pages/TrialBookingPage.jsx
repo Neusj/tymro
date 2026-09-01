@@ -4,6 +4,8 @@ import { registrationApi } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 
 const TRIAL_RESULT_LIMIT = 10
+const DEFAULT_TRIAL_WINDOW_DAYS = 7
+const VISIBLE_DAY_COUNT = 5
 
 const dateFormatter = new Intl.DateTimeFormat('es-CL', {
   weekday: 'long',
@@ -46,14 +48,33 @@ function localDateKey(date) {
   return `${year}-${month}-${day}`
 }
 
-function buildDayOptions() {
+function addDays(date, amount) {
+  const next = new Date(date)
+  next.setDate(date.getDate() + amount)
+  return next
+}
+
+function dateOffsetFromToday(value) {
+  const target = new Date(`${value}T00:00:00`)
+  if (Number.isNaN(target.getTime())) return null
   const today = new Date()
-  return Array.from({ length: 5 }, (_, index) => {
-    const date = new Date(today)
-    date.setDate(today.getDate() + index)
-    const label = index === 0
+  today.setHours(0, 0, 0, 0)
+  return Math.round((target - today) / 86400000)
+}
+
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max)
+}
+
+function buildDayOptions(startOffset, maxOffset) {
+  const today = new Date()
+  const visibleCount = Math.min(VISIBLE_DAY_COUNT, maxOffset + 1)
+  return Array.from({ length: visibleCount }, (_, index) => {
+    const offset = startOffset + index
+    const date = addDays(today, offset)
+    const label = offset === 0
       ? 'Hoy'
-      : index === 1
+      : offset === 1
         ? 'Mañana'
         : shortDayFormatter.format(date).replace('.', '')
     return {
@@ -83,14 +104,28 @@ function normalizeTrialPayload(data) {
       disciplines: Array.isArray(data?.filters?.disciplines) ? data.filters.disciplines : [],
       teachers: Array.isArray(data?.filters?.teachers) ? data.filters.teachers : [],
     },
+    window_days: Number.isFinite(data?.window_days) ? data.window_days : null,
+    window_start: data?.window_start || null,
+    window_end: data?.window_end || null,
   }
 }
 
 export default function TrialBookingPage() {
   const { user, logout, refreshMe } = useAuth()
   const navigate = useNavigate()
-  const dayOptions = useMemo(buildDayOptions, [])
-  const [selectedDate, setSelectedDate] = useState(dayOptions[0]?.value || localDateKey(new Date()))
+  const initialWindowDays = Number(user?.organization_detail?.trial_validity_days) || DEFAULT_TRIAL_WINDOW_DAYS
+  const [trialWindowDays, setTrialWindowDays] = useState(initialWindowDays)
+  const maxOffset = Math.max(0, trialWindowDays)
+  const visibleCount = Math.min(VISIBLE_DAY_COUNT, maxOffset + 1)
+  const maxVisibleStart = Math.max(0, maxOffset - visibleCount + 1)
+  const [visibleStartOffset, setVisibleStartOffset] = useState(0)
+  const dayOptions = useMemo(
+    () => buildDayOptions(visibleStartOffset, maxOffset),
+    [maxOffset, visibleStartOffset],
+  )
+  const todayKey = useMemo(() => localDateKey(new Date()), [])
+  const lastDate = useMemo(() => localDateKey(addDays(new Date(), maxOffset)), [maxOffset])
+  const [selectedDate, setSelectedDate] = useState(todayKey)
   const [classes, setClasses] = useState([])
   const [filterOptions, setFilterOptions] = useState({ branches: [], disciplines: [], teachers: [] })
   const [totalCount, setTotalCount] = useState(0)
@@ -103,6 +138,7 @@ export default function TrialBookingPage() {
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [disciplineId, setDisciplineId] = useState('')
   const [branchId, setBranchId] = useState('')
+  const [dateError, setDateError] = useState('')
   const canUseTrial = user?.role === 'student' && user?.trial_eligible && !user?.has_used_trial
 
   const brandStyle = useMemo(
@@ -128,6 +164,17 @@ export default function TrialBookingPage() {
   }, [selectedDate])
 
   useEffect(() => {
+    const selectedOffset = dateOffsetFromToday(selectedDate)
+    if (selectedOffset === null || selectedOffset < 0 || selectedOffset > maxOffset) {
+      setSelectedDate(todayKey)
+      setVisibleStartOffset(0)
+      setDateError('')
+      return
+    }
+    setVisibleStartOffset((current) => clamp(current, 0, maxVisibleStart))
+  }, [maxOffset, maxVisibleStart, selectedDate, todayKey])
+
+  useEffect(() => {
     let active = true
     const load = async () => {
       setError('')
@@ -151,6 +198,9 @@ export default function TrialBookingPage() {
           include_filters: 1,
         }))
         if (active) {
+          if (payload.window_days) {
+            setTrialWindowDays(clamp(Number(payload.window_days) || DEFAULT_TRIAL_WINDOW_DAYS, 1, 366))
+          }
           setClasses(payload.results)
           setFilterOptions(payload.filters)
           setTotalCount(payload.count)
@@ -178,6 +228,21 @@ export default function TrialBookingPage() {
   const hasFilters = Boolean(search.trim() || disciplineId || branchId)
   const showBranchFilter = filterOptions.branches.length > 1
 
+  const selectDate = (value) => {
+    const offset = dateOffsetFromToday(value)
+    if (offset === null || offset < 0 || offset > maxOffset) {
+      setDateError(`Elige una fecha entre ${todayKey} y ${lastDate}.`)
+      return
+    }
+    setDateError('')
+    setSelectedDate(value)
+    setVisibleStartOffset(clamp(offset - Math.floor(VISIBLE_DAY_COUNT / 2), 0, maxVisibleStart))
+  }
+
+  const moveVisibleDays = (delta) => {
+    setVisibleStartOffset((current) => clamp(current + delta, 0, maxVisibleStart))
+  }
+
   const clearFilters = () => {
     setSearch('')
     setDebouncedSearch('')
@@ -189,7 +254,7 @@ export default function TrialBookingPage() {
     setError('')
     setBookingId(gymClass.id)
     try {
-      await registrationApi.bookTrial(gymClass.id)
+      await registrationApi.bookTrial(gymClass)
       setBooked(gymClass)
       // La reserva marco has_used_trial=true en el backend. Refrescamos la sesion
       // para que TrialClassBanner desaparezca al volver a la app.
@@ -268,27 +333,47 @@ export default function TrialBookingPage() {
             ) : null}
 
             <section className="mt-6 space-y-4">
-              <div className="grid grid-cols-5 gap-1.5 rounded-2xl border border-brand-line bg-brand-soft/80 p-1.5">
-                {dayOptions.map((day) => {
-                  const active = selectedDate === day.value
-                  return (
-                    <button
-                      key={day.value}
-                      type="button"
-                      onClick={() => setSelectedDate(day.value)}
-                      className={`min-h-11 rounded-xl px-1 text-center text-xs font-semibold transition ${
-                        active ? 'text-white shadow-soft' : 'text-brand-muted hover:bg-brand-line/50 hover:text-brand-white'
-                      }`}
-                      style={active ? { background: 'linear-gradient(to right, var(--dynamic-primary), var(--dynamic-secondary))' } : undefined}
-                      aria-pressed={active}
-                    >
-                      {day.label}
-                    </button>
-                  )
-                })}
+              <div className="grid grid-cols-[2.75rem_1fr_2.75rem] gap-2">
+                <button
+                  type="button"
+                  onClick={() => moveVisibleDays(-VISIBLE_DAY_COUNT)}
+                  disabled={visibleStartOffset <= 0}
+                  aria-label="Días anteriores"
+                  className="min-h-12 rounded-xl border border-brand-line bg-brand-soft/80 text-lg font-bold text-brand-white transition hover:border-brand-orange disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {'<'}
+                </button>
+                <div className="grid grid-cols-5 gap-1.5 rounded-2xl border border-brand-line bg-brand-soft/80 p-1.5">
+                  {dayOptions.map((day) => {
+                    const active = selectedDate === day.value
+                    return (
+                      <button
+                        key={day.value}
+                        type="button"
+                        onClick={() => selectDate(day.value)}
+                        className={`min-h-11 rounded-xl px-1 text-center text-xs font-semibold transition ${
+                          active ? 'text-white shadow-soft' : 'text-brand-muted hover:bg-brand-line/50 hover:text-brand-white'
+                        }`}
+                        style={active ? { background: 'linear-gradient(to right, var(--dynamic-primary), var(--dynamic-secondary))' } : undefined}
+                        aria-pressed={active}
+                      >
+                        {day.label}
+                      </button>
+                    )
+                  })}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => moveVisibleDays(VISIBLE_DAY_COUNT)}
+                  disabled={visibleStartOffset >= maxVisibleStart}
+                  aria-label="Días siguientes"
+                  className="min-h-12 rounded-xl border border-brand-line bg-brand-soft/80 text-lg font-bold text-brand-white transition hover:border-brand-orange disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {'>'}
+                </button>
               </div>
 
-              <div className="grid gap-2 sm:grid-cols-2">
+              <div className="grid gap-2 sm:grid-cols-[1fr_11rem]">
                 <label className="block">
                   <span className="sr-only">Buscar clase</span>
                   <input
@@ -299,38 +384,50 @@ export default function TrialBookingPage() {
                     className="min-h-11 w-full rounded-xl border border-brand-line bg-brand-soft/90 px-3 text-sm text-brand-white outline-none transition placeholder:text-brand-dim focus:border-brand-orange"
                   />
                 </label>
+                <label className="block">
+                  <span className="sr-only">Buscar por fecha</span>
+                  <input
+                    type="date"
+                    value={selectedDate}
+                    min={todayKey}
+                    max={lastDate}
+                    onChange={(event) => selectDate(event.target.value)}
+                    className="min-h-11 w-full rounded-xl border border-brand-line bg-brand-soft/90 px-3 text-sm text-brand-white outline-none transition focus:border-brand-orange"
+                  />
+                </label>
+              </div>
+              {dateError ? <p className="text-xs text-red-200">{dateError}</p> : null}
 
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <label className="block">
+                  <span className="sr-only">Disciplina</span>
+                  <select
+                    value={disciplineId}
+                    onChange={(event) => setDisciplineId(event.target.value)}
+                    className="min-h-11 w-full rounded-xl border border-brand-line bg-brand-soft/90 px-3 text-sm text-brand-white outline-none transition focus:border-brand-orange"
+                  >
+                    <option value="">Todas las disciplinas</option>
+                    {filterOptions.disciplines.map((option) => (
+                      <option key={option.id} value={option.id}>{option.name}</option>
+                    ))}
+                  </select>
+                </label>
+
+                {showBranchFilter ? (
                   <label className="block">
-                    <span className="sr-only">Disciplina</span>
+                    <span className="sr-only">Sucursal</span>
                     <select
-                      value={disciplineId}
-                      onChange={(event) => setDisciplineId(event.target.value)}
+                      value={branchId}
+                      onChange={(event) => setBranchId(event.target.value)}
                       className="min-h-11 w-full rounded-xl border border-brand-line bg-brand-soft/90 px-3 text-sm text-brand-white outline-none transition focus:border-brand-orange"
                     >
-                      <option value="">Todas las disciplinas</option>
-                      {filterOptions.disciplines.map((option) => (
+                      <option value="">Todas las sedes</option>
+                      {filterOptions.branches.map((option) => (
                         <option key={option.id} value={option.id}>{option.name}</option>
                       ))}
                     </select>
                   </label>
-
-                  {showBranchFilter ? (
-                    <label className="block">
-                      <span className="sr-only">Sucursal</span>
-                      <select
-                        value={branchId}
-                        onChange={(event) => setBranchId(event.target.value)}
-                        className="min-h-11 w-full rounded-xl border border-brand-line bg-brand-soft/90 px-3 text-sm text-brand-white outline-none transition focus:border-brand-orange"
-                      >
-                        <option value="">Todas las sedes</option>
-                        {filterOptions.branches.map((option) => (
-                          <option key={option.id} value={option.id}>{option.name}</option>
-                        ))}
-                      </select>
-                    </label>
-                  ) : null}
-                </div>
+                ) : null}
               </div>
             </section>
 

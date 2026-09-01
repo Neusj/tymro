@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -26,11 +26,24 @@ const CLASS = {
   branch_name: 'Centro', teacher_name: 'Ana', discipline_name: 'Yoga', seats_left: 5,
 }
 
+const VIRTUAL_CLASS = {
+  id: 'virtual:12:2026-08-02',
+  class_template: 12,
+  is_virtual: true,
+  name: 'Boxeo',
+  start_datetime: '2026-08-02T09:30:00',
+  branch_name: 'Centro',
+  teacher_name: 'Eduardo',
+  discipline_name: 'Boxeo',
+  seats_left: 20,
+}
+
 const listPayload = (overrides = {}) => ({
   results: [CLASS],
   count: 1,
   limit: 10,
   has_more: false,
+  window_days: 7,
   filters: {
     branches: [{ id: 1, name: 'Centro' }, { id: 2, name: 'Norte' }],
     disciplines: [{ id: 3, name: 'Yoga' }],
@@ -121,10 +134,36 @@ describe('TrialBookingPage', () => {
     const bookBtn = await screen.findByRole('button', { name: /reservar esta clase/i })
     await userEvent.click(bookBtn)
 
-    await waitFor(() => expect(registrationApi.bookTrial).toHaveBeenCalledWith(7))
+    await waitFor(() => expect(registrationApi.bookTrial).toHaveBeenCalledWith(CLASS))
     await waitFor(() => expect(refreshMe).toHaveBeenCalled())
     // Confirmación visible (no rompió la UX de éxito).
     expect(await screen.findByText(/reserva confirmada/i)).toBeInTheDocument()
+  })
+
+  it('reserva clases proyectadas usando el objeto de la proyeccion', async () => {
+    registrationApi.listTrialClasses.mockResolvedValue(listPayload({ results: [VIRTUAL_CLASS] }))
+    renderPage()
+
+    const bookBtn = await screen.findByRole('button', { name: /reservar esta clase/i })
+    await userEvent.click(bookBtn)
+
+    await waitFor(() => expect(registrationApi.bookTrial).toHaveBeenCalledWith(VIRTUAL_CLASS))
+    expect(await screen.findByText(/reserva confirmada/i)).toBeInTheDocument()
+  })
+
+  it('valida que el buscador de fecha no salga de la ventana configurada', async () => {
+    registrationApi.listTrialClasses.mockResolvedValue(listPayload({ window_days: 2 }))
+    renderPage()
+    await screen.findByRole('button', { name: /reservar esta clase/i })
+
+    const outside = new Date()
+    outside.setDate(outside.getDate() + 5)
+    fireEvent.change(screen.getByLabelText(/buscar por fecha/i), {
+      target: { value: outside.toISOString().slice(0, 10) },
+    })
+
+    expect(await screen.findByText(/elige una fecha entre/i)).toBeInTheDocument()
+    expect(registrationApi.listTrialClasses).toHaveBeenCalledTimes(1)
   })
 
   it('si la reserva falla, NO refresca la sesión y muestra el error', async () => {

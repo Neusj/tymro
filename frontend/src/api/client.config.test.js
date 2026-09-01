@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 // SIN mock de axios: se importa el cliente real para inspeccionar la config
 // efectiva de las instancias. Un mock de `axios.create` haría que el test
 // afirmara sobre el mock y no sobre lo que la app usa en runtime.
-import api, { advanceClassWindowsApi, authApi, dashboardApi, importsApi, publicApi } from './client'
+import api, { advanceClassWindowsApi, authApi, dashboardApi, importsApi, publicApi, registrationApi } from './client'
 
 // El landmine que cubren estos tests: sin `timeout`, axios usa el default 0 =
 // esperar indefinidamente. Una petición que nunca responde (red caída, proxy
@@ -99,5 +99,18 @@ describe('timeout por endpoint', () => {
       ['/me/', REQUEST_TIMEOUT_MS],
       ['/dashboard/', REQUEST_TIMEOUT_MS],
     ])
+  })
+
+  it('la reserva trial virtual envia plantilla y fecha, no consume ni requiere plan desde el cliente', async () => {
+    await registrationApi.bookTrial({
+      id: 'virtual:12:2026-08-02',
+      class_template: 12,
+      is_virtual: true,
+      start_datetime: '2026-08-02T09:30:00',
+    })
+
+    expect(seen).toHaveLength(1)
+    expect(seen[0].url).toBe('/public/trial/book/')
+    expect(JSON.parse(seen[0].data)).toEqual({ class_template_id: 12, date: '2026-08-02' })
   })
 })

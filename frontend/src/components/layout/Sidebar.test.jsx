@@ -125,6 +125,12 @@ describe('Sidebar - configuracion de clases personalizadas', () => {
     expect(screen.getByRole('button', { name: 'Operación' })).toHaveAttribute('aria-expanded', 'false')
     expect(screen.queryByRole('link', { name: 'Clases personalizadas' })).not.toBeInTheDocument()
 
+    await user.click(screen.getByRole('button', { name: 'Comunicación' }))
+    expect(screen.getByRole('link', { name: 'Ventana de prueba' })).toHaveAttribute(
+      'href',
+      '/gym-admin/settings/trial-window',
+    )
+
     await user.click(screen.getByRole('button', { name: 'Operación' }))
     expect(screen.getByRole('link', { name: 'Clases personalizadas' })).toHaveAttribute(
       'href',

@@ -4,12 +4,12 @@ El alumno solo debe poder AGENDAR clases de prueba dentro de la ventana: las que
 caen fuera no se ofrecen (no aparecen en el listado) y se bloquean al reservarlas.
 Sin configuración explícita, la ventana es de 7 días.
 """
-from datetime import timedelta
+from datetime import time, timedelta
 
 import pytest
 from django.utils import timezone
 
-from core.models import Branch, GymClass
+from core.models import Branch, ClassTemplate, Enrollment, GymClass
 
 pytestmark = pytest.mark.django_db
 
@@ -34,6 +34,26 @@ def _trial_class(org, branch, *, days_ahead, name='Trial'):
         start_datetime=start,
         end_datetime=start + timedelta(hours=1),
         capacity=20,
+        is_trial_eligible=True,
+    )
+
+
+def _target_date(days_ahead):
+    return timezone.localdate() + timedelta(days=days_ahead)
+
+
+def _trial_template(org, branch, *, days_ahead, name='Boxeo'):
+    target_date = _target_date(days_ahead)
+    return ClassTemplate.objects.create(
+        organization=org,
+        branch=branch,
+        name=name,
+        weekday=target_date.weekday(),
+        start_time=time(9, 30),
+        end_time=time(10, 30),
+        capacity=20,
+        start_date=target_date - timedelta(days=7),
+        is_active=True,
         is_trial_eligible=True,
     )
 
@@ -103,3 +123,83 @@ def test_window_is_configurable_per_org(api_client, make_organization, make_user
 
     booked = api_client.post(TRIAL_BOOK_URL, {'gym_class': klass.id}, format='json')
     assert booked.status_code == 201, booked.content
+
+
+def test_trial_list_includes_projected_template_classes(api_client, make_organization, make_user):
+    org = make_organization()
+    branch = Branch.objects.create(organization=org, name='Sede')
+    template = _trial_template(org, branch, days_ahead=3, name='Boxeo')
+    student = _verified_student(make_user, org)
+
+    api_client.force_authenticate(user=student)
+    resp = api_client.get(TRIAL_CLASSES_URL, {'date': _target_date(3).isoformat(), 'include_filters': 1})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body['window_days'] == 7
+    assert body['results'][0]['id'] == f'virtual:{template.id}:{_target_date(3).isoformat()}'
+    assert body['results'][0]['class_template'] == template.id
+    assert body['results'][0]['is_virtual'] is True
+    assert body['filters']['branches'] == [{'id': branch.id, 'name': 'Sede'}]
+    assert GymClass.objects.filter(class_template=template).count() == 0
+
+
+def test_projected_trial_class_is_bookable_without_plan(api_client, make_organization, make_user):
+    org = make_organization()
+    branch = Branch.objects.create(organization=org, name='Sede')
+    template = _trial_template(org, branch, days_ahead=3, name='Boxeo')
+    student = _verified_student(make_user, org)
+
+    api_client.force_authenticate(user=student)
+    resp = api_client.post(
+        TRIAL_BOOK_URL,
+        {'class_template_id': template.id, 'date': _target_date(3).isoformat()},
+        format='json',
+    )
+
+    assert resp.status_code == 201, resp.content
+    gym_class = GymClass.objects.get(class_template=template)
+    enrollment = Enrollment.objects.get(student=student, gym_class=gym_class)
+    assert enrollment.is_trial is True
+    assert enrollment.student_plan_id is None
+    student.refresh_from_db()
+    assert student.has_used_trial is True
+
+
+def test_projected_trial_class_outside_window_is_not_offered_or_bookable(api_client, make_organization, make_user):
+    org = make_organization()
+    branch = Branch.objects.create(organization=org, name='Sede')
+    template = _trial_template(org, branch, days_ahead=8, name='Boxeo')
+    student = _verified_student(make_user, org)
+
+    api_client.force_authenticate(user=student)
+    listed = api_client.get(TRIAL_CLASSES_URL, {'date': _target_date(8).isoformat()})
+    assert listed.status_code == 200
+    assert listed.json() == []
+
+    booked = api_client.post(
+        TRIAL_BOOK_URL,
+        {'class_template_id': template.id, 'date': _target_date(8).isoformat()},
+        format='json',
+    )
+    assert booked.status_code == 400
+    assert GymClass.objects.filter(class_template=template).count() == 0
+    student.refresh_from_db()
+    assert student.has_used_trial is False
+
+
+def test_gym_admin_can_update_trial_window_config(api_client, make_organization, make_user):
+    org = make_organization()
+    admin = make_user('admin-trial-window', organization=org, role='gym_admin')
+    api_client.force_authenticate(user=admin)
+
+    resp = api_client.put(
+        f'/api/organizations/{org.id}/trial-window-config/',
+        {'trial_validity_days': 14},
+        format='json',
+    )
+
+    assert resp.status_code == 200, resp.content
+    assert resp.json()['trial_validity_days'] == 14
+    org.refresh_from_db()
+    assert org.trial_validity_days == 14

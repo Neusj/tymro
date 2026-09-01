@@ -236,6 +236,7 @@ const navByRole = {
           label: 'Comunicación',
           children: [
             { to: '/gym-admin/settings/trial-followup', label: 'Emails de prueba' },
+            { to: '/gym-admin/settings/trial-window', label: 'Ventana de prueba' },
             { to: '/gym-admin/settings/expiry-notification', label: 'Avisos de vencimiento' },
             { to: '/profile', label: 'Notificaciones' },
           ],
