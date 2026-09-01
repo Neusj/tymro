@@ -1518,16 +1518,94 @@ class TeacherPaymentRecord(TimestampedModel):
     teacher = models.ForeignKey('accounts.CustomUser', on_delete=models.CASCADE, related_name='payment_records')
     class_instance = models.ForeignKey(GymClass, on_delete=models.CASCADE, related_name='teacher_payment_records', null=True, blank=True)
     rule = models.ForeignKey(TeacherPaymentRule, on_delete=models.SET_NULL, null=True, blank=True, related_name='payment_records')
+    calculation_batch = models.ForeignKey(
+        'TeacherPaymentCalculationBatch',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='records',
+    )
     total_students = models.PositiveIntegerField(default=0)
     total_amount = models.FloatField(default=0)
     calculated_at = models.DateTimeField(default=timezone.now)
+    is_voided = models.BooleanField(default=False)
+    voided_at = models.DateTimeField(null=True, blank=True)
+    voided_by = models.ForeignKey(
+        'accounts.CustomUser',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='voided_teacher_payment_records',
+    )
+    void_reason = models.TextField(blank=True, default='')
 
     class Meta:
         ordering = ['-calculated_at', '-id']
-        unique_together = ('teacher', 'class_instance')
+        constraints = [
+            models.UniqueConstraint(
+                fields=['teacher', 'class_instance'],
+                condition=models.Q(is_voided=False),
+                name='uniq_active_teacher_payment_record_per_class',
+            ),
+        ]
 
     def __str__(self):
         return f'{self.teacher} - clase #{self.class_instance_id}'
+
+
+class TeacherPaymentCalculationBatch(TimestampedModel):
+    class Mode(models.TextChoices):
+        MISSING = 'missing', 'Calcular faltantes'
+        RECALCULATE_PENDING = 'recalculate_pending', 'Recalcular pendientes'
+
+    class Status(models.TextChoices):
+        ACTIVE = 'active', 'Activo'
+        VOIDED = 'voided', 'Anulado'
+
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name='teacher_payment_calculation_batches',
+    )
+    period_start = models.DateField()
+    period_end = models.DateField()
+    mode = models.CharField(max_length=30, choices=Mode.choices)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.ACTIVE)
+    created_by = models.ForeignKey(
+        'accounts.CustomUser',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='teacher_payment_calculation_batches',
+    )
+    voided_at = models.DateTimeField(null=True, blank=True)
+    voided_by = models.ForeignKey(
+        'accounts.CustomUser',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='voided_teacher_payment_calculation_batches',
+    )
+    void_reason = models.TextField(blank=True, default='')
+    classes_count = models.PositiveIntegerField(default=0)
+    records_created_count = models.PositiveIntegerField(default=0)
+    records_updated_count = models.PositiveIntegerField(default=0)
+    records_voided_count = models.PositiveIntegerField(default=0)
+    skipped_paid_teachers_count = models.PositiveIntegerField(default=0)
+    skipped_existing_count = models.PositiveIntegerField(default=0)
+    skipped_no_rule_count = models.PositiveIntegerField(default=0)
+    total_amount = models.FloatField(default=0)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ['-created_at', '-id']
+        indexes = [
+            models.Index(fields=['organization', 'period_start', 'period_end']),
+            models.Index(fields=['organization', 'status']),
+        ]
+
+    def __str__(self):
+        return f'Lote pagos profesores #{self.id} - {self.period_start:%Y-%m-%d}'
 
 
 class TeacherPayout(TimestampedModel):

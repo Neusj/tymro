@@ -18,7 +18,10 @@ from core.models import (
     Branch,
     Enrollment,
     GymClass,
+    TeacherPaymentCalculationBatch,
+    TeacherPaymentRecord,
     TeacherPaymentRule,
+    TeacherPayout,
 )
 from core.services.teacher_payments import build_teacher_payment_summary, calculate_teacher_payment
 
@@ -28,6 +31,10 @@ PASSWORD = 'Passw0rd2026'
 SUMMARY_URL = '/api/teacher-payments/summary/'
 EXPORT_URL = '/api/teacher-payments/summary/export/'
 MARK_PAID_URL = '/api/teacher-payments/mark-paid/'
+CALC_PREVIEW_URL = '/api/teacher-payments/calculation-preview/'
+CALC_MISSING_URL = '/api/teacher-payments/calculate-missing/'
+RECALC_PENDING_URL = '/api/teacher-payments/recalculate-pending/'
+VOID_CALC_URL = '/api/teacher-payments/void-calculation/'
 
 
 def _login(api_client, username):
@@ -471,6 +478,145 @@ def test_create_record_via_api_is_blocked(api_client, org_setup):
     _login(api_client, 'admin')
     resp = api_client.post('/api/teacher-payments/', {'teacher': org_setup['teacher'].id}, format='json')
     assert resp.status_code == 405
+
+
+def test_calculate_missing_creates_traceable_batch_for_unpaid_missing_records(api_client, org_setup):
+    org, branch, teacher = org_setup['org'], org_setup['branch'], org_setup['teacher']
+    gym_class = _make_completed_class(org, branch, teacher)
+    _present(gym_class, org_setup['s1'])
+    _make_rule(org, teacher, TeacherPaymentRule.PaymentType.PER_STUDENT, 1000)
+    today = timezone.localdate()
+
+    _login(api_client, 'admin')
+    params = f'?date_from={today.isoformat()}&date_to={today.isoformat()}'
+    preview = api_client.get(f'{CALC_PREVIEW_URL}{params}', {'mode': 'missing'}).json()
+    assert preview['classes_count'] == 1
+    assert preview['records_created_count'] == 1
+    assert preview['total_amount'] == 1000
+
+    resp = api_client.post(f'{CALC_MISSING_URL}{params}', {}, format='json')
+    assert resp.status_code == 201, resp.content
+    assert resp.json()['records_created_count'] == 1
+
+    batch = TeacherPaymentCalculationBatch.objects.get()
+    record = TeacherPaymentRecord.objects.get(class_instance=gym_class, is_voided=False)
+    assert record.calculation_batch_id == batch.id
+    assert record.total_amount == 1000
+    assert batch.mode == TeacherPaymentCalculationBatch.Mode.MISSING
+
+
+def test_recalculate_pending_updates_unpaid_and_skips_paid_teachers(api_client, org_setup, make_user):
+    org, branch = org_setup['org'], org_setup['branch']
+    paid_teacher = org_setup['teacher']
+    unpaid_teacher = make_user('unpaid', organization=org, role='teacher', first_name='Beto')
+    c_paid = _make_completed_class(org, branch, paid_teacher)
+    c_unpaid = _make_completed_class(org, branch, unpaid_teacher)
+    _present(c_paid, org_setup['s1'])
+    _present(c_unpaid, org_setup['s2'])
+    paid_rule = _make_rule(org, paid_teacher, TeacherPaymentRule.PaymentType.PER_STUDENT, 1000)
+    unpaid_rule = _make_rule(org, unpaid_teacher, TeacherPaymentRule.PaymentType.PER_STUDENT, 1000)
+    calculate_teacher_payment(c_paid)
+    calculate_teacher_payment(c_unpaid)
+    today = timezone.localdate()
+    TeacherPayout.objects.create(
+        teacher=paid_teacher,
+        organization=org,
+        period_year=today.year,
+        period_month=today.month,
+        amount=1000,
+        marked_by=org_setup['admin'],
+    )
+    paid_rule.amount = 5000
+    paid_rule.save(update_fields=['amount', 'updated_at'])
+    unpaid_rule.amount = 3000
+    unpaid_rule.save(update_fields=['amount', 'updated_at'])
+
+    _login(api_client, 'admin')
+    params = f'?date_from={today.isoformat()}&date_to={today.isoformat()}'
+    resp = api_client.post(f'{RECALC_PENDING_URL}{params}', {}, format='json')
+    assert resp.status_code == 201, resp.content
+    assert resp.json()['records_updated_count'] == 1
+    assert resp.json()['skipped_paid_teachers_count'] == 1
+
+    assert TeacherPaymentRecord.objects.get(class_instance=c_paid, is_voided=False).total_amount == 1000
+    assert TeacherPaymentRecord.objects.get(class_instance=c_unpaid, is_voided=False).total_amount == 3000
+
+
+def test_void_calculation_batch_removes_records_from_summary_and_keeps_trace(api_client, org_setup):
+    org, branch, teacher = org_setup['org'], org_setup['branch'], org_setup['teacher']
+    gym_class = _make_completed_class(org, branch, teacher)
+    _present(gym_class, org_setup['s1'])
+    _make_rule(org, teacher, TeacherPaymentRule.PaymentType.PER_STUDENT, 1000)
+    today = timezone.localdate()
+
+    _login(api_client, 'admin')
+    params = f'?date_from={today.isoformat()}&date_to={today.isoformat()}'
+    batch_id = api_client.post(f'{CALC_MISSING_URL}{params}', {}, format='json').json()['id']
+    summary = api_client.get(SUMMARY_URL, {'date_from': today.isoformat(), 'date_to': today.isoformat()}).json()
+    assert summary['grand_total'] == 1000
+
+    resp = api_client.post(
+        VOID_CALC_URL,
+        {'batch_id': batch_id, 'reason': 'regla incorrecta'},
+        format='json',
+    )
+    assert resp.status_code == 200, resp.content
+    assert resp.json()['status'] == TeacherPaymentCalculationBatch.Status.VOIDED
+    assert resp.json()['records_voided_count'] == 1
+
+    record = TeacherPaymentRecord.objects.get(class_instance=gym_class)
+    assert record.is_voided is True
+    assert record.void_reason == 'regla incorrecta'
+    summary = api_client.get(SUMMARY_URL, {'date_from': today.isoformat(), 'date_to': today.isoformat()}).json()
+    assert summary['grand_total'] == 0
+
+
+def test_void_recalculation_batch_restores_previous_record_value(api_client, org_setup):
+    org, branch, teacher = org_setup['org'], org_setup['branch'], org_setup['teacher']
+    gym_class = _make_completed_class(org, branch, teacher)
+    _present(gym_class, org_setup['s1'])
+    rule = _make_rule(org, teacher, TeacherPaymentRule.PaymentType.PER_STUDENT, 1000)
+    calculate_teacher_payment(gym_class)
+    today = timezone.localdate()
+
+    rule.amount = 3000
+    rule.save(update_fields=['amount', 'updated_at'])
+
+    _login(api_client, 'admin')
+    params = f'?date_from={today.isoformat()}&date_to={today.isoformat()}'
+    batch_id = api_client.post(f'{RECALC_PENDING_URL}{params}', {}, format='json').json()['id']
+    assert TeacherPaymentRecord.objects.get(class_instance=gym_class, is_voided=False).total_amount == 3000
+
+    resp = api_client.post(
+        VOID_CALC_URL,
+        {'batch_id': batch_id, 'reason': 'recalculo equivocado'},
+        format='json',
+    )
+    assert resp.status_code == 200, resp.content
+    record = TeacherPaymentRecord.objects.get(class_instance=gym_class, is_voided=False)
+    assert record.total_amount == 1000
+    assert record.is_voided is False
+
+
+def test_void_calculation_batch_is_blocked_when_teacher_was_paid(api_client, org_setup):
+    org, branch, teacher = org_setup['org'], org_setup['branch'], org_setup['teacher']
+    gym_class = _make_completed_class(org, branch, teacher)
+    _present(gym_class, org_setup['s1'])
+    _make_rule(org, teacher, TeacherPaymentRule.PaymentType.PER_STUDENT, 1000)
+    today = timezone.localdate()
+
+    _login(api_client, 'admin')
+    params = f'?date_from={today.isoformat()}&date_to={today.isoformat()}'
+    batch_id = api_client.post(f'{CALC_MISSING_URL}{params}', {}, format='json').json()['id']
+    api_client.post(
+        MARK_PAID_URL,
+        {'teacher_id': teacher.id, 'year': today.year, 'month': today.month},
+        format='json',
+    )
+
+    resp = api_client.post(VOID_CALC_URL, {'batch_id': batch_id, 'reason': 'x'}, format='json')
+    assert resp.status_code == 400
+    assert TeacherPaymentRecord.objects.get(class_instance=gym_class).is_voided is False
 
 
 def _date(year, month, day):

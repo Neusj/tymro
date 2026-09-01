@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { organizationsApi, teacherPaymentsApi } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import DashboardHeader from '../components/DashboardHeader'
+import FormModal from '../components/FormModal'
 import ValueBadge from '../components/ui/ValueBadge'
 import PayoutStatus from '../components/ui/PayoutStatus'
 import { canManageAdmin } from '../utils/roles'
@@ -10,6 +11,11 @@ const MONTH_NAMES = [
   'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
   'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre',
 ]
+
+const CALC_LABELS = {
+  missing: 'Calcular faltantes',
+  recalculate_pending: 'Recalcular pendientes',
+}
 
 function clp(value) {
   return `$${Math.round(Number(value) || 0).toLocaleString('es-CL', { maximumFractionDigits: 0 })}`
@@ -73,9 +79,15 @@ export default function TeacherPaymentsOverviewPage() {
   const [summary, setSummary] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
   const [expanded, setExpanded] = useState(null)
   const [exporting, setExporting] = useState('')
   const [marking, setMarking] = useState(null)
+  const [calculationPreview, setCalculationPreview] = useState(null)
+  const [calculationLoading, setCalculationLoading] = useState('')
+  const [calculationRunning, setCalculationRunning] = useState(false)
+  const [voidingBatch, setVoidingBatch] = useState(null)
+  const [voidReason, setVoidReason] = useState('')
 
   const [organizations, setOrganizations] = useState([])
   const [selectedOrganizationId, setSelectedOrganizationId] = useState(user?.organization ? String(user.organization) : '')
@@ -136,6 +148,7 @@ export default function TeacherPaymentsOverviewPage() {
 
   const rows = summary?.rows || []
   const grandTotal = summary?.grand_total || 0
+  const calculationBatches = summary?.calculation_batches || []
 
   const totals = useMemo(() => {
     return rows.reduce(
@@ -172,6 +185,69 @@ export default function TeacherPaymentsOverviewPage() {
     }
   }
 
+  const openCalculationPreview = async (mode) => {
+    if (isSuperadmin && !selectedOrganizationId) return
+    if (classKind === 'personalized') {
+      setError('El calculo manual aplica solo a clases normales.')
+      return
+    }
+    setCalculationLoading(mode)
+    setError('')
+    setNotice('')
+    try {
+      const data = await teacherPaymentsApi.calculationPreview({ ...buildParams(), mode })
+      setCalculationPreview(data)
+    } catch (apiError) {
+      setError(firstApiError(apiError?.response?.data, 'No se pudo preparar el calculo.'))
+    } finally {
+      setCalculationLoading('')
+    }
+  }
+
+  const runCalculation = async () => {
+    if (!calculationPreview?.mode) return
+    setCalculationRunning(true)
+    setError('')
+    setNotice('')
+    try {
+      if (calculationPreview.mode === 'recalculate_pending') {
+        await teacherPaymentsApi.recalculatePending(buildParams())
+      } else {
+        await teacherPaymentsApi.calculateMissing(buildParams())
+      }
+      setNotice('Calculo registrado.')
+      setCalculationPreview(null)
+      await loadSummary()
+    } catch (apiError) {
+      setError(firstApiError(apiError?.response?.data, 'No se pudo ejecutar el calculo.'))
+    } finally {
+      setCalculationRunning(false)
+    }
+  }
+
+  const confirmVoidCalculation = async (event) => {
+    event.preventDefault()
+    if (!voidingBatch?.id) return
+    setCalculationRunning(true)
+    setError('')
+    setNotice('')
+    try {
+      const payload = { batch_id: voidingBatch.id, reason: voidReason }
+      if (isSuperadmin && selectedOrganizationId) {
+        payload.organization_id = selectedOrganizationId
+      }
+      await teacherPaymentsApi.voidCalculation(payload)
+      setNotice('Calculo anulado.')
+      setVoidingBatch(null)
+      setVoidReason('')
+      await loadSummary()
+    } catch (apiError) {
+      setError(firstApiError(apiError?.response?.data, 'No se pudo anular el calculo.'))
+    } finally {
+      setCalculationRunning(false)
+    }
+  }
+
   const handleMarkPaid = async (teacherId) => {
     setMarking(teacherId)
     setError('')
@@ -201,6 +277,9 @@ export default function TeacherPaymentsOverviewPage() {
 
       {error ? (
         <p className="rounded-lg border border-danger-line bg-danger-soft px-3 py-2 text-sm text-red-200">{error}</p>
+      ) : null}
+      {notice ? (
+        <p className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">{notice}</p>
       ) : null}
 
       {/* Controles de período + export */}
@@ -246,7 +325,27 @@ export default function TeacherPaymentsOverviewPage() {
             </label>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {canMarkPaid ? (
+              <>
+                <button
+                  type="button"
+                  disabled={loading || Boolean(calculationLoading) || calculationRunning || classKind === 'personalized'}
+                  onClick={() => openCalculationPreview('missing')}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-brand-orange/50 px-3 py-2 text-sm font-semibold text-brand-orange transition hover:bg-brand-orange/10 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {calculationLoading === 'missing' ? 'Revisando...' : 'Calcular faltantes'}
+                </button>
+                <button
+                  type="button"
+                  disabled={loading || Boolean(calculationLoading) || calculationRunning || classKind === 'personalized'}
+                  onClick={() => openCalculationPreview('recalculate_pending')}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-brand-blue/50 px-3 py-2 text-sm font-semibold text-brand-blue transition hover:bg-brand-blue/10 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {calculationLoading === 'recalculate_pending' ? 'Revisando...' : 'Recalcular pendientes'}
+                </button>
+              </>
+            ) : null}
             <button
               type="button"
               disabled={exportDisabled}
@@ -265,6 +364,32 @@ export default function TeacherPaymentsOverviewPage() {
             </button>
           </div>
         </div>
+
+        {canMarkPaid && calculationBatches.length > 0 ? (
+          <div className="space-y-2 border-t border-brand-hairline pt-3">
+            <p className="text-[11px] uppercase tracking-wide text-brand-dim">Historial de calculos del periodo</p>
+            <div className="space-y-2">
+              {calculationBatches.map((batch) => (
+                <div key={batch.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-brand-hairline bg-brand-panel/40 px-3 py-2 text-sm">
+                  <span className="text-brand-muted">
+                    #{batch.id} · {CALC_LABELS[batch.mode] || batch.mode} · {batch.classes_count} clases · {clp(batch.total_amount)}
+                    {batch.status === 'voided' ? ' · Anulado' : ''}
+                  </span>
+                  {batch.status === 'active' ? (
+                    <button
+                      type="button"
+                      disabled={calculationRunning}
+                      onClick={() => setVoidingBatch(batch)}
+                      className="rounded border border-amber-500/40 px-2 py-1 text-xs font-semibold text-amber-200 transition hover:bg-amber-500/10 disabled:opacity-50"
+                    >
+                      Anular calculo
+                    </button>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </section>
 
       {/* Hero: gran total + métricas del período */}
@@ -439,6 +564,106 @@ export default function TeacherPaymentsOverviewPage() {
           </div>
         ) : null}
       </section>
+
+      <FormModal
+        open={Boolean(calculationPreview)}
+        title={calculationPreview ? CALC_LABELS[calculationPreview.mode] || 'Calculo' : 'Calculo'}
+        closeDisabled={calculationRunning}
+        onClose={() => {
+          if (!calculationRunning) {
+            setCalculationPreview(null)
+          }
+        }}
+      >
+        {calculationPreview ? (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
+              <StatTile label="Clases" value={calculationPreview.classes_count || 0} />
+              <StatTile label="Crear" value={calculationPreview.records_created_count || 0} />
+              <StatTile label="Actualizar" value={calculationPreview.records_updated_count || 0} />
+              <StatTile label="Total" value={clp(calculationPreview.total_amount)} accent="text-brand-orange" />
+            </div>
+            <p className="text-sm text-brand-muted">
+              Se aplicara sobre {periodLabel(month)}. Los profesores ya pagados se saltan automaticamente.
+            </p>
+            {calculationPreview.skipped_paid_teachers_count ? (
+              <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+                {calculationPreview.skipped_paid_teachers_count} profesor(es) ya pagados no se tocaran.
+              </p>
+            ) : null}
+            {calculationPreview.skipped_no_rule_count ? (
+              <p className="rounded-lg border border-brand-line bg-black/20 px-3 py-2 text-sm text-brand-muted">
+                {calculationPreview.skipped_no_rule_count} clase(s) siguen sin regla aplicable.
+              </p>
+            ) : null}
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                disabled={calculationRunning}
+                onClick={() => setCalculationPreview(null)}
+                className="rounded border border-brand-line px-3 py-1.5 text-sm text-brand-muted transition hover:text-brand-white disabled:opacity-50"
+              >
+                Cerrar
+              </button>
+              <button
+                type="button"
+                disabled={calculationRunning || !calculationPreview.classes_count}
+                onClick={runCalculation}
+                className="rounded bg-brand-orange px-3 py-1.5 text-sm font-semibold text-black transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {calculationRunning ? 'Guardando...' : 'Confirmar'}
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </FormModal>
+
+      <FormModal
+        open={Boolean(voidingBatch)}
+        title={voidingBatch ? `Anular calculo #${voidingBatch.id}` : 'Anular calculo'}
+        closeDisabled={calculationRunning}
+        onClose={() => {
+          if (!calculationRunning) {
+            setVoidingBatch(null)
+            setVoidReason('')
+          }
+        }}
+      >
+        <form onSubmit={confirmVoidCalculation} className="space-y-3">
+          <p className="text-sm text-brand-muted">
+            Esto anula los pagos calculados por este lote. No se puede anular si algun profesor del lote ya fue pagado.
+          </p>
+          <label className="block space-y-1 text-sm">
+            <span className="text-brand-muted">Motivo</span>
+            <textarea
+              value={voidReason}
+              onChange={(event) => setVoidReason(event.target.value)}
+              className="min-h-24 w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
+              placeholder="Ej: regla asignada por error"
+            />
+          </label>
+          <div className="flex items-center justify-end gap-2">
+            <button
+              type="button"
+              disabled={calculationRunning}
+              onClick={() => {
+                setVoidingBatch(null)
+                setVoidReason('')
+              }}
+              className="rounded border border-brand-line px-3 py-1.5 text-sm text-brand-muted transition hover:text-brand-white disabled:opacity-50"
+            >
+              Cerrar
+            </button>
+            <button
+              type="submit"
+              disabled={calculationRunning}
+              className="rounded border border-amber-500/40 px-3 py-1.5 text-sm font-semibold text-amber-200 transition hover:bg-amber-500/10 disabled:opacity-50"
+            >
+              {calculationRunning ? 'Anulando...' : 'Anular'}
+            </button>
+          </div>
+        </form>
+      </FormModal>
     </div>
   )
 }

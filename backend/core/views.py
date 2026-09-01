@@ -56,6 +56,7 @@ from .models import (
     StudentPlan,
     StudentPlanChangeLog,
     StudentPlanFreeze,
+    TeacherPaymentCalculationBatch,
     TeacherPaymentRecord,
     TeacherPaymentRule,
     TeacherPayout,
@@ -174,7 +175,13 @@ from .services.reservations import (
 # El robot de la ventana rodante, el mismo que corre el cron diario: `AdvanceClassWindowsView` lo
 # dispara para UNA org (la del actor) y no reimplementa ni una línea de sus tres fases.
 from .services.rolling_window import advance_windows_for_org
-from .services.teacher_payments import build_teacher_payment_summary, calculate_teacher_payment
+from .services.teacher_payments import (
+    build_teacher_payment_summary,
+    calculate_teacher_payment,
+    preview_teacher_payment_calculation,
+    run_teacher_payment_calculation,
+    void_teacher_payment_batch,
+)
 from .services.personalized_classes import (
     PERSONALIZED_NO_PLAN_MESSAGE,
     PersonalizedClassError,
@@ -6786,7 +6793,7 @@ class TeacherPaymentRecordViewSet(ModelViewSet):
         date_from = self.request.query_params.get('date_from')
         date_to = self.request.query_params.get('date_to')
 
-        queryset = self.queryset
+        queryset = self.queryset.filter(is_voided=False)
         if _is_superadmin(user):
             pass
         elif (_is_gym_admin(user) or _is_monitor(user)) and user.organization_id:
@@ -6895,6 +6902,46 @@ class TeacherPaymentRecordViewSet(ModelViewSet):
             row['pending'] = round(max(0.0, float(row['total']) - paid_amount), 2)
         return data
 
+    @staticmethod
+    def _serialize_calculation_batch(batch):
+        return {
+            'id': batch.id,
+            'mode': batch.mode,
+            'status': batch.status,
+            'period': {
+                'date_from': batch.period_start.isoformat(),
+                'date_to': batch.period_end.isoformat(),
+            },
+            'classes_count': batch.classes_count,
+            'records_created_count': batch.records_created_count,
+            'records_updated_count': batch.records_updated_count,
+            'records_voided_count': batch.records_voided_count,
+            'skipped_paid_teachers_count': batch.skipped_paid_teachers_count,
+            'skipped_existing_count': batch.skipped_existing_count,
+            'skipped_no_rule_count': batch.skipped_no_rule_count,
+            'total_amount': round(float(batch.total_amount), 2),
+            'created_at': batch.created_at.isoformat() if batch.created_at else None,
+            'voided_at': batch.voided_at.isoformat() if batch.voided_at else None,
+            'void_reason': batch.void_reason,
+        }
+
+    def _recent_calculation_batches(self, organization_id, date_from, date_to):
+        batches = TeacherPaymentCalculationBatch.objects.filter(
+            organization_id=organization_id,
+            period_start=date_from,
+            period_end=date_to,
+        ).order_by('-created_at', '-id')[:5]
+        return [self._serialize_calculation_batch(batch) for batch in batches]
+
+    def _resolve_calculation_scope(self, request):
+        organization_id, date_from, date_to, teacher_id, class_kind = self._resolve_summary_scope(request)
+        user = request.user
+        if not (_is_superadmin(user) or (_is_gym_admin(user) and user.organization_id)):
+            raise PermissionDenied('No tienes permisos para calcular pagos.')
+        if class_kind == 'personalized':
+            raise ValidationError({'class_kind': 'El cálculo manual aplica solo a clases normales.'})
+        return organization_id, date_from, date_to, teacher_id
+
     @action(detail=False, methods=['get'], url_path='summary')
     def summary(self, request):
         organization_id, date_from, date_to, teacher_id, class_kind = self._resolve_summary_scope(request)
@@ -6902,6 +6949,79 @@ class TeacherPaymentRecordViewSet(ModelViewSet):
             organization_id, date_from, date_to, teacher_id=teacher_id, class_kind=class_kind
         )
         self._attach_payouts(data, organization_id, date_from)
+        if _is_superadmin(request.user) or (_is_gym_admin(request.user) and request.user.organization_id):
+            data['calculation_batches'] = self._recent_calculation_batches(organization_id, date_from, date_to)
+        return Response(data)
+
+    @action(detail=False, methods=['get'], url_path='calculation-preview')
+    def calculation_preview(self, request):
+        organization_id, date_from, date_to, teacher_id = self._resolve_calculation_scope(request)
+        mode = request.query_params.get('mode') or TeacherPaymentCalculationBatch.Mode.MISSING
+        try:
+            data = preview_teacher_payment_calculation(
+                organization_id,
+                date_from,
+                date_to,
+                mode,
+                teacher_id=teacher_id,
+            )
+        except ValueError as exc:
+            raise ValidationError({'mode': str(exc)})
+        return Response(data)
+
+    def _run_calculation_action(self, request, mode):
+        organization_id, date_from, date_to, teacher_id = self._resolve_calculation_scope(request)
+        batch = run_teacher_payment_calculation(
+            organization_id,
+            date_from,
+            date_to,
+            mode,
+            request.user,
+            teacher_id=teacher_id,
+        )
+        return Response(self._serialize_calculation_batch(batch), status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=['post'], url_path='calculate-missing')
+    def calculate_missing(self, request):
+        return self._run_calculation_action(request, TeacherPaymentCalculationBatch.Mode.MISSING)
+
+    @action(detail=False, methods=['post'], url_path='recalculate-pending')
+    def recalculate_pending(self, request):
+        return self._run_calculation_action(request, TeacherPaymentCalculationBatch.Mode.RECALCULATE_PENDING)
+
+    @action(detail=False, methods=['post'], url_path='void-calculation')
+    def void_calculation(self, request):
+        user = request.user
+        if _is_superadmin(user):
+            organization_id = request.data.get('organization_id')
+            if not organization_id:
+                raise ValidationError({'organization_id': 'Debes indicar la organizacion.'})
+        elif _is_gym_admin(user) and user.organization_id:
+            organization_id = user.organization_id
+        else:
+            raise PermissionDenied('No tienes permisos para anular cálculos.')
+
+        batch_id = request.data.get('batch_id')
+        if not batch_id:
+            raise ValidationError({'batch_id': 'Debes indicar el lote.'})
+        batch = TeacherPaymentCalculationBatch.objects.filter(
+            id=batch_id,
+            organization_id=organization_id,
+        ).first()
+        if batch is None:
+            raise NotFound('Lote no encontrado.')
+
+        try:
+            batch, voided_count = void_teacher_payment_batch(
+                batch,
+                user,
+                reason=str(request.data.get('reason') or '').strip(),
+            )
+        except ValueError as exc:
+            raise ValidationError({'detail': str(exc)})
+
+        data = self._serialize_calculation_batch(batch)
+        data['records_voided_count'] = voided_count
         return Response(data)
 
     @action(detail=False, methods=['post'], url_path='mark-paid')

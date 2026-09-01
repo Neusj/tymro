@@ -82,6 +82,7 @@ export default function TeacherPaymentRulesPage() {
   const [notice, setNotice] = useState('')
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState(null)
+  const [viewingRule, setViewingRule] = useState(null)
   const [form, setForm] = useState(EMPTY_FORM)
   const [assignmentsOpen, setAssignmentsOpen] = useState(false)
   const [assignmentsRule, setAssignmentsRule] = useState(null)
@@ -314,6 +315,14 @@ export default function TeacherPaymentRulesPage() {
             <button
               type="button"
               disabled={working}
+              onClick={() => setViewingRule(row)}
+              className="rounded border border-brand-line px-2 py-1 text-xs text-brand-white transition hover:border-brand-blue disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Ver regla
+            </button>
+            <button
+              type="button"
+              disabled={working}
               onClick={() => openAssignments(row)}
               className="rounded border border-brand-line px-2 py-1 text-xs text-brand-white transition hover:border-brand-blue disabled:cursor-not-allowed disabled:opacity-50"
             >
@@ -324,7 +333,7 @@ export default function TeacherPaymentRulesPage() {
               disabled={working || row.is_used}
               onClick={() => openEdit(row)}
               className="rounded border border-brand-line px-2 py-1 text-xs text-brand-white transition hover:border-brand-blue disabled:cursor-not-allowed disabled:opacity-50"
-              title={row.is_used ? 'No editable porque ya tiene pagos calculados.' : ''}
+              title={row.is_used ? 'No editable porque tiene profesores asignados.' : ''}
             >
               Editar
             </button>
@@ -521,6 +530,65 @@ export default function TeacherPaymentRulesPage() {
             </button>
           </div>
         </form>
+      </FormModal>
+
+      <FormModal
+        open={Boolean(viewingRule)}
+        title={viewingRule ? `Regla #${viewingRule.id}` : 'Regla'}
+        closeDisabled={working}
+        onClose={() => setViewingRule(null)}
+      >
+        {viewingRule ? (
+          <div className="space-y-3 text-sm">
+            <div className="grid gap-2 sm:grid-cols-2">
+              <div className="rounded-lg border border-brand-line/60 bg-black/20 p-3">
+                <p className="text-xs text-brand-muted">Tipo</p>
+                <div className="mt-1"><ValueBadge kind="payment_type" value={viewingRule.payment_type} /></div>
+              </div>
+              <div className="rounded-lg border border-brand-line/60 bg-black/20 p-3">
+                <p className="text-xs text-brand-muted">Monto</p>
+                <p className="mt-1 text-brand-white">
+                  {PCT_TYPES.includes(viewingRule.payment_type)
+                    ? `${Number(viewingRule.amount || 0).toLocaleString('es-CL')}%`
+                    : `$${Number(viewingRule.amount || 0).toLocaleString('es-CL')}`}
+                </p>
+              </div>
+              <div className="rounded-lg border border-brand-line/60 bg-black/20 p-3">
+                <p className="text-xs text-brand-muted">Base</p>
+                <p className="mt-1 text-brand-white">{viewingRule.per_plan_price_base || viewingRule.calculation_base || '-'}</p>
+              </div>
+              <div className="rounded-lg border border-brand-line/60 bg-black/20 p-3">
+                <p className="text-xs text-brand-muted">Estado</p>
+                <div className="mt-1"><ValueBadge kind="template_status" value={viewingRule.is_active ? 'active' : 'inactive'} /></div>
+              </div>
+              <div className="rounded-lg border border-brand-line/60 bg-black/20 p-3">
+                <p className="text-xs text-brand-muted">Sucursal</p>
+                <p className="mt-1 text-brand-white">{viewingRule.branch_name || 'Todas'}</p>
+              </div>
+              <div className="rounded-lg border border-brand-line/60 bg-black/20 p-3">
+                <p className="text-xs text-brand-muted">Disciplina</p>
+                <p className="mt-1 text-brand-white">{viewingRule.discipline_name || 'Todas'}</p>
+              </div>
+              <div className="rounded-lg border border-brand-line/60 bg-black/20 p-3">
+                <p className="text-xs text-brand-muted">Tipo de clase</p>
+                <p className="mt-1 text-brand-white">{viewingRule.class_type_name || 'Todos'}</p>
+              </div>
+              <div className="rounded-lg border border-brand-line/60 bg-black/20 p-3">
+                <p className="text-xs text-brand-muted">Profesores asignados</p>
+                <p className="mt-1 text-brand-white">{viewingRule.assigned_teachers_count || 0}</p>
+              </div>
+            </div>
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => setViewingRule(null)}
+                className="rounded border border-brand-line px-3 py-1.5 text-sm text-brand-muted transition hover:text-brand-white"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        ) : null}
       </FormModal>
 
       <FormModal

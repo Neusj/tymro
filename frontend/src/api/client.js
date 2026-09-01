@@ -674,6 +674,22 @@ export const teacherPaymentsApi = {
     const { data } = await api.get('/teacher-payments/summary/', { params })
     return data
   },
+  calculationPreview: async (params = {}) => {
+    const { data } = await api.get('/teacher-payments/calculation-preview/', { params })
+    return data
+  },
+  calculateMissing: async (params = {}) => {
+    const { data } = await api.post('/teacher-payments/calculate-missing/', undefined, { params })
+    return data
+  },
+  recalculatePending: async (params = {}) => {
+    const { data } = await api.post('/teacher-payments/recalculate-pending/', undefined, { params })
+    return data
+  },
+  voidCalculation: async (payload = {}) => {
+    const { data } = await api.post('/teacher-payments/void-calculation/', payload)
+    return data
+  },
   exportSummary: async (params = {}) => {
     const response = await api.get('/teacher-payments/summary/export/', {
       params,

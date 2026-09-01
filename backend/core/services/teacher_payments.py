@@ -1,4 +1,6 @@
+from django.db import transaction
 from django.db.models import Count, Q
+from django.utils import timezone
 
 from ..models import (
     Attendance,
@@ -6,7 +8,9 @@ from ..models import (
     Enrollment,
     GymClass,
     PersonalizedClassSession,
+    TeacherPaymentCalculationBatch,
     TeacherPaymentRecord,
+    TeacherPayout,
     TeacherPaymentRule,
 )
 
@@ -153,13 +157,13 @@ def _calculate_plan_price_revenue_for_class(class_instance, base):
     return total_revenue
 
 
-def calculate_teacher_payment(class_instance):
+def _payment_values_for_class(class_instance):
     if not class_instance or not isinstance(class_instance, GymClass):
-        return None, False
+        return None
     if class_instance.status not in {GymClass.Status.COMPLETED, GymClass.Status.COMPLETED_EARLY}:
-        return None, False
+        return None
     if not class_instance.teacher_id:
-        return None, False
+        return None
 
     active_rules = TeacherPaymentRule.objects.filter(
         organization_id=class_instance.organization_id,
@@ -175,7 +179,7 @@ def calculate_teacher_payment(class_instance):
     active_rules = active_rules.order_by('-id').distinct()
     rule = _match_rule_for_class(active_rules, class_instance)
     if not rule:
-        return None, False
+        return None
 
     total_students = _count_students_for_rule(class_instance, rule)
     if rule.payment_type == TeacherPaymentRule.PaymentType.FIXED_PER_CLASS:
@@ -193,21 +197,261 @@ def calculate_teacher_payment(class_instance):
         revenue = _calculate_revenue_for_class(class_instance)
         total_amount = float(revenue) * (float(rule.amount) / 100.0)
 
-    record, created = TeacherPaymentRecord.objects.get_or_create(
+    return {
+        'rule': rule,
+        'total_students': int(total_students),
+        'total_amount': round(float(total_amount), 2),
+    }
+
+
+def calculate_teacher_payment(class_instance, calculation_batch=None):
+    values = _payment_values_for_class(class_instance)
+    if values is None:
+        return None, False
+
+    record = TeacherPaymentRecord.objects.filter(
         teacher_id=class_instance.teacher_id,
         class_instance=class_instance,
-        defaults={
-            'rule': rule,
-            'total_students': int(total_students),
-            'total_amount': round(float(total_amount), 2),
-        },
-    )
-    if not created:
-        record.rule = rule
-        record.total_students = int(total_students)
-        record.total_amount = round(float(total_amount), 2)
-        record.save(update_fields=['rule', 'total_students', 'total_amount', 'updated_at'])
+        is_voided=False,
+    ).first()
+    created = record is None
+    if created:
+        record = TeacherPaymentRecord.objects.create(
+            teacher_id=class_instance.teacher_id,
+            class_instance=class_instance,
+            rule=values['rule'],
+            total_students=values['total_students'],
+            total_amount=values['total_amount'],
+            calculation_batch=calculation_batch,
+        )
+    else:
+        record.rule = values['rule']
+        record.total_students = values['total_students']
+        record.total_amount = values['total_amount']
+        if calculation_batch is not None:
+            record.calculation_batch = calculation_batch
+        update_fields = ['rule', 'total_students', 'total_amount', 'updated_at']
+        if calculation_batch is not None:
+            update_fields.append('calculation_batch')
+        record.save(update_fields=update_fields)
     return record, created
+
+
+def _completed_normal_classes(organization_id, date_from, date_to, teacher_id=None):
+    queryset = (
+        GymClass.objects.filter(
+            organization_id=organization_id,
+            status__in=[GymClass.Status.COMPLETED, GymClass.Status.COMPLETED_EARLY],
+            teacher__isnull=False,
+            start_datetime__date__gte=date_from,
+            start_datetime__date__lte=date_to,
+        )
+        .select_related('teacher', 'branch', 'discipline', 'class_type')
+        .order_by('start_datetime', 'id')
+    )
+    if teacher_id:
+        queryset = queryset.filter(teacher_id=teacher_id)
+    return queryset
+
+
+def _period_paid_teacher_ids(organization_id, date_from):
+    return set(
+        TeacherPayout.objects.filter(
+            organization_id=organization_id,
+            period_year=date_from.year,
+            period_month=date_from.month,
+        ).values_list('teacher_id', flat=True)
+    )
+
+
+def _active_records_by_class(organization_id, date_from, date_to, teacher_id=None):
+    queryset = TeacherPaymentRecord.objects.filter(
+        class_instance__organization_id=organization_id,
+        class_instance__start_datetime__date__gte=date_from,
+        class_instance__start_datetime__date__lte=date_to,
+        is_voided=False,
+    )
+    if teacher_id:
+        queryset = queryset.filter(teacher_id=teacher_id)
+    return {record.class_instance_id: record for record in queryset}
+
+
+def _calculation_candidates(organization_id, date_from, date_to, mode, teacher_id=None):
+    if mode not in {
+        TeacherPaymentCalculationBatch.Mode.MISSING,
+        TeacherPaymentCalculationBatch.Mode.RECALCULATE_PENDING,
+    }:
+        raise ValueError('Modo de calculo invalido.')
+
+    paid_teacher_ids = _period_paid_teacher_ids(organization_id, date_from)
+    active_records = _active_records_by_class(organization_id, date_from, date_to, teacher_id=teacher_id)
+    skipped_paid_teachers = set()
+    skipped_existing = 0
+    skipped_no_rule = 0
+    candidates = []
+    total_amount = 0.0
+
+    for gym_class in _completed_normal_classes(organization_id, date_from, date_to, teacher_id=teacher_id):
+        if gym_class.teacher_id in paid_teacher_ids:
+            skipped_paid_teachers.add(gym_class.teacher_id)
+            continue
+        active_record = active_records.get(gym_class.id)
+        has_record = active_record is not None
+        if mode == TeacherPaymentCalculationBatch.Mode.MISSING and has_record:
+            skipped_existing += 1
+            continue
+
+        values = _payment_values_for_class(gym_class)
+        if values is None:
+            skipped_no_rule += 1
+            continue
+
+        item = {
+            'class_id': gym_class.id,
+            'teacher_id': gym_class.teacher_id,
+            'teacher_name': _teacher_display_name(gym_class.teacher),
+            'class_name': gym_class.name,
+            'start': gym_class.start_datetime.isoformat() if gym_class.start_datetime else None,
+            'action': 'update' if has_record else 'create',
+            'rule_id': values['rule'].id,
+            'payment_type': values['rule'].payment_type,
+            'total_students': values['total_students'],
+            'total_amount': values['total_amount'],
+        }
+        if active_record is not None:
+            item.update({
+                'record_id': active_record.id,
+                'previous_rule_id': active_record.rule_id,
+                'previous_total_students': active_record.total_students,
+                'previous_total_amount': round(float(active_record.total_amount), 2),
+                'previous_calculation_batch_id': active_record.calculation_batch_id,
+            })
+        candidates.append(item)
+        total_amount += float(values['total_amount'])
+
+    records_created = sum(1 for item in candidates if item['action'] == 'create')
+    records_updated = sum(1 for item in candidates if item['action'] == 'update')
+    return {
+        'mode': mode,
+        'period': {'date_from': date_from.isoformat(), 'date_to': date_to.isoformat()},
+        'classes_count': len(candidates),
+        'records_created_count': records_created,
+        'records_updated_count': records_updated,
+        'skipped_paid_teachers_count': len(skipped_paid_teachers),
+        'skipped_existing_count': skipped_existing,
+        'skipped_no_rule_count': skipped_no_rule,
+        'total_amount': round(total_amount, 2),
+        'items': candidates,
+    }
+
+
+def preview_teacher_payment_calculation(organization_id, date_from, date_to, mode, teacher_id=None):
+    return _calculation_candidates(organization_id, date_from, date_to, mode, teacher_id=teacher_id)
+
+
+@transaction.atomic
+def run_teacher_payment_calculation(organization_id, date_from, date_to, mode, actor, teacher_id=None):
+    preview = _calculation_candidates(organization_id, date_from, date_to, mode, teacher_id=teacher_id)
+    batch = TeacherPaymentCalculationBatch.objects.create(
+        organization_id=organization_id,
+        period_start=date_from,
+        period_end=date_to,
+        mode=mode,
+        created_by=actor if getattr(actor, 'is_authenticated', False) else None,
+        classes_count=preview['classes_count'],
+        records_created_count=preview['records_created_count'],
+        records_updated_count=preview['records_updated_count'],
+        skipped_paid_teachers_count=preview['skipped_paid_teachers_count'],
+        skipped_existing_count=preview['skipped_existing_count'],
+        skipped_no_rule_count=preview['skipped_no_rule_count'],
+        total_amount=preview['total_amount'],
+        metadata={'items': preview['items']},
+    )
+
+    created_count = 0
+    updated_count = 0
+    for item in preview['items']:
+        gym_class = GymClass.objects.select_for_update().get(
+            id=item['class_id'],
+            organization_id=organization_id,
+        )
+        record, created = calculate_teacher_payment(gym_class, calculation_batch=batch)
+        if record is None:
+            continue
+        if created:
+            created_count += 1
+        else:
+            updated_count += 1
+
+    batch.records_created_count = created_count
+    batch.records_updated_count = updated_count
+    batch.save(update_fields=['records_created_count', 'records_updated_count', 'updated_at'])
+    return batch
+
+
+@transaction.atomic
+def void_teacher_payment_batch(batch, actor, reason=''):
+    if batch.status == TeacherPaymentCalculationBatch.Status.VOIDED:
+        return batch, 0
+
+    items = list((batch.metadata or {}).get('items') or [])
+    teacher_ids = {item.get('teacher_id') for item in items if item.get('teacher_id')}
+    if teacher_ids and TeacherPayout.objects.filter(
+        organization_id=batch.organization_id,
+        period_year=batch.period_start.year,
+        period_month=batch.period_start.month,
+        teacher_id__in=teacher_ids,
+    ).exists():
+        raise ValueError('No puedes anular este lote porque ya hay profesores pagados en el periodo.')
+
+    now = timezone.now()
+    voided_count = 0
+    for item in items:
+        record = (
+            TeacherPaymentRecord.objects.select_for_update()
+            .filter(
+                teacher_id=item.get('teacher_id'),
+                class_instance_id=item.get('class_id'),
+                calculation_batch=batch,
+                is_voided=False,
+            )
+            .first()
+        )
+        if record is None:
+            continue
+        if item.get('action') == 'update':
+            record.rule_id = item.get('previous_rule_id')
+            record.total_students = int(item.get('previous_total_students') or 0)
+            record.total_amount = round(float(item.get('previous_total_amount') or 0), 2)
+            record.calculation_batch_id = item.get('previous_calculation_batch_id')
+            record.save(update_fields=[
+                'rule',
+                'total_students',
+                'total_amount',
+                'calculation_batch',
+                'updated_at',
+            ])
+            continue
+        record.is_voided = True
+        record.voided_at = now
+        record.voided_by = actor if getattr(actor, 'is_authenticated', False) else None
+        record.void_reason = reason
+        record.save(update_fields=['is_voided', 'voided_at', 'voided_by', 'void_reason', 'updated_at'])
+        voided_count += 1
+    batch.status = TeacherPaymentCalculationBatch.Status.VOIDED
+    batch.voided_at = now
+    batch.voided_by = actor if getattr(actor, 'is_authenticated', False) else None
+    batch.void_reason = reason
+    batch.records_voided_count = voided_count
+    batch.save(update_fields=[
+        'status',
+        'voided_at',
+        'voided_by',
+        'void_reason',
+        'records_voided_count',
+        'updated_at',
+    ])
+    return batch, voided_count
 
 
 def _months_between(date_from, date_to):
@@ -281,6 +525,7 @@ def build_teacher_payment_summary(organization_id, date_from, date_to, teacher_i
             class_instance__status__in=completed,
             class_instance__start_datetime__date__gte=date_from,
             class_instance__start_datetime__date__lte=date_to,
+            is_voided=False,
         ).select_related('rule')
         if teacher_id:
             records_qs = records_qs.filter(teacher_id=teacher_id)
