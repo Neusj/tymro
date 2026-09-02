@@ -334,6 +334,7 @@ export default function GymAdminUsersPage() {
       <DashboardHeader
         title="Gym Admin · Usuarios"
         subtitle={studentStatusFilter ? `Alumnos ${studentStatusFilter === 'active' ? 'activos' : 'inactivos'} de tu organización.` : 'CRUD de usuarios de tu organización.'}
+        back={{ to: '/gym-admin/dashboard', label: 'Dashboard' }}
         extra={
           assignableRoles.length > 0 ? (
             <button type="button" onClick={openCreate} className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white">

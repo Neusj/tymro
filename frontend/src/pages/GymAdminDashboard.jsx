@@ -37,7 +37,7 @@ export default function GymAdminDashboard() {
 
       <section className="grid grid-cols-2 gap-3 md:gap-4 xl:grid-cols-4">
         <StatCard title="Sucursales" value={summary.branches} accent="blue" to="/gym-admin/branches" />
-        <StatCard title="Profesores" value={summary.teachers} accent="orange" to="/gym-admin/users" />
+        <StatCard title="Profesores" value={summary.teachers} accent="orange" to="/gym-admin/users?role=teacher" />
         <StatCard
           title="Alumnos activos"
           value={summary.students_active}
