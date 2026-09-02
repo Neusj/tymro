@@ -88,6 +88,7 @@ from .serializers import (
     OrganizationReservationWindowConfigSerializer,
     OrganizationSerializer,
     OrganizationStudentDiscountConfigSerializer,
+    OrganizationStudentInactivityConfigSerializer,
     OrganizationTeacherPaymentConfigSerializer,
     OrganizationTrialWindowConfigSerializer,
     PasswordResetConfirmSerializer,
@@ -495,6 +496,66 @@ def _safe_int_setting(name, default=0):
     return max(0, value)
 
 
+def _student_inactivity_grace_days(organization):
+    try:
+        value = int(getattr(organization, 'student_inactivity_grace_days', 3))
+    except (TypeError, ValueError):
+        value = 3
+    return max(0, value)
+
+
+def _active_student_plan_user_ids(organization, on_date):
+    """Usuarios alumno con una membresía usable hoy para esta organización."""
+    active_freeze = StudentPlanFreeze.objects.filter(
+        student_plan_id=models.OuterRef('pk'),
+        status=StudentPlanFreeze.Status.ACTIVE,
+        start_date__lte=on_date,
+        planned_end_date__gt=on_date,
+    )
+    return (
+        StudentPlan.objects
+        .filter(
+            organization=organization,
+            user__organization=organization,
+            user__role=User.Role.STUDENT,
+            is_active=True,
+            start_date__lte=on_date,
+            end_date__gte=on_date,
+        )
+        .filter(models.Q(unlimited_classes=True) | models.Q(classes_used__lt=models.F('total_classes')))
+        .annotate(has_active_freeze=models.Exists(active_freeze))
+        .filter(has_active_freeze=False)
+        .values('user_id')
+        .distinct()
+    )
+
+
+def _filter_students_by_activity(queryset, organization, raw_status, on_date=None):
+    status_value = str(raw_status or '').strip().lower()
+    if status_value not in {'active', 'inactive'}:
+        return queryset
+
+    target_date = on_date or timezone.localdate()
+    active_user_ids = _active_student_plan_user_ids(organization, target_date)
+    queryset = queryset.filter(role=User.Role.STUDENT)
+    if status_value == 'active':
+        return queryset.filter(id__in=active_user_ids)
+
+    grace_days = _student_inactivity_grace_days(organization)
+    inactive_cutoff = target_date - timedelta(days=grace_days)
+    recent_or_future_plan = StudentPlan.objects.filter(
+        user_id=models.OuterRef('pk'),
+        organization=organization,
+        end_date__gt=inactive_cutoff,
+    )
+    return (
+        queryset
+        .exclude(id__in=active_user_ids)
+        .annotate(has_recent_or_future_plan=models.Exists(recent_or_future_plan))
+        .filter(has_recent_or_future_plan=False)
+    )
+
+
 def _student_can_modify_before_class(start_datetime, hours):
     if not start_datetime:
         return False, 'No se pudo determinar la fecha de la clase.'
@@ -816,11 +877,23 @@ def dashboard_summary(request):
         }
     elif roles.is_org_admin(user) and user.organization_id:
         # gym_admin y manager: conteos agregados de su organización (solo lectura).
+        today = timezone.localdate()
+        student_queryset = User.objects.filter(role=User.Role.STUDENT, organization=user.organization)
+        active_student_ids = _active_student_plan_user_ids(user.organization, today)
+        inactive_students = _filter_students_by_activity(
+            student_queryset,
+            user.organization,
+            'inactive',
+            on_date=today,
+        )
         data = {
             'organization': user.organization.name,
             'branches': Branch.objects.filter(organization=user.organization).count(),
             'teachers': User.objects.filter(role=User.Role.TEACHER, organization=user.organization).count(),
-            'students': User.objects.filter(role=User.Role.STUDENT, organization=user.organization).count(),
+            'students': student_queryset.count(),
+            'students_active': student_queryset.filter(id__in=active_student_ids).count(),
+            'students_inactive': inactive_students.count(),
+            'student_inactivity_grace_days': _student_inactivity_grace_days(user.organization),
             'users': User.objects.filter(organization=user.organization).count(),
         }
     else:
@@ -2934,6 +3007,25 @@ class OrganizationViewSet(ModelViewSet):
         serializer.save()
         return Response(serializer.data)
 
+    @action(detail=True, methods=['get', 'put'], url_path='student-inactivity-config')
+    def student_inactivity_config(self, request, pk=None):
+        """Días desde el vencimiento del plan para contar un alumno como inactivo."""
+        organization = Organization.objects.filter(pk=pk).first()
+        if organization is None:
+            raise NotFound('Organización no encontrada.')
+        if not _can_manage_org_resource(request.user, organization.id):
+            raise PermissionDenied('No tienes permisos para gestionar esta configuración.')
+
+        if request.method == 'GET':
+            return Response(OrganizationStudentInactivityConfigSerializer(organization).data)
+
+        serializer = OrganizationStudentInactivityConfigSerializer(
+            organization, data=request.data, partial=True,
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
     @action(detail=True, methods=['get', 'put'], url_path='trial-window-config')
     def trial_window_config(self, request, pk=None):
         """Cantidad de días hacia adelante para ofrecer clases de prueba."""
@@ -3229,6 +3321,11 @@ class UserViewSet(ModelViewSet):
             queryset = queryset.filter(organization_id=user.organization_id)
             if role_values:
                 queryset = queryset.filter(role__in=role_values)
+            queryset = _filter_students_by_activity(
+                queryset,
+                user.organization,
+                self.request.query_params.get('student_status'),
+            )
             return self._apply_list_limit(self._apply_user_search(queryset))
 
         if _is_teacher(user) or _is_student(user) or _is_monitor(user):

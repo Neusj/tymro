@@ -16,6 +16,7 @@ import GymAdminTrialFollowupPage from './pages/GymAdminTrialFollowupPage'
 import GymAdminExpiryNotificationConfigPage from './pages/GymAdminExpiryNotificationConfigPage'
 import GymAdminEnrollmentFeeConfigPage from './pages/GymAdminEnrollmentFeeConfigPage'
 import GymAdminStudentDiscountConfigPage from './pages/GymAdminStudentDiscountConfigPage'
+import GymAdminStudentInactivityConfigPage from './pages/GymAdminStudentInactivityConfigPage'
 import GymAdminReservationWindowConfigPage from './pages/GymAdminReservationWindowConfigPage'
 import GymAdminAttendanceEditConfigPage from './pages/GymAdminAttendanceEditConfigPage'
 import GymAdminPersonalizedClassesConfigPage from './pages/GymAdminPersonalizedClassesConfigPage'
@@ -534,6 +535,16 @@ export default function App() {
           <ProtectedRoute allowedRoles={['gym_admin']}>
             <ShellRoute>
               <GymAdminStudentDiscountConfigPage />
+            </ShellRoute>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/gym-admin/settings/student-inactivity"
+        element={
+          <ProtectedRoute allowedRoles={['gym_admin']}>
+            <ShellRoute>
+              <GymAdminStudentInactivityConfigPage />
             </ShellRoute>
           </ProtectedRoute>
         }

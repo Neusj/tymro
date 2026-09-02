@@ -222,6 +222,7 @@ class OrganizationSerializer(serializers.ModelSerializer):
             'trial_validity_days',
             'class_generation_window_days',
             'max_reservation_window_days',
+            'student_inactivity_grace_days',
             'teacher_attendance_edit_limit_minutes',
             'class_pruning_grace_days',
             'annual_enrollment_fee',
@@ -836,6 +837,23 @@ class OrganizationReservationWindowConfigSerializer(serializers.ModelSerializer)
     class Meta:
         model = Organization
         fields = ['max_reservation_window_days']
+
+
+class OrganizationStudentInactivityConfigSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Organization
+        fields = ['student_inactivity_grace_days']
+
+    def validate_student_inactivity_grace_days(self, value):
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            raise serializers.ValidationError('Ingresa un numero entero.')
+        if value < 0:
+            raise serializers.ValidationError('El valor debe ser mayor o igual a 0.')
+        if value > 366:
+            raise serializers.ValidationError('El valor debe ser menor o igual a 366.')
+        return value
 
 
 class OrganizationTrialWindowConfigSerializer(serializers.ModelSerializer):

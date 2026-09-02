@@ -247,6 +247,7 @@ const navByRole = {
           children: [
             { to: '/gym-admin/settings/enrollment-fee', label: 'Matricula anual' },
             { to: '/gym-admin/settings/student-discount', label: 'Descuento estudiante' },
+            { to: '/gym-admin/settings/student-inactivity', label: 'Inactividad alumnos' },
             { to: '/gym-admin/settings/reservation-window', label: 'Anticipacion reservas' },
           ],
         },

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { branchesApi, usersApi } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import Avatar from '../components/Avatar'
@@ -33,6 +33,10 @@ const userInitialForm = {
 export default function GymAdminUsersPage() {
   const { user: currentUser } = useAuth()
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const initialStudentStatus = ['active', 'inactive'].includes(searchParams.get('student_status'))
+    ? searchParams.get('student_status')
+    : ''
   const [branches, setBranches] = useState([])
   const [users, setUsers] = useState([])
   const [assignableRoles, setAssignableRoles] = useState([])
@@ -42,11 +46,20 @@ export default function GymAdminUsersPage() {
   const [form, setForm] = useState(userInitialForm)
   const [formError, setFormError] = useState('')
   const [deleting, setDeleting] = useState(null)
-  const [roleFilter, setRoleFilter] = useState('')
+  const [roleFilter, setRoleFilter] = useState(searchParams.get('role') || '')
+  const [studentStatusFilter, setStudentStatusFilter] = useState(initialStudentStatus)
 
   const loadData = async () => {
     try {
-      const [branchesData, usersData] = await Promise.all([branchesApi.list(), usersApi.list(roleFilter ? { role: roleFilter } : {})])
+      const params = {}
+      if (roleFilter) {
+        params.role = roleFilter
+      }
+      if (studentStatusFilter) {
+        params.role = 'student'
+        params.student_status = studentStatusFilter
+      }
+      const [branchesData, usersData] = await Promise.all([branchesApi.list(), usersApi.list(params)])
       setBranches(branchesData)
       setUsers(usersData)
     } catch (apiError) {
@@ -63,9 +76,58 @@ export default function GymAdminUsersPage() {
 
   useEffect(() => {
     loadData()
-  }, [roleFilter])
+  }, [roleFilter, studentStatusFilter])
+
+  useEffect(() => {
+    const nextRole = searchParams.get('role') || ''
+    const nextStudentStatus = ['active', 'inactive'].includes(searchParams.get('student_status'))
+      ? searchParams.get('student_status')
+      : ''
+    setRoleFilter(nextStudentStatus ? 'student' : nextRole)
+    setStudentStatusFilter(nextStudentStatus)
+  }, [searchParams])
 
   const roleFilterOptions = useMemo(() => [{ value: '', label: 'Todos' }, ...assignableRoles], [assignableRoles])
+  const studentStatusOptions = useMemo(
+    () => [
+      { value: '', label: 'Todos' },
+      { value: 'active', label: 'Activos' },
+      { value: 'inactive', label: 'Inactivos' },
+    ],
+    [],
+  )
+
+  const updateUrlFilters = (nextRole, nextStudentStatus) => {
+    const nextParams = {}
+    if (nextRole) {
+      nextParams.role = nextRole
+    }
+    if (nextStudentStatus) {
+      nextParams.role = 'student'
+      nextParams.student_status = nextStudentStatus
+    }
+    setSearchParams(nextParams, { replace: true })
+  }
+
+  const changeRoleFilter = (value) => {
+    const nextStudentStatus = value === 'student' ? studentStatusFilter : ''
+    setRoleFilter(value)
+    setStudentStatusFilter(nextStudentStatus)
+    updateUrlFilters(value, nextStudentStatus)
+  }
+
+  const changeStudentStatusFilter = (value) => {
+    const nextRole = value ? 'student' : roleFilter
+    setRoleFilter(nextRole)
+    setStudentStatusFilter(value)
+    updateUrlFilters(nextRole, value)
+  }
+
+  const clearFilters = () => {
+    setRoleFilter('')
+    setStudentStatusFilter('')
+    setSearchParams({}, { replace: true })
+  }
 
   const canManage = (role) => assignableRoles.some((option) => option.value === role)
   const canEditStudentBenefit = currentUser?.role === 'gym_admin'
@@ -271,7 +333,7 @@ export default function GymAdminUsersPage() {
     <div className="space-y-6">
       <DashboardHeader
         title="Gym Admin · Usuarios"
-        subtitle="CRUD de usuarios de tu organización."
+        subtitle={studentStatusFilter ? `Alumnos ${studentStatusFilter === 'active' ? 'activos' : 'inactivos'} de tu organización.` : 'CRUD de usuarios de tu organización.'}
         extra={
           assignableRoles.length > 0 ? (
             <button type="button" onClick={openCreate} className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white">
@@ -282,8 +344,14 @@ export default function GymAdminUsersPage() {
       />
 
       <section className="card-surface p-5">
-        <FilterPanel activeCount={roleFilter ? 1 : 0} onClear={() => setRoleFilter('')}>
-          <FilterDropdown label="Rol" value={roleFilter} options={roleFilterOptions} onChange={setRoleFilter} />
+        <FilterPanel activeCount={(roleFilter ? 1 : 0) + (studentStatusFilter ? 1 : 0)} onClear={clearFilters}>
+          <FilterDropdown label="Rol" value={roleFilter} options={roleFilterOptions} onChange={changeRoleFilter} />
+          <FilterDropdown
+            label="Estado alumno"
+            value={studentStatusFilter}
+            options={studentStatusOptions}
+            onChange={changeStudentStatusFilter}
+          />
         </FilterPanel>
       </section>
 

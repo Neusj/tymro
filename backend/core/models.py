@@ -132,6 +132,11 @@ class Organization(TimestampedModel):
         validators=[MinValueValidator(1), MaxValueValidator(366)],
         help_text='Días hacia adelante en que se puede reservar una clase.',
     )
+    student_inactivity_grace_days = models.PositiveIntegerField(
+        default=3,
+        validators=[MaxValueValidator(366)],
+        help_text='Días desde el vencimiento del último plan para considerar inactivo a un alumno.',
+    )
     teacher_attendance_edit_limit_minutes = models.PositiveIntegerField(
         default=DEFAULT_TEACHER_ATTENDANCE_EDIT_LIMIT_MINUTES,
         validators=[MaxValueValidator(1440)],

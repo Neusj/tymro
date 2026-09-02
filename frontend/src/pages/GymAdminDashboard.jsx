@@ -8,6 +8,9 @@ const emptySummary = {
   branches: 0,
   teachers: 0,
   students: 0,
+  students_active: 0,
+  students_inactive: 0,
+  student_inactivity_grace_days: 3,
   users: 0,
   organization: '',
 }
@@ -35,8 +38,20 @@ export default function GymAdminDashboard() {
       <section className="grid grid-cols-2 gap-3 md:gap-4 xl:grid-cols-4">
         <StatCard title="Sucursales" value={summary.branches} accent="blue" to="/gym-admin/branches" />
         <StatCard title="Profesores" value={summary.teachers} accent="orange" to="/gym-admin/users" />
-        <StatCard title="Alumnos" value={summary.students} accent="red" to="/gym-admin/users" />
-        <StatCard title="Usuarios" value={summary.users} accent="orange" to="/gym-admin/users" />
+        <StatCard
+          title="Alumnos activos"
+          value={summary.students_active}
+          accent="success"
+          hint={`${summary.students} total`}
+          to="/gym-admin/users?role=student&student_status=active"
+        />
+        <StatCard
+          title="Alumnos inactivos"
+          value={summary.students_inactive}
+          accent="red"
+          hint={`${summary.student_inactivity_grace_days} días sin plan`}
+          to="/gym-admin/users?role=student&student_status=inactive"
+        />
       </section>
 
       <PublicRegistrationCard />
