@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -47,11 +47,74 @@ const baseReport = (over = {}) => ({
     { bucket: '2026-08-01', trials: 6, converted: 2 },
     { bucket: '2026-08-02', trials: 7, converted: 3 },
   ],
+  prospects: [
+    {
+      id: 11,
+      student_id: 11,
+      name: 'Ana Perez',
+      email: 'ana@test.local',
+      phone: '+56 9 1111 2222',
+      trial_date: '2026-08-01',
+      conversion_deadline: '2026-09-30',
+      attended: true,
+      converted: true,
+      conversion_status: 'converted',
+      conversion_status_label: 'Compró',
+      trial_classes: [
+        {
+          id: 21,
+          name: 'Boxeo',
+          branch_name: 'Centro',
+          teacher_name: 'Ignacio Duarte',
+          discipline_name: 'Boxeo',
+          class_type_name: 'Grupal',
+          start_datetime: '2026-08-01T13:30:00Z',
+          start_time: '09:30',
+        },
+      ],
+      membership: {
+        id: 31,
+        plan_id: 41,
+        plan_name: 'Pack 8',
+        start_date: '2026-08-02',
+        end_date: '2026-09-01',
+        final_price: 30000,
+      },
+    },
+    {
+      id: 12,
+      student_id: 12,
+      name: 'Bruno Rojas',
+      email: 'bruno@test.local',
+      phone: '',
+      trial_date: '2026-08-02',
+      conversion_deadline: '2026-10-01',
+      attended: false,
+      converted: false,
+      conversion_status: 'pending',
+      conversion_status_label: 'Pendiente',
+      trial_classes: [],
+      membership: null,
+    },
+  ],
   ...over,
 })
 
 beforeEach(() => {
   vi.clearAllMocks()
+  Object.defineProperty(window, 'matchMedia', {
+    writable: true,
+    value: vi.fn().mockImplementation((query) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  })
   branchesApi.list.mockResolvedValue([{ id: 1, name: 'Centro' }])
 })
 
@@ -68,6 +131,39 @@ describe('GymAdminTrialConversionReportPage', () => {
     // evolución (mismo patrón que el test de Revenue con "Bruto"/"Devoluciones"/"Neto").
     expect(screen.getAllByText('Probaron').length).toBeGreaterThanOrEqual(1)
     expect(screen.getAllByText('Compraron').length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('abre desde Probaron una lista con tabs y detalle de prospectos', async () => {
+    reportsApi.trialConversion.mockResolvedValue(baseReport())
+    renderPage()
+
+    await screen.findByText('45.0%')
+    await userEvent.click(screen.getByRole('button', { name: /ver todos los prospectos que probaron/i }))
+
+    const detail = await screen.findByRole('region', { name: /detalle de prospectos/i })
+    expect(within(detail).getByRole('button', { name: 'Todos' })).toHaveAttribute('aria-current', 'true')
+    expect(within(detail).getAllByText('Ana Perez').length).toBeGreaterThanOrEqual(1)
+    expect(within(detail).getAllByText('Bruno Rojas').length).toBeGreaterThanOrEqual(1)
+    expect(within(detail).getByText('ana@test.local')).toBeInTheDocument()
+    expect(within(detail).getByText('+56 9 1111 2222')).toBeInTheDocument()
+    expect(within(detail).getAllByText('Boxeo').length).toBeGreaterThanOrEqual(1)
+    expect(within(detail).getAllByText('Pack 8').length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('abre desde Compraron filtrando solo los prospectos convertidos', async () => {
+    reportsApi.trialConversion.mockResolvedValue(baseReport())
+    renderPage()
+
+    await screen.findByText('45.0%')
+    await userEvent.click(screen.getByRole('button', { name: /ver prospectos que compraron/i }))
+
+    const detail = await screen.findByRole('region', { name: /detalle de prospectos/i })
+    expect(within(detail).getByRole('button', { name: 'Compraron' })).toHaveAttribute('aria-current', 'true')
+    expect(within(detail).getAllByText('Ana Perez').length).toBeGreaterThanOrEqual(1)
+    expect(within(detail).queryAllByText('Bruno Rojas')).toHaveLength(0)
+
+    await userEvent.click(within(detail).getByRole('button', { name: 'Todos' }))
+    expect(within(detail).getAllByText('Bruno Rojas').length).toBeGreaterThanOrEqual(1)
   })
 
   it('con conversion_rate null muestra guion, NUNCA 0% ni 100%', async () => {

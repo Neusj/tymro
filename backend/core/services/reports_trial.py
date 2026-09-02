@@ -361,10 +361,11 @@ def _paid_membership_rows(*, organization_id, student_ids, earliest_trial, lates
             has_manual_payment=Exists(manual_payment),
             has_refunded_transaction=Exists(refunded_transaction),
         )
-        .values('user_id', 'start_date', 'has_approved_transaction', 'has_manual_payment',
+        .values('id', 'user_id', 'plan_id', 'plan__name', 'start_date', 'end_date',
+                'final_price', 'has_approved_transaction', 'has_manual_payment',
                 'has_refunded_transaction')
-        # Descarta el `Meta.ordering = ['-start_date']`: se indexa por alumno en memoria.
-        .order_by()
+        # Orden estable para que el detalle muestre la primera compra atribuible al trial.
+        .order_by('start_date', 'id')
     )
     index = {}
     for row in queryset:
@@ -377,8 +378,8 @@ _CONVERTED = 'converted'
 _REFUNDED = 'refunded'
 
 
-def _conversion_kind(trial_date, memberships, window_days):
-    """`_CONVERTED`, `_REFUNDED` o ``None`` para UN alumno.
+def _conversion_match(trial_date, memberships, window_days):
+    """`(kind, membership)` para UN alumno.
 
     `_CONVERTED` gana: si compró dos veces y una se devolvió, el alumno convirtió. Un solo
     lugar donde vive el predicado, y lo usan el período actual y el de comparación —si cada uno
@@ -386,16 +387,22 @@ def _conversion_kind(trial_date, memberships, window_days):
     períodos (la lección de `reports_revenue._method_data`)—.
     """
     deadline = trial_date + timedelta(days=window_days)
-    refunded = False
+    refunded_membership = None
     for row in memberships:
         # `start_date >= fecha del trial` (decisión 8) y dentro de la ventana (decisión 7).
         if row['start_date'] < trial_date or row['start_date'] > deadline:
             continue
         if row['has_approved_transaction'] or row['has_manual_payment']:
-            return _CONVERTED
-        if row['has_refunded_transaction']:
-            refunded = True
-    return _REFUNDED if refunded else None
+            return _CONVERTED, row
+        if row['has_refunded_transaction'] and refunded_membership is None:
+            refunded_membership = row
+    return (_REFUNDED, refunded_membership) if refunded_membership else (None, None)
+
+
+def _conversion_kind(trial_date, memberships, window_days):
+    """`_CONVERTED`, `_REFUNDED` o ``None`` para UN alumno."""
+    kind, _membership = _conversion_match(trial_date, memberships, window_days)
+    return kind
 
 
 # --------------------------------------------------------------------------------------
@@ -455,8 +462,119 @@ def _group_payload(group):
     }
 
 
-def _tally(*, organization_id, branch, date_from, date_to, window_days, now, today):
-    """`(payload de totales, filas por alumno)` de un rango cualquiera.
+def _name_from_parts(*, first_name='', last_name='', email='', username=''):
+    full_name = f'{first_name or ""} {last_name or ""}'.strip()
+    return full_name or email or username or ''
+
+
+def _student_lookup(student_ids):
+    User = get_user_model()
+    rows = User.objects.filter(id__in=student_ids).values(
+        'id', 'first_name', 'last_name', 'email', 'phone', 'username',
+    )
+    return {
+        row['id']: {
+            'id': row['id'],
+            'name': _name_from_parts(
+                first_name=row['first_name'],
+                last_name=row['last_name'],
+                email=row['email'],
+                username=row['username'],
+            ),
+            'email': row['email'] or '',
+            'phone': row['phone'] or '',
+        }
+        for row in rows
+    }
+
+
+def _class_lookup(class_ids):
+    classes = (
+        GymClass.objects
+        .filter(id__in=class_ids)
+        .select_related('branch', 'teacher', 'class_type', 'discipline')
+        .order_by('start_datetime', 'id')
+    )
+    index = {}
+    for item in classes:
+        local_start = timezone.localtime(item.start_datetime)
+        teacher = item.teacher
+        index[item.id] = {
+            'id': item.id,
+            'name': item.name,
+            'branch_name': item.branch.name if item.branch_id else '',
+            'teacher_name': (
+                _name_from_parts(
+                    first_name=teacher.first_name,
+                    last_name=teacher.last_name,
+                    email=teacher.email,
+                    username=teacher.username,
+                )
+                if teacher
+                else ''
+            ),
+            'class_type_name': item.class_type.name if item.class_type_id else '',
+            'discipline_name': item.discipline.name if item.discipline_id else '',
+            'date': local_start.date().isoformat(),
+            'start_time': local_start.strftime('%H:%M'),
+            'start_datetime': item.start_datetime.isoformat(),
+        }
+    return index
+
+
+def _membership_payload(row):
+    if not row:
+        return None
+    return {
+        'id': row['id'],
+        'plan_id': row['plan_id'],
+        'plan_name': row['plan__name'] or '',
+        'start_date': row['start_date'].isoformat() if row['start_date'] else None,
+        'end_date': row['end_date'].isoformat() if row['end_date'] else None,
+        'final_price': row['final_price'],
+    }
+
+
+def _prospect_status_payload(kind, pending):
+    if kind == _CONVERTED:
+        return 'converted', 'Compró'
+    if kind == _REFUNDED:
+        return 'refunded', 'Devuelto'
+    if pending:
+        return 'pending', 'Pendiente'
+    return 'not_converted', 'No compró'
+
+
+def _prospect_payload(*, student_id, student, trial_date, class_ids, classes,
+                      attended, kind, pending, membership, window_days):
+    status, status_label = _prospect_status_payload(kind, pending)
+    trial_classes = [
+        classes[class_id]
+        for class_id in sorted(class_ids, key=lambda item: classes.get(item, {}).get('start_datetime', ''))
+        if class_id in classes
+    ]
+    return {
+        'id': student_id,
+        'student_id': student_id,
+        'name': student.get('name') or f'Alumno #{student_id}',
+        'email': student.get('email') or '',
+        'phone': student.get('phone') or '',
+        'trial_date': trial_date.isoformat(),
+        'conversion_deadline': (trial_date + timedelta(days=window_days)).isoformat(),
+        'attended': attended,
+        'converted': kind == _CONVERTED,
+        'refunded': kind == _REFUNDED,
+        'pending_window': pending,
+        'conversion_status': status,
+        'conversion_status_label': status_label,
+        'trial_classes': trial_classes,
+        'membership': _membership_payload(membership),
+    }
+
+
+def _tally(*, organization_id, branch, date_from, date_to, window_days, now, today,
+           include_prospects=False):
+    """`(payload de totales, filas por alumno, prospectos)` de un rango cualquiera.
 
     Lo llaman el período del reporte y el de comparación: las dos lecturas usan el MISMO
     universo y el MISMO predicado de conversión.
@@ -467,6 +585,7 @@ def _tally(*, organization_id, branch, date_from, date_to, window_days, now, tod
 
     totals = _empty_group()
     rows = []
+    prospects = []
     if students:
         attended_pairs = _attended_pairs(students)
         trial_dates = [trial_date for trial_date, _ids in students.values()]
@@ -476,21 +595,42 @@ def _tally(*, organization_id, branch, date_from, date_to, window_days, now, tod
             earliest_trial=min(trial_dates),
             latest_deadline=max(trial_dates) + timedelta(days=window_days),
         )
+        student_index = _student_lookup(students.keys()) if include_prospects else {}
+        class_ids = set()
+        if include_prospects:
+            for _trial_date, ids in students.values():
+                class_ids |= ids
+        class_index = _class_lookup(class_ids) if include_prospects else {}
         for student_id, (trial_date, class_ids) in students.items():
             attended = any((class_id, student_id) in attended_pairs for class_id in class_ids)
-            kind = _conversion_kind(trial_date, memberships.get(student_id, ()), window_days)
+            kind, membership = _conversion_match(
+                trial_date, memberships.get(student_id, ()), window_days)
             # Solo tiene sentido marcar "pendiente" a quien NO convirtió: una conversión ya es
             # un hecho cerrado.
             pending = kind != _CONVERTED and (trial_date + timedelta(days=window_days)) >= today
             _accumulate(totals, attended=attended, kind=kind, pending=pending)
             rows.append((trial_date, attended, kind, pending))
+            if include_prospects:
+                prospects.append(_prospect_payload(
+                    student_id=student_id,
+                    student=student_index.get(student_id, {}),
+                    trial_date=trial_date,
+                    class_ids=class_ids,
+                    classes=class_index,
+                    attended=attended,
+                    kind=kind,
+                    pending=pending,
+                    membership=membership,
+                    window_days=window_days,
+                ))
 
     payload = _group_payload(totals)
     # Los dos informativos van SOLO en los totales (no en la serie): explican la diferencia
     # entre "agendaron" y "probaron", y una serie con seis líneas no se lee.
     payload['cancelled_trials'] = cancelled
     payload['pending_trials'] = pending_trials
-    return payload, rows
+    prospects.sort(key=lambda item: (item['trial_date'], item['name'].lower(), item['student_id']))
+    return payload, rows, prospects
 
 
 def _unbacked_trial_flags(organization_id):
@@ -542,17 +682,18 @@ def build_trial_conversion_report(scope):
     # cada jornada. Mismo criterio que `views_reports._report_scope`.
     today = timezone.localdate()
 
-    totals, rows = _tally(
+    totals, rows, prospects = _tally(
         organization_id=scope.organization_id, branch=scope.branch,
         date_from=scope.date_from, date_to=scope.date_to,
         window_days=window_days, now=now, today=today,
+        include_prospects=True,
     )
 
     # El período anterior se calcula con LA MISMA función y el MISMO predicado: comparar contra
     # otra definición mediría la diferencia entre las dos consultas y no el movimiento del
     # negocio.
     previous_scope = scope.previous()
-    previous_totals, _previous_rows = _tally(
+    previous_totals, _previous_rows, _previous_prospects = _tally(
         organization_id=previous_scope.organization_id, branch=previous_scope.branch,
         date_from=previous_scope.date_from, date_to=previous_scope.date_to,
         window_days=window_days, now=now, today=today,
@@ -610,6 +751,7 @@ def build_trial_conversion_report(scope):
             # el de inserción de las filas que llegaron.
             for key in bucket_keys(scope)
         ],
+        'prospects': prospects,
     }
 
 

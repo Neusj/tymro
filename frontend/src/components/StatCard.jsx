@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 
-export default function StatCard({ title, value, accent = 'orange', hint, to }) {
+export default function StatCard({ title, value, accent = 'orange', hint, to, onClick, ariaLabel }) {
   const accentClasses = {
     orange: 'from-brand-orange/25',
     red: 'from-brand-red/25',
@@ -18,8 +18,9 @@ export default function StatCard({ title, value, accent = 'orange', hint, to }) 
     muted: 'bg-brand-dim',
   }
 
-  const className = `card-surface group relative block overflow-hidden p-4 transition duration-300 hover:-translate-y-0.5 hover:shadow-float ${
-    to ? 'cursor-pointer hover:border-brand-orange' : ''
+  const isInteractive = Boolean(to || onClick)
+  const className = `card-surface group relative block overflow-hidden p-4 text-left transition duration-300 hover:-translate-y-0.5 hover:shadow-float ${
+    isInteractive ? 'cursor-pointer hover:border-brand-orange' : ''
   }`
 
   const content = (
@@ -32,7 +33,7 @@ export default function StatCard({ title, value, accent = 'orange', hint, to }) 
           <p className="mt-1 font-display text-2xl font-bold leading-none text-brand-white sm:text-3xl">{value}</p>
           {hint ? <p className="mt-1.5 text-xs text-brand-muted">{hint}</p> : null}
         </div>
-        {to ? (
+        {isInteractive ? (
           <svg
             width="18"
             height="18"
@@ -57,6 +58,14 @@ export default function StatCard({ title, value, accent = 'orange', hint, to }) 
       <Link to={to} className={className}>
         {content}
       </Link>
+    )
+  }
+
+  if (onClick) {
+    return (
+      <button type="button" onClick={onClick} aria-label={ariaLabel || title} className={`w-full ${className}`}>
+        {content}
+      </button>
     )
   }
 

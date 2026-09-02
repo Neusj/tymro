@@ -151,6 +151,43 @@ def test_a_student_who_used_the_trial_and_then_paid_counts_as_converted(org, bra
     assert data['totals']['conversion_rate'] == 100.0
 
 
+def test_the_report_publishes_prospect_detail_for_the_drilldown(org, branch, make_user):
+    today = timezone.localdate()
+    trial_day = today - timedelta(days=10)
+    teacher = make_user('trial-detail-teacher', organization=org, role='teacher',
+                        first_name='Ignacio', last_name='Duarte')
+    student = make_user('trial-detail-student', organization=org, role='student',
+                        first_name='Ana', last_name='Perez', email='ana@test.local',
+                        phone='+56 9 1111 2222')
+    gym_class = _trial_class(org, branch, day=trial_day, name='Boxeo')
+    gym_class.teacher = teacher
+    gym_class.save(update_fields=['teacher'])
+    _book_trial(gym_class, student)
+    _attend(gym_class, student)
+    plan = _plan(org)
+    membership = _membership(student, plan, start_date=trial_day + timedelta(days=1))
+    _tx(org, student, membership, plan_amount=plan.price)
+
+    data = build_trial_conversion_report(_scope(org, date_from=trial_day, date_to=trial_day))
+
+    assert len(data['prospects']) == 1
+    prospect = data['prospects'][0]
+    assert prospect['student_id'] == student.id
+    assert prospect['name'] == 'Ana Perez'
+    assert prospect['email'] == 'ana@test.local'
+    assert prospect['phone'] == '+56 9 1111 2222'
+    assert prospect['trial_date'] == trial_day.isoformat()
+    assert prospect['conversion_deadline'] == (trial_day + timedelta(days=60)).isoformat()
+    assert prospect['attended'] is True
+    assert prospect['converted'] is True
+    assert prospect['conversion_status'] == 'converted'
+    assert prospect['membership']['id'] == membership.id
+    assert prospect['membership']['plan_name'] == plan.name
+    assert prospect['trial_classes'][0]['name'] == 'Boxeo'
+    assert prospect['trial_classes'][0]['branch_name'] == branch.name
+    assert prospect['trial_classes'][0]['teacher_name'] == 'Ignacio Duarte'
+
+
 def test_a_manual_payment_also_counts_as_converted(org, branch, student):
     """La conversión no exige MercadoPago: un cobro registrado a mano sobre la membresía
     también cuenta (misma regla que `_payment_status`)."""
@@ -598,7 +635,7 @@ def test_gym_admin_gets_the_report_via_http(api_client, org, admin, branch, stud
     body = resp.json()
     assert body['totals']['trials'] == 1
     assert set(body) == {'period', 'filters', 'totals', 'previous', 'comparison',
-                         'unbacked_trial_flags', 'series'}
+                         'unbacked_trial_flags', 'series', 'prospects'}
 
 
 @pytest.mark.parametrize('role', ['manager', 'monitor', 'teacher', 'student'])
