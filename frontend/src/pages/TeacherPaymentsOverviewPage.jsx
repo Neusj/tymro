@@ -50,6 +50,19 @@ function formatDay(value) {
   return date.toLocaleDateString('es-CL', { day: '2-digit', month: '2-digit' })
 }
 
+function formatDateOnly(value) {
+  if (!value) return '-'
+  const [year, month, day] = String(value).split('-')
+  if (!year || !month || !day) return value
+  return `${day}-${month}-${year}`
+}
+
+function rowPeriodLabel(row) {
+  const period = row?.period || {}
+  if (!period.date_from && !period.date_to) return '-'
+  return `${formatDateOnly(period.date_from)} a ${formatDateOnly(period.date_to)}`
+}
+
 function firstApiError(detail, fallback) {
   if (!detail) return fallback
   if (typeof detail === 'string') return detail
@@ -412,8 +425,9 @@ export default function TeacherPaymentsOverviewPage() {
       {/* Tabla agregada (filas-tarjeta expandibles) */}
       <section className="space-y-2">
         {/* Encabezado de columnas (sm+) */}
-        <div className="hidden grid-cols-[1.6fr_repeat(3,0.7fr)_auto] items-center gap-3 px-4 text-[11px] uppercase tracking-wide text-brand-dim sm:grid">
+        <div className="hidden grid-cols-[1.4fr_1fr_repeat(3,0.7fr)_auto] items-center gap-3 px-4 text-[11px] uppercase tracking-wide text-brand-dim sm:grid">
           <span>Profesor</span>
+          <span>Periodo real</span>
           <span className="text-right">Clases</span>
           <span className="text-right">Asistentes</span>
           <span className="text-right">Total</span>
@@ -438,11 +452,12 @@ export default function TeacherPaymentsOverviewPage() {
                 <button
                   type="button"
                   onClick={() => setExpanded(isOpen ? null : row.teacher_id)}
-                  className="grid w-full grid-cols-[1fr_auto] items-center gap-3 p-4 text-left transition hover:bg-brand-elevated/40 sm:grid-cols-[1.6fr_repeat(3,0.7fr)_auto]"
+                  className="grid w-full grid-cols-[1fr_auto] items-center gap-3 p-4 text-left transition hover:bg-brand-elevated/40 sm:grid-cols-[1.4fr_1fr_repeat(3,0.7fr)_auto]"
                 >
                   {/* Profesor + modalidades */}
                   <div className="min-w-0">
                     <p className="truncate font-medium text-brand-white">{row.teacher_name}</p>
+                    <p className="mt-0.5 text-xs text-brand-muted sm:hidden">{rowPeriodLabel(row)}</p>
                     <div className="mt-1 flex flex-wrap items-center gap-1">
                       {row.modalities.length === 0 ? (
                         <span className="text-xs text-brand-dim">Sin modalidad</span>
@@ -463,6 +478,7 @@ export default function TeacherPaymentsOverviewPage() {
                   </div>
 
                   {/* Columnas numéricas (sm+) */}
+                  <span className="hidden text-sm text-brand-muted sm:block">{rowPeriodLabel(row)}</span>
                   <span className="hidden text-right text-sm tabular-nums text-brand-muted sm:block">{row.classes_count}</span>
                   <span className="hidden text-right text-sm tabular-nums text-brand-muted sm:block">{row.attendees_total}</span>
 
@@ -503,7 +519,11 @@ export default function TeacherPaymentsOverviewPage() {
                     </div>
 
                     {/* Desglose sueldo base + por clase = total */}
-                    <div className="mb-3 grid grid-cols-3 gap-2 text-sm">
+                    <div className="mb-3 grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
+                      <div className="rounded-lg border border-brand-hairline bg-brand-panel/50 p-2.5">
+                        <p className="text-[11px] uppercase tracking-wide text-brand-dim">Periodo real</p>
+                        <p className="mt-0.5 text-brand-white">{rowPeriodLabel(row)}</p>
+                      </div>
                       <div className="rounded-lg border border-brand-hairline bg-brand-panel/50 p-2.5">
                         <p className="text-[11px] uppercase tracking-wide text-brand-dim">Sueldo base</p>
                         <p className="mt-0.5 tabular-nums text-brand-white">{clp(row.monthly_total)}</p>
@@ -553,8 +573,9 @@ export default function TeacherPaymentsOverviewPage() {
 
         {/* Gran total */}
         {!loading && rows.length > 0 ? (
-          <div className="card-surface mt-1 grid grid-cols-[1fr_auto] items-center gap-3 border-brand-orange/30 bg-brand-orange/5 p-4 sm:grid-cols-[1.6fr_repeat(3,0.7fr)_auto]">
+          <div className="card-surface mt-1 grid grid-cols-[1fr_auto] items-center gap-3 border-brand-orange/30 bg-brand-orange/5 p-4 sm:grid-cols-[1.4fr_1fr_repeat(3,0.7fr)_auto]">
             <span className="font-semibold text-brand-white">Gran total</span>
+            <span className="hidden text-sm text-brand-muted sm:block">-</span>
             <span className="hidden text-right text-sm tabular-nums text-brand-muted sm:block">{totals.classes}</span>
             <span className="hidden text-right text-sm tabular-nums text-brand-muted sm:block">{totals.attendees}</span>
             <span className="text-right font-display text-lg font-bold tabular-nums text-brand-orange sm:col-span-1">
@@ -584,7 +605,7 @@ export default function TeacherPaymentsOverviewPage() {
               <StatTile label="Total" value={clp(calculationPreview.total_amount)} accent="text-brand-orange" />
             </div>
             <p className="text-sm text-brand-muted">
-              Se aplicara sobre {periodLabel(month)}. Los profesores ya pagados se saltan automaticamente.
+              Se aplicara sobre los periodos reales de {periodLabel(month)}. Los profesores ya pagados se saltan automaticamente.
             </p>
             {calculationPreview.skipped_paid_teachers_count ? (
               <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">

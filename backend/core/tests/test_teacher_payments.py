@@ -8,7 +8,7 @@ Cubre:
 - Un profesor solo ve su propia fila.
 - Export CSV / XLSX responden como descarga.
 """
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import pytest
 from django.utils import timezone
@@ -23,6 +23,7 @@ from core.models import (
     TeacherPaymentRule,
     TeacherPayout,
 )
+from core.services.teacher_payment_cycles import schedule_teacher_payment_cycle_change
 from core.services.teacher_payments import build_teacher_payment_summary, calculate_teacher_payment
 
 pytestmark = pytest.mark.django_db
@@ -191,6 +192,107 @@ def test_class_date_filter_excludes_out_of_period(api_client, org_setup):
     _login(api_client, 'admin')
     data = api_client.get(SUMMARY_URL).json()  # periodo por defecto = mes actual
     assert all(r['teacher_id'] != teacher.id for r in data['rows'])
+
+
+def test_summary_uses_teacher_payment_cycle_for_selected_month(api_client, org_setup):
+    org, branch, teacher = org_setup['org'], org_setup['branch'], org_setup['teacher']
+    teacher.teacher_payment_cycle_start_day = 17
+    teacher.save(update_fields=['teacher_payment_cycle_start_day'])
+    _make_rule(org, teacher, TeacherPaymentRule.PaymentType.PER_STUDENT, 1000)
+
+    outside_before = _make_completed_class(org, branch, teacher, start=_at(2026, 9, 16))
+    inside_start = _make_completed_class(org, branch, teacher, start=_at(2026, 9, 17))
+    inside_end = _make_completed_class(org, branch, teacher, start=_at(2026, 10, 16))
+    outside_after = _make_completed_class(org, branch, teacher, start=_at(2026, 10, 17))
+    for gym_class in [outside_before, inside_start, inside_end, outside_after]:
+        _present(gym_class, org_setup['s1'])
+        calculate_teacher_payment(gym_class)
+
+    _login(api_client, 'admin')
+    data = api_client.get(SUMMARY_URL, {
+        'date_from': '2026-09-01',
+        'date_to': '2026-09-30',
+    }).json()
+
+    row = next(r for r in data['rows'] if r['teacher_id'] == teacher.id)
+    assert row['period'] == {'date_from': '2026-09-17', 'date_to': '2026-10-16'}
+    assert row['classes_count'] == 2
+    assert row['total'] == 2000
+    assert [cls['id'] for cls in row['classes']] == [inside_start.id, inside_end.id]
+
+
+def test_calculate_missing_uses_teacher_payment_cycle(api_client, org_setup):
+    org, branch, teacher = org_setup['org'], org_setup['branch'], org_setup['teacher']
+    teacher.teacher_payment_cycle_start_day = 17
+    teacher.save(update_fields=['teacher_payment_cycle_start_day'])
+    _make_rule(org, teacher, TeacherPaymentRule.PaymentType.PER_STUDENT, 1000)
+
+    outside_before = _make_completed_class(org, branch, teacher, start=_at(2026, 9, 16))
+    inside_start = _make_completed_class(org, branch, teacher, start=_at(2026, 9, 17))
+    inside_end = _make_completed_class(org, branch, teacher, start=_at(2026, 10, 16))
+    outside_after = _make_completed_class(org, branch, teacher, start=_at(2026, 10, 17))
+    for gym_class in [outside_before, inside_start, inside_end, outside_after]:
+        _present(gym_class, org_setup['s1'])
+
+    _login(api_client, 'admin')
+    params = '?date_from=2026-09-01&date_to=2026-09-30'
+    preview = api_client.get(f'{CALC_PREVIEW_URL}{params}', {'mode': 'missing'}).json()
+    assert preview['classes_count'] == 2
+    assert {item['class_id'] for item in preview['items']} == {inside_start.id, inside_end.id}
+
+    resp = api_client.post(f'{CALC_MISSING_URL}{params}', {}, format='json')
+    assert resp.status_code == 201, resp.content
+    assert TeacherPaymentRecord.objects.filter(is_voided=False).count() == 2
+    assert set(TeacherPaymentRecord.objects.values_list('class_instance_id', flat=True)) == {
+        inside_start.id,
+        inside_end.id,
+    }
+
+
+def test_mark_paid_uses_teacher_payment_cycle_amount(api_client, org_setup):
+    org, branch, teacher = org_setup['org'], org_setup['branch'], org_setup['teacher']
+    teacher.teacher_payment_cycle_start_day = 17
+    teacher.save(update_fields=['teacher_payment_cycle_start_day'])
+    _make_rule(org, teacher, TeacherPaymentRule.PaymentType.PER_STUDENT, 1000)
+
+    for start in [_at(2026, 9, 17), _at(2026, 10, 16)]:
+        gym_class = _make_completed_class(org, branch, teacher, start=start)
+        _present(gym_class, org_setup['s1'])
+        calculate_teacher_payment(gym_class)
+    excluded = _make_completed_class(org, branch, teacher, start=_at(2026, 10, 17))
+    _present(excluded, org_setup['s1'])
+    calculate_teacher_payment(excluded)
+
+    _login(api_client, 'admin')
+    resp = api_client.post(
+        MARK_PAID_URL,
+        {'teacher_id': teacher.id, 'year': 2026, 'month': 9},
+        format='json',
+    )
+
+    assert resp.status_code == 200, resp.content
+    assert resp.json()['amount'] == 2000
+    payout = TeacherPayout.objects.get(teacher_id=teacher.id, period_year=2026, period_month=9)
+    assert payout.amount == 2000
+
+
+def test_teacher_payment_cycle_change_is_scheduled_for_next_full_cycle(org_setup):
+    teacher, admin = org_setup['teacher'], org_setup['admin']
+
+    change = schedule_teacher_payment_cycle_change(
+        teacher=teacher,
+        new_start_day=17,
+        actor=admin,
+        on_date=_date(2026, 9, 10),
+    )
+
+    teacher.refresh_from_db()
+    assert teacher.teacher_payment_cycle_start_day == 17
+    assert teacher.teacher_payment_cycle_previous_start_day == 1
+    assert teacher.teacher_payment_cycle_effective_from == _date(2026, 10, 17)
+    assert change.previous_start_day == 1
+    assert change.new_start_day == 17
+    assert change.effective_from == _date(2026, 10, 17)
 
 
 def test_teacher_sees_only_own_row(api_client, org_setup, make_user):
@@ -623,3 +725,7 @@ def _date(year, month, day):
     from datetime import date
 
     return date(year, month, day)
+
+
+def _at(year, month, day, hour=12):
+    return timezone.make_aware(datetime(year, month, day, hour, 0, 0))

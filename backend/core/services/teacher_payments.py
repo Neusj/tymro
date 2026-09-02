@@ -1,3 +1,6 @@
+from datetime import datetime
+
+from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.db.models import Count, Q
 from django.utils import timezone
@@ -12,6 +15,12 @@ from ..models import (
     TeacherPaymentRecord,
     TeacherPayout,
     TeacherPaymentRule,
+    TEACHER_ELIGIBLE_ROLES,
+)
+from .teacher_payment_cycles import (
+    cycle_start_day_for_selected_month,
+    is_full_calendar_month,
+    payment_period_for_teacher,
 )
 
 
@@ -254,6 +263,50 @@ def _completed_normal_classes(organization_id, date_from, date_to, teacher_id=No
     return queryset
 
 
+def _teacher_periods_for_request(organization_id, date_from, date_to, teacher_id=None):
+    User = get_user_model()
+    queryset = User.objects.filter(
+        organization_id=organization_id,
+        role__in=TEACHER_ELIGIBLE_ROLES,
+    )
+    if teacher_id:
+        queryset = queryset.filter(id=teacher_id)
+
+    full_month = is_full_calendar_month(date_from, date_to)
+    periods = {}
+    for teacher in queryset:
+        period_start, period_end = payment_period_for_teacher(teacher, date_from, date_to)
+        cycle_start_day = (
+            cycle_start_day_for_selected_month(teacher, date_from.year, date_from.month)
+            if full_month else None
+        )
+        periods[teacher.id] = {
+            'date_from': period_start,
+            'date_to': period_end,
+            'cycle_start_day': cycle_start_day,
+            'monthly_units': 1 if full_month else _months_between(date_from, date_to),
+        }
+    return periods
+
+
+def _query_bounds_for_periods(periods, date_from, date_to):
+    if not periods:
+        return date_from, date_to
+    starts = [period['date_from'] for period in periods.values()]
+    ends = [period['date_to'] for period in periods.values()]
+    return min(starts), max(ends)
+
+
+def _period_contains(period, value):
+    if value is None:
+        return False
+    if isinstance(value, datetime):
+        value_date = timezone.localtime(value).date() if value.tzinfo else value.date()
+    else:
+        value_date = value
+    return period['date_from'] <= value_date <= period['date_to']
+
+
 def _period_paid_teacher_ids(organization_id, date_from):
     return set(
         TeacherPayout.objects.filter(
@@ -284,14 +337,19 @@ def _calculation_candidates(organization_id, date_from, date_to, mode, teacher_i
         raise ValueError('Modo de calculo invalido.')
 
     paid_teacher_ids = _period_paid_teacher_ids(organization_id, date_from)
-    active_records = _active_records_by_class(organization_id, date_from, date_to, teacher_id=teacher_id)
+    teacher_periods = _teacher_periods_for_request(organization_id, date_from, date_to, teacher_id=teacher_id)
+    query_from, query_to = _query_bounds_for_periods(teacher_periods, date_from, date_to)
+    active_records = _active_records_by_class(organization_id, query_from, query_to, teacher_id=teacher_id)
     skipped_paid_teachers = set()
     skipped_existing = 0
     skipped_no_rule = 0
     candidates = []
     total_amount = 0.0
 
-    for gym_class in _completed_normal_classes(organization_id, date_from, date_to, teacher_id=teacher_id):
+    for gym_class in _completed_normal_classes(organization_id, query_from, query_to, teacher_id=teacher_id):
+        period = teacher_periods.get(gym_class.teacher_id)
+        if period is None or not _period_contains(period, gym_class.start_datetime):
+            continue
         if gym_class.teacher_id in paid_teacher_ids:
             skipped_paid_teachers.add(gym_class.teacher_id)
             continue
@@ -312,6 +370,10 @@ def _calculation_candidates(organization_id, date_from, date_to, mode, teacher_i
             'teacher_name': _teacher_display_name(gym_class.teacher),
             'class_name': gym_class.name,
             'start': gym_class.start_datetime.isoformat() if gym_class.start_datetime else None,
+            'period': {
+                'date_from': period['date_from'].isoformat(),
+                'date_to': period['date_to'].isoformat(),
+            },
             'action': 'update' if has_record else 'create',
             'rule_id': values['rule'].id,
             'payment_type': values['rule'].payment_type,
@@ -334,6 +396,7 @@ def _calculation_candidates(organization_id, date_from, date_to, mode, teacher_i
     return {
         'mode': mode,
         'period': {'date_from': date_from.isoformat(), 'date_to': date_to.isoformat()},
+        'uses_teacher_cycles': is_full_calendar_month(date_from, date_to),
         'classes_count': len(candidates),
         'records_created_count': records_created,
         'records_updated_count': records_updated,
@@ -482,13 +545,27 @@ def build_teacher_payment_summary(organization_id, date_from, date_to, teacher_i
     rows = {}
     include_normal = class_kind in (None, 'normal')
     include_personalized = class_kind in (None, 'personalized')
+    teacher_periods = _teacher_periods_for_request(organization_id, date_from, date_to, teacher_id=teacher_id)
+    query_from, query_to = _query_bounds_for_periods(teacher_periods, date_from, date_to)
 
     def _ensure(tid, teacher_obj=None):
         row = rows.get(tid)
+        period = teacher_periods.get(tid, {
+            'date_from': date_from,
+            'date_to': date_to,
+            'cycle_start_day': None,
+            'monthly_units': _months_between(date_from, date_to),
+        })
         if row is None:
             row = {
                 'teacher_id': tid,
                 'teacher_name': _teacher_display_name(teacher_obj),
+                'period': {
+                    'date_from': period['date_from'].isoformat(),
+                    'date_to': period['date_to'].isoformat(),
+                },
+                'payment_cycle_start_day': period['cycle_start_day'],
+                'monthly_units': period['monthly_units'],
                 'classes_count': 0,
                 'normal_classes_count': 0,
                 'personalized_classes_count': 0,
@@ -510,8 +587,8 @@ def build_teacher_payment_summary(organization_id, date_from, date_to, teacher_i
                 organization_id=organization_id,
                 status__in=completed,
                 teacher__isnull=False,
-                start_datetime__date__gte=date_from,
-                start_datetime__date__lte=date_to,
+                start_datetime__date__gte=query_from,
+                start_datetime__date__lte=query_to,
             )
             .select_related('teacher')
             .annotate(present_count=Count('attendances', filter=Q(attendances__status=Attendance.Status.PRESENT)))
@@ -523,15 +600,22 @@ def build_teacher_payment_summary(organization_id, date_from, date_to, teacher_i
         records_qs = TeacherPaymentRecord.objects.filter(
             class_instance__organization_id=organization_id,
             class_instance__status__in=completed,
-            class_instance__start_datetime__date__gte=date_from,
-            class_instance__start_datetime__date__lte=date_to,
+            class_instance__start_datetime__date__gte=query_from,
+            class_instance__start_datetime__date__lte=query_to,
             is_voided=False,
-        ).select_related('rule')
+        ).select_related('rule', 'class_instance')
         if teacher_id:
             records_qs = records_qs.filter(teacher_id=teacher_id)
-        record_by_class = {r.class_instance_id: r for r in records_qs}
+        record_by_class = {}
+        for record in records_qs:
+            period = teacher_periods.get(record.teacher_id)
+            if period and _period_contains(period, record.class_instance.start_datetime):
+                record_by_class[record.class_instance_id] = record
 
         for gym_class in classes_qs:
+            period = teacher_periods.get(gym_class.teacher_id)
+            if period is None or not _period_contains(period, gym_class.start_datetime):
+                continue
             row = _ensure(gym_class.teacher_id, gym_class.teacher)
             row['classes_count'] += 1
             row['normal_classes_count'] += 1
@@ -560,8 +644,8 @@ def build_teacher_payment_summary(organization_id, date_from, date_to, teacher_i
                 organization_id=organization_id,
                 status=PersonalizedClassSession.Status.FINISHED,
                 teacher__isnull=False,
-                finished_at__date__gte=date_from,
-                finished_at__date__lte=date_to,
+                finished_at__date__gte=query_from,
+                finished_at__date__lte=query_to,
             )
             .select_related('teacher', 'student', 'discipline', 'class_type')
         )
@@ -569,6 +653,9 @@ def build_teacher_payment_summary(organization_id, date_from, date_to, teacher_i
             personalized_qs = personalized_qs.filter(teacher_id=teacher_id)
 
         for session in personalized_qs:
+            period = teacher_periods.get(session.teacher_id)
+            if period is None or not _period_contains(period, session.finished_at):
+                continue
             row = _ensure(session.teacher_id, session.teacher)
             row['classes_count'] += 1
             row['personalized_classes_count'] += 1
@@ -592,7 +679,6 @@ def build_teacher_payment_summary(organization_id, date_from, date_to, teacher_i
             )
 
     # --- Sueldo mensual fijo (fuente: reglas monthly_fixed activas; NO hay records) ---
-    months = _months_between(date_from, date_to)
     monthly_rules = TeacherPaymentRule.objects.none()
     if class_kind is None:
         monthly_rules = (
@@ -612,7 +698,7 @@ def build_teacher_payment_summary(organization_id, date_from, date_to, teacher_i
             if teacher_id and str(tid) != str(teacher_id):
                 continue
             row = _ensure(tid)
-            row['monthly_total'] += float(rule.amount) * months
+            row['monthly_total'] += float(rule.amount) * row['monthly_units']
             row['modalities'].add(TeacherPaymentRule.PaymentType.MONTHLY_FIXED)
 
     # Resolver nombres faltantes (profes solo-mensual sin clases en el periodo)
@@ -635,6 +721,8 @@ def build_teacher_payment_summary(organization_id, date_from, date_to, teacher_i
             {
                 'teacher_id': row['teacher_id'],
                 'teacher_name': row['teacher_name'],
+                'period': row['period'],
+                'payment_cycle_start_day': row['payment_cycle_start_day'],
                 'classes_count': row['classes_count'],
                 'normal_classes_count': row['normal_classes_count'],
                 'personalized_classes_count': row['personalized_classes_count'],

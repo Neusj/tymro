@@ -27,7 +27,16 @@ const userInitialForm = {
   is_active_member: true,
   pays_enrollment_fee: true,
   student_benefit_enabled: false,
+  teacher_payment_cycle_start_day: 1,
   is_active: true,
+}
+
+const teacherPaymentCycleRoles = new Set(['teacher', 'gym_admin'])
+
+function cycleLabel(day) {
+  const value = Number(day || 1)
+  if (value === 1) return '1 al ultimo dia del mes'
+  return `${value} al ${value - 1}`
 }
 
 export default function GymAdminUsersPage() {
@@ -131,6 +140,7 @@ export default function GymAdminUsersPage() {
 
   const canManage = (role) => assignableRoles.some((option) => option.value === role)
   const canEditStudentBenefit = currentUser?.role === 'gym_admin'
+  const canEditTeacherPaymentCycle = ['superadmin', 'gym_admin'].includes(currentUser?.role)
 
   const defaultRoleValue = () => (assignableRoles.find((option) => option.value === 'teacher') || assignableRoles[0])?.value || ''
 
@@ -156,6 +166,7 @@ export default function GymAdminUsersPage() {
       is_active_member: Boolean(user.is_active_member),
       pays_enrollment_fee: user.pays_enrollment_fee !== false,
       student_benefit_enabled: Boolean(user.student_benefit_enabled),
+      teacher_payment_cycle_start_day: user.teacher_payment_cycle_start_day || 1,
       is_active: Boolean(user.is_active),
     })
     setFormError('')
@@ -184,6 +195,9 @@ export default function GymAdminUsersPage() {
     }
     if (!canEditStudentBenefit) {
       delete payload.student_benefit_enabled
+    }
+    if (!canEditTeacherPaymentCycle || !teacherPaymentCycleRoles.has(payload.role)) {
+      delete payload.teacher_payment_cycle_start_day
     }
 
     try {
@@ -261,6 +275,25 @@ export default function GymAdminUsersPage() {
         },
       },
       { key: 'branch', label: 'Sucursal', mobile: 'secondary', render: (row) => row.branch_detail?.name || 'Sin sucursal' },
+      {
+        key: 'teacher_payment_cycle',
+        label: 'Ciclo pago',
+        mobile: 'secondary',
+        render: (row) => {
+          if (!teacherPaymentCycleRoles.has(row.role)) {
+            return <span className="text-xs text-brand-muted">-</span>
+          }
+          const pending = row.teacher_payment_cycle_pending
+          return (
+            <div className="text-xs">
+              <p className="text-brand-white">{cycleLabel(row.teacher_payment_cycle_active_start_day || row.teacher_payment_cycle_start_day)}</p>
+              {pending ? (
+                <p className="text-amber-200">Prog. {cycleLabel(pending.new_start_day)} desde {pending.effective_from}</p>
+              ) : null}
+            </div>
+          )
+        },
+      },
       { key: 'status', label: 'Estado', mobile: 'meta', render: (row) => <ValueBadge kind="user_status" value={row.is_active ? 'active' : 'inactive'} /> },
       {
         key: 'actions',
@@ -427,6 +460,43 @@ export default function GymAdminUsersPage() {
               ))}
             </select>
           </label>
+          {canEditTeacherPaymentCycle && teacherPaymentCycleRoles.has(form.role) ? (
+            <div className="md:col-span-2 rounded-lg border border-brand-line bg-black/20 p-3">
+              <label className="block space-y-1 text-sm">
+                <span>Ciclo de pago profesor</span>
+                <select
+                  value={form.teacher_payment_cycle_start_day}
+                  onChange={(event) => setForm((prev) => ({ ...prev, teacher_payment_cycle_start_day: Number(event.target.value) }))}
+                  className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2 md:w-72"
+                >
+                  {Array.from({ length: 31 }, (_, index) => index + 1).map((day) => (
+                    <option key={day} value={day}>
+                      {cycleLabel(day)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {editing?.teacher_payment_cycle_pending ? (
+                <p className="mt-2 text-xs text-amber-200">
+                  Actual: {cycleLabel(editing.teacher_payment_cycle_pending.previous_start_day)}. Cambio programado:{' '}
+                  {cycleLabel(editing.teacher_payment_cycle_pending.new_start_day)} desde {editing.teacher_payment_cycle_pending.effective_from}.
+                </p>
+              ) : (
+                <p className="mt-2 text-xs text-brand-muted">
+                  Por defecto es 1 al ultimo dia del mes. Los cambios se aplican desde el proximo ciclo completo.
+                </p>
+              )}
+              {editing?.teacher_payment_cycle_history?.length ? (
+                <div className="mt-3 space-y-1 border-t border-brand-hairline pt-2 text-xs text-brand-muted">
+                  {editing.teacher_payment_cycle_history.slice(0, 3).map((change) => (
+                    <p key={change.id}>
+                      {cycleLabel(change.previous_start_day)} a {cycleLabel(change.new_start_day)} desde {change.effective_from} · {change.status}
+                    </p>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           <label className="space-y-1 text-sm">
             <span>Teléfono</span>
             <input value={form.phone} onChange={(event) => setForm((prev) => ({ ...prev, phone: event.target.value }))} className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2" />

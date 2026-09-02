@@ -3363,6 +3363,9 @@ class UserViewSet(ModelViewSet):
         if 'student_benefit_enabled' in data and not (_is_superadmin(user) or _is_gym_admin(user)):
             raise PermissionDenied('No tienes permisos para modificar el beneficio estudiante.')
 
+        if 'teacher_payment_cycle_start_day' in data and not (_is_superadmin(user) or _is_gym_admin(user)):
+            raise PermissionDenied('No tienes permisos para modificar el ciclo de pago del profesor.')
+
         if instance is not None and not roles.can_assign(user, instance.role):
             raise PermissionDenied('No tienes permisos para gestionar usuarios con ese rol.')
 
@@ -7404,7 +7407,7 @@ class TeacherPaymentRecordViewSet(ModelViewSet):
     @staticmethod
     def _summary_header():
         return [
-            'Profesor', 'Modalidades', 'Clases', 'Asistentes', 'Sueldo base', 'Por clase', 'Total',
+            'Profesor', 'Periodo', 'Modalidades', 'Clases', 'Asistentes', 'Sueldo base', 'Por clase', 'Total',
             'Estado', 'Pagado', 'Fecha pago', 'Pendiente',
         ]
 
@@ -7420,8 +7423,11 @@ class TeacherPaymentRecordViewSet(ModelViewSet):
             estado = 'Pagado parcial'
         else:
             estado = 'Pagado'
+        period = row.get('period') or {}
+        period_label = f"{period.get('date_from', '')} a {period.get('date_to', '')}".strip()
         return [
             row['teacher_name'],
+            period_label,
             ', '.join(_payment_type_label(code) for code in row['modalities']),
             row['classes_count'],
             row['attendees_total'],
@@ -7441,7 +7447,7 @@ class TeacherPaymentRecordViewSet(ModelViewSet):
             for row in data['rows']
         )
         grand_pending = sum(int(round(row.get('pending', row['total']))) for row in data['rows'])
-        return ['TOTAL', '', '', '', '', '', int(round(data['grand_total'])), '', grand_paid, '', grand_pending]
+        return ['TOTAL', '', '', '', '', '', '', int(round(data['grand_total'])), '', grand_paid, '', grand_pending]
 
     @classmethod
     def _export_summary_csv(cls, data, filename):

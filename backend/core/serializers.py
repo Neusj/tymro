@@ -55,6 +55,10 @@ from .services.plans import (
     student_benefit_expiry_for,
     student_benefit_is_active,
 )
+from .services.teacher_payment_cycles import (
+    active_cycle_start_day_for_date,
+    schedule_teacher_payment_cycle_change,
+)
 from .services.recurrence import can_delete_template, create_enrollments_for_recurring_subscription, recurring_skip_reason_for_instance
 from .services.reservations import (
     REASON_PLAN_NOT_FOUND,
@@ -389,6 +393,9 @@ class CustomUserSerializer(serializers.ModelSerializer):
     # get_role_display()). Solo lectura: nunca expone la key interna ('gym_admin').
     role_display = serializers.CharField(source='get_role_display', read_only=True)
     student_benefit_active = serializers.SerializerMethodField()
+    teacher_payment_cycle_active_start_day = serializers.SerializerMethodField()
+    teacher_payment_cycle_pending = serializers.SerializerMethodField()
+    teacher_payment_cycle_history = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -411,6 +418,14 @@ class CustomUserSerializer(serializers.ModelSerializer):
             'student_benefit_expires_on',
             'student_benefit_updated_at',
             'student_benefit_updated_by',
+            'teacher_payment_cycle_start_day',
+            'teacher_payment_cycle_previous_start_day',
+            'teacher_payment_cycle_effective_from',
+            'teacher_payment_cycle_updated_at',
+            'teacher_payment_cycle_updated_by',
+            'teacher_payment_cycle_active_start_day',
+            'teacher_payment_cycle_pending',
+            'teacher_payment_cycle_history',
             'organization',
             'branch',
             'organization_detail',
@@ -434,10 +449,51 @@ class CustomUserSerializer(serializers.ModelSerializer):
             'student_benefit_expires_on',
             'student_benefit_updated_at',
             'student_benefit_updated_by',
+            'teacher_payment_cycle_previous_start_day',
+            'teacher_payment_cycle_effective_from',
+            'teacher_payment_cycle_updated_at',
+            'teacher_payment_cycle_updated_by',
+            'teacher_payment_cycle_active_start_day',
+            'teacher_payment_cycle_pending',
+            'teacher_payment_cycle_history',
         ]
 
     def get_student_benefit_active(self, obj):
         return student_benefit_is_active(obj, timezone.localdate())
+
+    def get_teacher_payment_cycle_active_start_day(self, obj):
+        if obj.role not in TEACHER_ELIGIBLE_ROLES:
+            return None
+        return active_cycle_start_day_for_date(obj, timezone.localdate())
+
+    def get_teacher_payment_cycle_pending(self, obj):
+        if obj.role not in TEACHER_ELIGIBLE_ROLES:
+            return None
+        effective_from = obj.teacher_payment_cycle_effective_from
+        if not effective_from or effective_from <= timezone.localdate():
+            return None
+        return {
+            'previous_start_day': obj.teacher_payment_cycle_previous_start_day or 1,
+            'new_start_day': obj.teacher_payment_cycle_start_day or 1,
+            'effective_from': effective_from.isoformat(),
+        }
+
+    def get_teacher_payment_cycle_history(self, obj):
+        if obj.role not in TEACHER_ELIGIBLE_ROLES:
+            return []
+        changes = obj.teacher_payment_cycle_changes_received.select_related('requested_by')[:5]
+        return [
+            {
+                'id': change.id,
+                'previous_start_day': change.previous_start_day,
+                'new_start_day': change.new_start_day,
+                'effective_from': change.effective_from.isoformat(),
+                'status': change.status,
+                'requested_at': change.requested_at.isoformat() if change.requested_at else None,
+                'requested_by_name': _user_display_name(change.requested_by),
+            }
+            for change in changes
+        ]
 
     def _stamp_student_benefit(self, instance, enabled):
         request = self.context.get('request')
@@ -475,6 +531,13 @@ class CustomUserSerializer(serializers.ModelSerializer):
             and actor.role in {User.Role.SUPERADMIN, User.Role.GYM_ADMIN}
         ):
             raise PermissionDenied('No tienes permisos para modificar el beneficio estudiante.')
+
+        if 'teacher_payment_cycle_start_day' in attrs and not (
+            actor is not None
+            and getattr(actor, 'is_authenticated', False)
+            and actor.role in {User.Role.SUPERADMIN, User.Role.GYM_ADMIN}
+        ):
+            raise PermissionDenied('No tienes permisos para modificar el ciclo de pago del profesor.')
 
         # Actores org-admin (gym_admin/manager): la organización SIEMPRE es la suya.
         if roles.is_org_admin(actor):
@@ -553,6 +616,8 @@ class CustomUserSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         benefit_touched = 'student_benefit_enabled' in validated_data
         benefit_enabled = validated_data.pop('student_benefit_enabled', None)
+        cycle_touched = 'teacher_payment_cycle_start_day' in validated_data
+        cycle_start_day = validated_data.pop('teacher_payment_cycle_start_day', None)
         password = validated_data.pop('password', None)
         for key, value in validated_data.items():
             setattr(instance, key, value)
@@ -561,6 +626,13 @@ class CustomUserSerializer(serializers.ModelSerializer):
         instance.save()
         if benefit_touched:
             self._stamp_student_benefit(instance, benefit_enabled)
+        if cycle_touched and instance.role in TEACHER_ELIGIBLE_ROLES:
+            request = self.context.get('request')
+            schedule_teacher_payment_cycle_change(
+                teacher=instance,
+                new_start_day=cycle_start_day,
+                actor=getattr(request, 'user', None),
+            )
         return instance
 
 

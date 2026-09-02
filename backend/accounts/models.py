@@ -1,6 +1,7 @@
 import uuid
 
 from django.contrib.auth.models import AbstractUser
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.db.models import Q, UniqueConstraint
 from django.db.models.functions import Lower
@@ -58,6 +59,26 @@ class CustomUser(AbstractUser):
         blank=True,
         related_name='student_benefit_updates',
     )
+    teacher_payment_cycle_start_day = models.PositiveSmallIntegerField(
+        default=1,
+        validators=[MinValueValidator(1), MaxValueValidator(31)],
+        help_text='Dia de inicio del ciclo de pago del profesor. 1 = mes calendario.',
+    )
+    teacher_payment_cycle_previous_start_day = models.PositiveSmallIntegerField(
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(1), MaxValueValidator(31)],
+        help_text='Ciclo anterior mientras un cambio programado aun no entra en vigencia.',
+    )
+    teacher_payment_cycle_effective_from = models.DateField(null=True, blank=True)
+    teacher_payment_cycle_updated_at = models.DateTimeField(null=True, blank=True)
+    teacher_payment_cycle_updated_by = models.ForeignKey(
+        'self',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='teacher_payment_cycle_updates',
+    )
     email_verified = models.BooleanField(default=False)
     trial_eligible = models.BooleanField(default=False)
     has_used_trial = models.BooleanField(default=False)
@@ -100,3 +121,50 @@ class CustomUser(AbstractUser):
 
     def __str__(self):
         return self.get_full_name() or self.email or self.username
+
+
+class TeacherPaymentCycleChange(models.Model):
+    class Status(models.TextChoices):
+        SCHEDULED = 'scheduled', 'Programado'
+        ACTIVE = 'active', 'Activo'
+        CANCELLED = 'cancelled', 'Cancelado'
+
+    teacher = models.ForeignKey(
+        CustomUser,
+        on_delete=models.CASCADE,
+        related_name='teacher_payment_cycle_changes_received',
+    )
+    organization = models.ForeignKey(
+        'core.Organization',
+        on_delete=models.CASCADE,
+        related_name='teacher_payment_cycle_changes',
+    )
+    previous_start_day = models.PositiveSmallIntegerField(
+        validators=[MinValueValidator(1), MaxValueValidator(31)],
+    )
+    new_start_day = models.PositiveSmallIntegerField(
+        validators=[MinValueValidator(1), MaxValueValidator(31)],
+    )
+    effective_from = models.DateField()
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.SCHEDULED)
+    requested_by = models.ForeignKey(
+        CustomUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='teacher_payment_cycle_changes_requested',
+    )
+    requested_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-requested_at', '-id']
+        indexes = [
+            models.Index(
+                fields=['organization', 'teacher', 'effective_from'],
+                name='accounts_te_organiz_b4ed45_idx',
+            ),
+            models.Index(fields=['teacher', 'status'], name='accounts_te_teacher_bce813_idx'),
+        ]
+
+    def __str__(self):
+        return f'{self.teacher} ciclo {self.previous_start_day}->{self.new_start_day} desde {self.effective_from}'
