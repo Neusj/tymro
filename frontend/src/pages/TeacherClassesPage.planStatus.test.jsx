@@ -21,7 +21,7 @@ vi.mock('../auth/AuthContext', () => ({
   useAuth: () => ({ user: { id: 777, role: 'teacher' } }),
 }))
 
-import { classesApi } from '../api/client'
+import { classesApi, enrollmentsApi } from '../api/client'
 import TeacherClassesPage from './TeacherClassesPage'
 
 const DAY = 24 * 60 * 60 * 1000
@@ -69,6 +69,8 @@ beforeEach(() => {
   classesApi.reactivate.mockResolvedValue({})
   classesApi.enrolledStudents.mockResolvedValue([])
   classesApi.enrollableStudents.mockResolvedValue([candidate()])
+  enrollmentsApi.create.mockResolvedValue({ id: 1 })
+  enrollmentsApi.cancel.mockResolvedValue({})
   window.matchMedia = (query) => ({
     matches: query.includes('min-width'),
     addEventListener() {},
@@ -149,6 +151,20 @@ describe('TeacherClassesPage — badge de plan en el roster', () => {
     // El saldo se sigue diciendo tal cual: las 8 clases existen, lo que falta es la matrícula.
     expect(within(row).getByText('8 clases')).toBeInTheDocument()
     expect(within(row).getByText('Matrícula impaga')).toBeInTheDocument()
+  })
+  it('cierra el modal despues de inscribir seleccionados', async () => {
+    const user = userEvent.setup()
+    const row = await openEnrollModal()
+
+    await user.click(within(row).getByRole('checkbox'))
+    await user.click(screen.getByRole('button', { name: 'Inscribir seleccionados' }))
+
+    await waitFor(() => expect(enrollmentsApi.create).toHaveBeenCalledWith({
+      gym_class: 101,
+      student: 5,
+      status: 'active',
+    }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /Inscribir alumnos/ })).not.toBeInTheDocument())
   })
 })
 

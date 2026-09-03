@@ -371,6 +371,8 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
       setEnrollSearch('')
       await syncEnrollmentPools(enrollClass.id)
       await loadData()
+      setEnrollOpen(false)
+      setEnrollClass(null)
     } catch (apiError) {
       const detail = apiError?.response?.data
       if (detail?.student?.[0]) {
@@ -401,6 +403,8 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
       setEnrolledSearch('')
       await syncEnrollmentPools(enrolledClass.id)
       await loadData()
+      setEnrolledOpen(false)
+      setEnrolledClass(null)
     } catch (apiError) {
       setError(firstApiError(apiError?.response?.data, 'No se pudieron quitar los alumnos seleccionados.'))
     } finally {

@@ -151,6 +151,7 @@ export default function ClassEnrollmentModal({
       setEnrollSearch('')
       await loadRoster(realClassId)
       await onChanged?.()
+      onClose?.()
     } catch (apiError) {
       const detail = apiError?.response?.data
       if (detail?.student?.[0]) {
@@ -181,6 +182,7 @@ export default function ClassEnrollmentModal({
       setEnrolledSearch('')
       await loadRoster()
       await onChanged?.()
+      onClose?.()
     } catch (apiError) {
       setError(firstApiError(apiError?.response?.data, 'No se pudieron quitar los alumnos seleccionados.'))
     } finally {
