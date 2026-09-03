@@ -148,6 +148,10 @@ class Organization(TimestampedModel):
         validators=[MaxValueValidator(1440)],
         help_text='Minutos tras el fin de la clase en que el profesor puede inscribir alumnos.',
     )
+    allow_started_class_substitution = models.BooleanField(
+        default=False,
+        help_text='Permite que profesores tomen suplencias de clases ya comenzadas y no terminadas.',
+    )
     # Colchón de poda: cuántos días tiene que llevar TERMINADA una clase vacía para que el
     # job advance_class_windows la borre. Margen para backfill tardío (pasar lista el lunes
     # por la clase del viernes). 0 = sin colchón (podar apenas termina).

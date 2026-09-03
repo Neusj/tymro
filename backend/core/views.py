@@ -4102,6 +4102,8 @@ class GymClassViewSet(ModelViewSet):
         ).exists()
 
     def _validate_claim_substitution(self, *, teacher, gym_class):
+        now = timezone.now()
+        allow_started = bool(getattr(gym_class.organization, 'allow_started_class_substitution', False))
         if not _is_teacher_eligible_actor(teacher):
             raise PermissionDenied('Solo los profesores pueden tomar suplencias.')
         if not teacher.organization_id:
@@ -4114,8 +4116,10 @@ class GymClassViewSet(ModelViewSet):
             raise ValidationError({'detail': 'No puedes tomar tu propia clase como suplente.'})
         if gym_class.has_substitute:
             raise ValidationError({'detail': 'Esta clase ya tiene suplente.'})
-        if gym_class.start_datetime <= timezone.now():
+        if gym_class.end_datetime <= now:
             raise ValidationError({'detail': 'No puedes tomar una clase pasada.'})
+        if gym_class.start_datetime <= now and not allow_started:
+            raise ValidationError({'detail': 'No puedes tomar una clase que ya comenzo.'})
         if gym_class.status not in {GymClass.Status.SCHEDULED, GymClass.Status.IN_PROGRESS}:
             raise ValidationError({'detail': 'Esta clase no admite suplencia.'})
         if self._substitution_conflict_exists(teacher=teacher, gym_class=gym_class):
@@ -4145,6 +4149,12 @@ class GymClassViewSet(ModelViewSet):
         if not user.organization_id:
             return Response([])
 
+        now = timezone.now()
+        allow_started = bool(getattr(user.organization, 'allow_started_class_substitution', False))
+        claim_window_filter = (
+            models.Q(end_datetime__gt=now)
+            if allow_started else models.Q(start_datetime__gt=now)
+        )
         raw_date = request.query_params.get('date')
         start_date_from = self.request.query_params.get('start_date_from')
         start_date_to = self.request.query_params.get('start_date_to')
@@ -4157,10 +4167,9 @@ class GymClassViewSet(ModelViewSet):
 
         queryset = self.queryset.filter(
             organization_id=user.organization_id,
-            start_datetime__gt=timezone.now(),
             status__in=[GymClass.Status.SCHEDULED, GymClass.Status.IN_PROGRESS],
             has_substitute=False,
-        ).exclude(teacher_id=user.id)
+        ).filter(claim_window_filter).exclude(teacher_id=user.id)
         queryset = self._apply_class_common_filters(
             queryset,
             start_date_from=start_date_from,

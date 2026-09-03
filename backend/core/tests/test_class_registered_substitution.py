@@ -1,4 +1,5 @@
 from datetime import timedelta
+from unittest import mock
 
 import pytest
 from django.utils import timezone
@@ -280,6 +281,99 @@ def test_profesor_no_toma_propia_ajena_inactiva_pasada_ni_ya_suplida(api_client,
     inactive.save(update_fields=['is_active'])
     api_client.force_authenticate(user=inactive)
     assert api_client.post(f"{CLASSES_URL}{_make_class(setup).id}/claim-substitution/").status_code == 403
+
+
+def test_profesor_no_toma_suplencia_ya_comenzada_si_config_apagada(api_client, setup):
+    now = timezone.now()
+    gym_class = _make_class(
+        setup,
+        start=now - timedelta(minutes=10),
+        end_datetime=now + timedelta(minutes=50),
+        status=GymClass.Status.IN_PROGRESS,
+    )
+    _login(api_client, setup['substitute'])
+
+    with (
+        mock.patch('core.views.timezone.now', return_value=now),
+        mock.patch('core.serializers.timezone.now', return_value=now),
+    ):
+        coverable = api_client.get(f"{CLASSES_URL}coverable/")
+        resp = api_client.post(f"{CLASSES_URL}{gym_class.id}/claim-substitution/")
+
+    assert coverable.status_code == 200, coverable.content
+    assert gym_class.id not in {row['id'] for row in coverable.json()}
+    assert resp.status_code == 400, resp.content
+    assert 'ya comenzo' in resp.json()['detail']
+
+
+def test_profesor_toma_suplencia_ya_comenzada_si_config_encendida(api_client, setup):
+    now = timezone.now()
+    setup['org'].allow_started_class_substitution = True
+    setup['org'].save(update_fields=['allow_started_class_substitution'])
+    gym_class = _make_class(
+        setup,
+        start=now - timedelta(minutes=10),
+        end_datetime=now + timedelta(minutes=50),
+        status=GymClass.Status.IN_PROGRESS,
+    )
+    _login(api_client, setup['substitute'])
+
+    with (
+        mock.patch('core.views.timezone.now', return_value=now),
+        mock.patch('core.serializers.timezone.now', return_value=now),
+    ):
+        coverable = api_client.get(f"{CLASSES_URL}coverable/")
+        resp = api_client.post(f"{CLASSES_URL}{gym_class.id}/claim-substitution/")
+
+    assert coverable.status_code == 200, coverable.content
+    rows = [row for row in coverable.json() if row['id'] == gym_class.id]
+    assert rows and rows[0]['can_claim_substitution'] is True
+    assert resp.status_code == 200, resp.content
+    gym_class.refresh_from_db()
+    assert gym_class.substitute_teacher_id == setup['substitute'].id
+
+
+def test_admin_como_profesor_toma_suplencia_ya_comenzada_si_config_encendida(api_client, setup, make_user):
+    now = timezone.now()
+    setup['org'].allow_started_class_substitution = True
+    setup['org'].save(update_fields=['allow_started_class_substitution'])
+    admin_teacher = make_user('admin-teacher-reg-sub', organization=setup['org'], role='gym_admin')
+    gym_class = _make_class(
+        setup,
+        start=now - timedelta(minutes=10),
+        end_datetime=now + timedelta(minutes=50),
+        status=GymClass.Status.IN_PROGRESS,
+    )
+    _login(api_client, admin_teacher)
+
+    with (
+        mock.patch('core.views.timezone.now', return_value=now),
+        mock.patch('core.serializers.timezone.now', return_value=now),
+    ):
+        resp = api_client.post(f"{CLASSES_URL}{gym_class.id}/claim-substitution/")
+
+    assert resp.status_code == 200, resp.content
+    gym_class.refresh_from_db()
+    assert gym_class.substitute_teacher_id == admin_teacher.id
+
+
+def test_profesor_no_toma_suplencia_terminada_aunque_config_encendida(api_client, setup):
+    now = timezone.now()
+    setup['org'].allow_started_class_substitution = True
+    setup['org'].save(update_fields=['allow_started_class_substitution'])
+    gym_class = _make_class(
+        setup,
+        start=now - timedelta(minutes=70),
+        end_datetime=now - timedelta(minutes=10),
+        status=GymClass.Status.COMPLETED,
+    )
+    _login(api_client, setup['substitute'])
+
+    with mock.patch('core.views.timezone.now', return_value=now):
+        resp = api_client.post(f"{CLASSES_URL}{gym_class.id}/claim-substitution/")
+
+    assert resp.status_code == 400, resp.content
+    assert 'clase pasada' in resp.json()['detail']
 
 
 def test_profesor_no_toma_suplencia_con_conflicto_horario(api_client, setup):

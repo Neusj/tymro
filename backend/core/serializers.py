@@ -242,6 +242,7 @@ class OrganizationSerializer(serializers.ModelSerializer):
             'student_inactivity_grace_days',
             'teacher_attendance_edit_limit_minutes',
             'teacher_enrollment_edit_limit_minutes',
+            'allow_started_class_substitution',
             'class_pruning_grace_days',
             'annual_enrollment_fee',
             'student_discount_percentage',
@@ -962,7 +963,11 @@ class OrganizationTrialWindowConfigSerializer(serializers.ModelSerializer):
 class OrganizationAttendanceEditConfigSerializer(serializers.ModelSerializer):
     class Meta:
         model = Organization
-        fields = ['teacher_attendance_edit_limit_minutes', 'teacher_enrollment_edit_limit_minutes']
+        fields = [
+            'teacher_attendance_edit_limit_minutes',
+            'teacher_enrollment_edit_limit_minutes',
+            'allow_started_class_substitution',
+        ]
 
     def validate_teacher_attendance_edit_limit_minutes(self, value):
         return self._validate_minutes(value)
@@ -1501,6 +1506,9 @@ class GymClassSerializer(serializers.ModelSerializer):
     def get_can_claim_substitution(self, obj):
         request = self.context.get('request')
         user = getattr(request, 'user', None)
+        now = timezone.now()
+        allow_started = bool(getattr(getattr(obj, 'organization', None), 'allow_started_class_substitution', False))
+        within_claim_window = obj.start_datetime > now or (allow_started and obj.end_datetime > now)
         return bool(
             user
             and getattr(user, 'is_authenticated', False)
@@ -1510,7 +1518,7 @@ class GymClassSerializer(serializers.ModelSerializer):
             and obj.organization_id == user.organization_id
             and obj.teacher_id != user.id
             and not obj.has_substitute
-            and obj.start_datetime > timezone.now()
+            and within_claim_window
             and obj.status in {GymClass.Status.SCHEDULED, GymClass.Status.IN_PROGRESS}
         )
 

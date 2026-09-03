@@ -10,6 +10,7 @@ export default function GymAdminAttendanceEditConfigPage() {
 
   const [attendanceValue, setAttendanceValue] = useState('')
   const [enrollmentValue, setEnrollmentValue] = useState('')
+  const [allowStartedSubstitution, setAllowStartedSubstitution] = useState(false)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -31,6 +32,7 @@ export default function GymAdminAttendanceEditConfigPage() {
         if (!active) return
         setAttendanceValue(String(data?.teacher_attendance_edit_limit_minutes ?? ''))
         setEnrollmentValue(String(data?.teacher_enrollment_edit_limit_minutes ?? ''))
+        setAllowStartedSubstitution(Boolean(data?.allow_started_class_substitution))
       } catch (apiError) {
         if (!active) return
         setError(firstApiError(apiError?.response?.data, 'No se pudo cargar la configuracion.'))
@@ -67,9 +69,11 @@ export default function GymAdminAttendanceEditConfigPage() {
       const data = await attendanceEditConfigApi.update(orgId, {
         teacher_attendance_edit_limit_minutes: attendanceMinutes,
         teacher_enrollment_edit_limit_minutes: enrollmentMinutes,
+        allow_started_class_substitution: allowStartedSubstitution,
       })
       setAttendanceValue(String(data?.teacher_attendance_edit_limit_minutes ?? attendanceMinutes))
       setEnrollmentValue(String(data?.teacher_enrollment_edit_limit_minutes ?? enrollmentMinutes))
+      setAllowStartedSubstitution(Boolean(data?.allow_started_class_substitution))
       setSuccess('Configuracion guardada correctamente.')
     } catch (apiError) {
       setError(firstApiError(apiError?.response?.data, 'No se pudo guardar la configuracion.'))
@@ -134,6 +138,22 @@ export default function GymAdminAttendanceEditConfigPage() {
                 <span className="text-sm text-brand-muted">minutos</span>
               </div>
             </div>
+
+            <label className="flex items-start gap-3 border-t border-brand-line pt-5 text-sm">
+              <input
+                id="allow-started-class-substitution"
+                type="checkbox"
+                checked={allowStartedSubstitution}
+                onChange={(event) => setAllowStartedSubstitution(event.target.checked)}
+                className="mt-0.5 h-4 w-4 shrink-0 accent-brand-orange"
+              />
+              <span>
+                <span className="block font-semibold">Permitir suplencias con la clase ya comenzada</span>
+                <span className="mt-0.5 block text-xs text-brand-muted">
+                  Profesores y administradores que actuan como profesor podran tomar una suplencia mientras la clase siga en curso.
+                </span>
+              </span>
+            </label>
 
             {fieldError ? <p className="text-xs text-red-200">{fieldError}</p> : null}
 

@@ -27,10 +27,12 @@ beforeEach(() => {
   attendanceEditConfigApi.get.mockResolvedValue({
     teacher_attendance_edit_limit_minutes: 30,
     teacher_enrollment_edit_limit_minutes: 30,
+    allow_started_class_substitution: false,
   })
   attendanceEditConfigApi.update.mockResolvedValue({
     teacher_attendance_edit_limit_minutes: 15,
     teacher_enrollment_edit_limit_minutes: 45,
+    allow_started_class_substitution: true,
   })
 })
 
@@ -44,17 +46,21 @@ describe('GymAdminAttendanceEditConfigPage', () => {
     expect(input).toHaveValue(30)
     const enrollmentInput = screen.getByLabelText('Tiempo limite para inscribir alumnos como profesor')
     expect(enrollmentInput).toHaveValue(30)
+    const startedSubstitutionCheckbox = screen.getByLabelText(/Permitir suplencias con la clase ya comenzada/i)
+    expect(startedSubstitutionCheckbox).not.toBeChecked()
 
     await user.clear(input)
     await user.type(input, '15')
     await user.clear(enrollmentInput)
     await user.type(enrollmentInput, '45')
+    await user.click(startedSubstitutionCheckbox)
     await user.click(screen.getByRole('button', { name: 'Guardar' }))
 
     await waitFor(() =>
       expect(attendanceEditConfigApi.update).toHaveBeenCalledWith(7, {
         teacher_attendance_edit_limit_minutes: 15,
         teacher_enrollment_edit_limit_minutes: 45,
+        allow_started_class_substitution: true,
       }),
     )
     expect(await screen.findByText('Configuracion guardada correctamente.')).toBeInTheDocument()
