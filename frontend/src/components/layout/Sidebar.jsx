@@ -255,7 +255,7 @@ const navByRole = {
           type: 'section',
           label: 'Operación',
           children: [
-            { to: '/gym-admin/settings/attendance-edit', label: 'Edicion asistencia' },
+            { to: '/gym-admin/settings/attendance-edit', label: 'Asistencia e inscripciones' },
             { to: '/gym-admin/settings/personalized-classes', label: 'Clases personalizadas' },
           ],
         },

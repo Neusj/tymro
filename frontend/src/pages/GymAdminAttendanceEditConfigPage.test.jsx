@@ -39,6 +39,7 @@ describe('GymAdminAttendanceEditConfigPage', () => {
     const user = userEvent.setup()
     renderPage()
 
+    expect(await screen.findByText('Configuracion de asistencia e inscripciones')).toBeInTheDocument()
     const input = await screen.findByLabelText('Tiempo limite para editar asistencia como profesor')
     expect(input).toHaveValue(30)
     const enrollmentInput = screen.getByLabelText('Tiempo limite para inscribir alumnos como profesor')

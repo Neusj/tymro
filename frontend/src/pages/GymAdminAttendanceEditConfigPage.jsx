@@ -81,7 +81,7 @@ export default function GymAdminAttendanceEditConfigPage() {
   return (
     <div className="space-y-6">
       <DashboardHeader
-        title="Gym Admin - Configuraciones"
+        title="Configuracion de asistencia e inscripciones"
         subtitle="Define cuanto tiempo tiene un profesor para editar asistencia e inscribir alumnos luego de terminada una clase."
         back={{ to: '/gym-admin/dashboard', label: 'Dashboard' }}
       />
