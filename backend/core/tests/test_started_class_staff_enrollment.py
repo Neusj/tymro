@@ -74,6 +74,20 @@ def _ended_class(world, *, status=GymClass.Status.SCHEDULED):
     )
 
 
+def _recently_ended_class(world, *, minutes_since_end, status=GymClass.Status.COMPLETED):
+    end = timezone.now() - timedelta(minutes=minutes_since_end)
+    return GymClass.objects.create(
+        organization=world['org'],
+        branch=world['branch'],
+        teacher=world['teacher'],
+        name='Clase terminada reciente',
+        start_datetime=end - timedelta(hours=1),
+        end_datetime=end,
+        capacity=10,
+        status=status,
+    )
+
+
 def test_teacher_can_enroll_student_after_class_started(api_client, world):
     membership = _student_plan(world)
     gym_class = _started_class(world)
@@ -141,9 +155,44 @@ def test_gym_admin_can_enroll_student_after_class_ended(api_client, world):
     assert membership.classes_used == 1
 
 
-def test_teacher_cannot_enroll_student_after_class_ended(api_client, world):
+def test_teacher_can_enroll_student_until_configured_minutes_after_class_ended(api_client, world):
+    membership = _student_plan(world)
+    gym_class = _recently_ended_class(world, minutes_since_end=29, status=GymClass.Status.COMPLETED)
+    api_client.force_authenticate(user=world['teacher'])
+
+    resp = api_client.post(
+        ENROLLMENTS_URL,
+        {'gym_class': gym_class.id, 'student': world['student'].id, 'status': 'active'},
+        format='json',
+    )
+
+    assert resp.status_code == 201, resp.content
+    assert Enrollment.objects.filter(gym_class=gym_class, student=world['student'], status='active').exists()
+    membership.refresh_from_db()
+    assert membership.classes_used == 1
+
+
+def test_teacher_cannot_enroll_student_after_configured_minutes(api_client, world):
     _student_plan(world)
-    gym_class = _ended_class(world, status=GymClass.Status.COMPLETED)
+    gym_class = _recently_ended_class(world, minutes_since_end=31, status=GymClass.Status.COMPLETED)
+    api_client.force_authenticate(user=world['teacher'])
+
+    resp = api_client.post(
+        ENROLLMENTS_URL,
+        {'gym_class': gym_class.id, 'student': world['student'].id, 'status': 'active'},
+        format='json',
+    )
+
+    assert resp.status_code == 400
+    assert resp.json()['gym_class'] == ['No puedes reservar una clase cerrada.']
+    assert Enrollment.objects.count() == 0
+
+
+def test_teacher_enrollment_after_class_end_uses_organization_configuration(api_client, world):
+    world['org'].teacher_enrollment_edit_limit_minutes = 10
+    world['org'].save(update_fields=['teacher_enrollment_edit_limit_minutes'])
+    _student_plan(world)
+    gym_class = _recently_ended_class(world, minutes_since_end=11, status=GymClass.Status.COMPLETED)
     api_client.force_authenticate(user=world['teacher'])
 
     resp = api_client.post(

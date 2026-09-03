@@ -186,13 +186,19 @@ def test_attendance_edit_config_endpoint(api_client, setup):
     get_resp = api_client.get(url)
     assert get_resp.status_code == 200, get_resp.content
     assert get_resp.json()['teacher_attendance_edit_limit_minutes'] == 30
+    assert get_resp.json()['teacher_enrollment_edit_limit_minutes'] == 30
 
     put_resp = api_client.put(
         url,
-        {'teacher_attendance_edit_limit_minutes': 10},
+        {
+            'teacher_attendance_edit_limit_minutes': 10,
+            'teacher_enrollment_edit_limit_minutes': 20,
+        },
         format='json',
     )
     assert put_resp.status_code == 200, put_resp.content
     assert put_resp.json()['teacher_attendance_edit_limit_minutes'] == 10
+    assert put_resp.json()['teacher_enrollment_edit_limit_minutes'] == 20
     setup['org'].refresh_from_db()
     assert setup['org'].teacher_attendance_edit_limit_minutes == 10
+    assert setup['org'].teacher_enrollment_edit_limit_minutes == 20

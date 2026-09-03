@@ -27,6 +27,24 @@ function canToggleAttendance(user, gymClass) {
   return false
 }
 
+function canEnrollFromAttendance(user, gymClass) {
+  if (!user || !gymClass || gymClass.status === 'cancelled') {
+    return false
+  }
+  if (canManageOperational(user.role)) {
+    return true
+  }
+  if (user.role !== 'teacher') {
+    return false
+  }
+  const classEnd = new Date(gymClass.end_datetime).getTime()
+  const limitMinutes = Number(gymClass.teacher_enrollment_edit_limit_minutes)
+  if (Number.isNaN(classEnd) || !Number.isFinite(limitMinutes) || limitMinutes < 0) {
+    return false
+  }
+  return Date.now() <= classEnd + limitMinutes * 60 * 1000
+}
+
 export default function ClassAttendancePage() {
   const { id } = useParams()
   const location = useLocation()
@@ -74,7 +92,7 @@ export default function ClassAttendancePage() {
   }, [id])
 
   const canToggle = canToggleAttendance(user, gymClass)
-  const canManageEnrollments = canManageOperational(user?.role) && gymClass?.status !== 'cancelled'
+  const canManageEnrollments = canEnrollFromAttendance(user, gymClass)
   const presentCount = useMemo(
     () => students.filter((student) => attendanceMap[student.student_id] === 'present').length,
     [attendanceMap, students],
@@ -133,7 +151,7 @@ export default function ClassAttendancePage() {
               onClick={() => setEnrollmentModalOpen(true)}
               className="btn-primary"
             >
-              Inscribir alumnos
+              Inscribir alumno
             </button>
           ) : null
         }

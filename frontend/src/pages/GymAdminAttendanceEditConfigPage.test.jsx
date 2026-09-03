@@ -24,8 +24,14 @@ function renderPage() {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  attendanceEditConfigApi.get.mockResolvedValue({ teacher_attendance_edit_limit_minutes: 30 })
-  attendanceEditConfigApi.update.mockResolvedValue({ teacher_attendance_edit_limit_minutes: 15 })
+  attendanceEditConfigApi.get.mockResolvedValue({
+    teacher_attendance_edit_limit_minutes: 30,
+    teacher_enrollment_edit_limit_minutes: 30,
+  })
+  attendanceEditConfigApi.update.mockResolvedValue({
+    teacher_attendance_edit_limit_minutes: 15,
+    teacher_enrollment_edit_limit_minutes: 45,
+  })
 })
 
 describe('GymAdminAttendanceEditConfigPage', () => {
@@ -35,14 +41,19 @@ describe('GymAdminAttendanceEditConfigPage', () => {
 
     const input = await screen.findByLabelText('Tiempo limite para editar asistencia como profesor')
     expect(input).toHaveValue(30)
+    const enrollmentInput = screen.getByLabelText('Tiempo limite para inscribir alumnos como profesor')
+    expect(enrollmentInput).toHaveValue(30)
 
     await user.clear(input)
     await user.type(input, '15')
+    await user.clear(enrollmentInput)
+    await user.type(enrollmentInput, '45')
     await user.click(screen.getByRole('button', { name: 'Guardar' }))
 
     await waitFor(() =>
       expect(attendanceEditConfigApi.update).toHaveBeenCalledWith(7, {
         teacher_attendance_edit_limit_minutes: 15,
+        teacher_enrollment_edit_limit_minutes: 45,
       }),
     )
     expect(await screen.findByText('Configuracion guardada correctamente.')).toBeInTheDocument()
@@ -57,7 +68,7 @@ describe('GymAdminAttendanceEditConfigPage', () => {
     await user.type(input, '-1')
     await user.click(screen.getByRole('button', { name: 'Guardar' }))
 
-    expect(await screen.findByText(/entero entre 0 y 1440/i)).toBeInTheDocument()
+    expect(await screen.findByText(/enteros entre 0 y 1440/i)).toBeInTheDocument()
     expect(attendanceEditConfigApi.update).not.toHaveBeenCalled()
   })
 })

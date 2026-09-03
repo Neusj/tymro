@@ -7,7 +7,15 @@ vi.mock('../api/client', () => ({
   classesApi: {
     retrieve: vi.fn(),
     enrolledStudents: vi.fn(),
+    enrollableStudents: vi.fn(),
     toggleAttendance: vi.fn(),
+  },
+  classTemplatesApi: {
+    enrollableStudents: vi.fn(),
+  },
+  enrollmentsApi: {
+    create: vi.fn(),
+    cancel: vi.fn(),
   },
 }))
 
@@ -26,6 +34,7 @@ const GYM_CLASS = {
   end_datetime: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
   status: 'in_progress',
   teacher_attendance_edit_limit_minutes: 30,
+  teacher_enrollment_edit_limit_minutes: 30,
 }
 
 const STUDENTS = [
@@ -59,6 +68,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   classesApi.retrieve.mockResolvedValue(GYM_CLASS)
   classesApi.enrolledStudents.mockResolvedValue(STUDENTS)
+  classesApi.enrollableStudents.mockResolvedValue([])
   classesApi.toggleAttendance.mockImplementation((_id, payload) => Promise.resolve({ status: payload.status }))
 })
 
@@ -93,5 +103,11 @@ describe('ClassAttendancePage - boton de asistencia', () => {
     expect(classesApi.toggleAttendance).toHaveBeenCalledTimes(2)
     expect(screen.getAllByText('Presente')).toHaveLength(1)
     expect(screen.getAllByText('Ausente')).toHaveLength(1)
+  })
+
+  it('muestra el boton para inscribir alumnos al profesor en la vista de asistencia', async () => {
+    renderPage()
+
+    expect(await screen.findByRole('button', { name: 'Inscribir alumno' })).toBeInTheDocument()
   })
 })

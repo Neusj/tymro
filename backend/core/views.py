@@ -39,6 +39,7 @@ from .models import (
     ClassTemplate,
     ClassType,
     DEFAULT_TEACHER_ATTENDANCE_EDIT_LIMIT_MINUTES,
+    DEFAULT_TEACHER_ENROLLMENT_EDIT_LIMIT_MINUTES,
     Discipline,
     Enrollment,
     GymClass,
@@ -2112,6 +2113,25 @@ def _teacher_attendance_edit_limit_minutes(gym_class):
 def _teacher_attendance_edit_limit_message(gym_class):
     minutes = _teacher_attendance_edit_limit_minutes(gym_class)
     return f'La asistencia solo puede editarse hasta {minutes} minutos despues de terminada la clase.'
+
+
+def _teacher_enrollment_edit_limit_minutes(gym_class):
+    organization = getattr(gym_class, 'organization', None)
+    value = getattr(organization, 'teacher_enrollment_edit_limit_minutes', None)
+    if value is None:
+        value = DEFAULT_TEACHER_ENROLLMENT_EDIT_LIMIT_MINUTES
+    try:
+        minutes = int(value)
+    except (TypeError, ValueError):
+        minutes = DEFAULT_TEACHER_ENROLLMENT_EDIT_LIMIT_MINUTES
+    return max(0, minutes)
+
+
+def _can_teacher_enroll_after_class_end(user, gym_class, now=None):
+    if not _is_own_class_teacher(user, gym_class):
+        return False
+    now = now or timezone.now()
+    return now <= gym_class.end_datetime + timedelta(minutes=_teacher_enrollment_edit_limit_minutes(gym_class))
 
 
 def _serialize_qr_class(gym_class):
@@ -6038,12 +6058,14 @@ class EnrollmentViewSet(ModelViewSet):
                 gym_class = serializer.validated_data.get('gym_class')
                 if not gym_class or not _is_own_class_teacher(user, gym_class):
                     raise PermissionDenied('Solo puedes inscribir alumnos en tus propias clases.')
+                allow_ended_class = _can_teacher_enroll_after_class_end(user, gym_class)
                 try:
                     enrollment = reserve_student_in_class(
                         student=student, gym_class=gym_class, require_plan=True,
                         created_by=user,
                         student_plan_id=student_plan_id,
                         allow_started_class=True,
+                        allow_ended_class=allow_ended_class,
                     )
                 except ReservationRuleError as exc:
                     raise ValidationError(reservation_error_payload(exc))

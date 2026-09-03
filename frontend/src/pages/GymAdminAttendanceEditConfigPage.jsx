@@ -8,7 +8,8 @@ export default function GymAdminAttendanceEditConfigPage() {
   const { user } = useAuth()
   const orgId = user?.organization
 
-  const [value, setValue] = useState('')
+  const [attendanceValue, setAttendanceValue] = useState('')
+  const [enrollmentValue, setEnrollmentValue] = useState('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -28,7 +29,8 @@ export default function GymAdminAttendanceEditConfigPage() {
       try {
         const data = await attendanceEditConfigApi.get(orgId)
         if (!active) return
-        setValue(String(data?.teacher_attendance_edit_limit_minutes ?? ''))
+        setAttendanceValue(String(data?.teacher_attendance_edit_limit_minutes ?? ''))
+        setEnrollmentValue(String(data?.teacher_enrollment_edit_limit_minutes ?? ''))
       } catch (apiError) {
         if (!active) return
         setError(firstApiError(apiError?.response?.data, 'No se pudo cargar la configuracion.'))
@@ -44,9 +46,17 @@ export default function GymAdminAttendanceEditConfigPage() {
 
   const submit = async (event) => {
     event.preventDefault()
-    const numericValue = Number(value)
-    if (!Number.isInteger(numericValue) || numericValue < 0 || numericValue > 1440) {
-      setFieldError('Ingresa un numero entero entre 0 y 1440.')
+    const attendanceMinutes = Number(attendanceValue)
+    const enrollmentMinutes = Number(enrollmentValue)
+    if (
+      !Number.isInteger(attendanceMinutes)
+      || attendanceMinutes < 0
+      || attendanceMinutes > 1440
+      || !Number.isInteger(enrollmentMinutes)
+      || enrollmentMinutes < 0
+      || enrollmentMinutes > 1440
+    ) {
+      setFieldError('Ingresa numeros enteros entre 0 y 1440.')
       return
     }
     setFieldError('')
@@ -55,9 +65,11 @@ export default function GymAdminAttendanceEditConfigPage() {
     setSuccess('')
     try {
       const data = await attendanceEditConfigApi.update(orgId, {
-        teacher_attendance_edit_limit_minutes: numericValue,
+        teacher_attendance_edit_limit_minutes: attendanceMinutes,
+        teacher_enrollment_edit_limit_minutes: enrollmentMinutes,
       })
-      setValue(String(data?.teacher_attendance_edit_limit_minutes ?? numericValue))
+      setAttendanceValue(String(data?.teacher_attendance_edit_limit_minutes ?? attendanceMinutes))
+      setEnrollmentValue(String(data?.teacher_enrollment_edit_limit_minutes ?? enrollmentMinutes))
       setSuccess('Configuracion guardada correctamente.')
     } catch (apiError) {
       setError(firstApiError(apiError?.response?.data, 'No se pudo guardar la configuracion.'))
@@ -70,7 +82,7 @@ export default function GymAdminAttendanceEditConfigPage() {
     <div className="space-y-6">
       <DashboardHeader
         title="Gym Admin - Configuraciones"
-        subtitle="Define cuanto tiempo tiene un profesor para editar asistencia luego de terminada una clase."
+        subtitle="Define cuanto tiempo tiene un profesor para editar asistencia e inscribir alumnos luego de terminada una clase."
         back={{ to: '/gym-admin/dashboard', label: 'Dashboard' }}
       />
 
@@ -93,14 +105,37 @@ export default function GymAdminAttendanceEditConfigPage() {
                   step="1"
                   min="0"
                   max="1440"
-                  value={value}
-                  onChange={(event) => setValue(event.target.value)}
+                  value={attendanceValue}
+                  onChange={(event) => setAttendanceValue(event.target.value)}
                   className="w-32 rounded-lg border border-brand-line bg-black/30 px-3 py-2 text-sm"
                 />
                 <span className="text-sm text-brand-muted">minutos</span>
               </div>
-              {fieldError ? <p className="text-xs text-red-200">{fieldError}</p> : null}
             </div>
+
+            <div className="space-y-2 border-t border-brand-line pt-5">
+              <label className="block text-sm font-semibold" htmlFor="teacher-enrollment-edit-limit-minutes">
+                Tiempo limite para inscribir alumnos como profesor
+              </label>
+              <p className="text-xs text-brand-muted">
+                Los administradores pueden inscribir alumnos en cualquier momento; los profesores solo en sus clases.
+              </p>
+              <div className="flex items-center gap-3">
+                <input
+                  id="teacher-enrollment-edit-limit-minutes"
+                  type="number"
+                  step="1"
+                  min="0"
+                  max="1440"
+                  value={enrollmentValue}
+                  onChange={(event) => setEnrollmentValue(event.target.value)}
+                  className="w-32 rounded-lg border border-brand-line bg-black/30 px-3 py-2 text-sm"
+                />
+                <span className="text-sm text-brand-muted">minutos</span>
+              </div>
+            </div>
+
+            {fieldError ? <p className="text-xs text-red-200">{fieldError}</p> : null}
 
             <div className="flex justify-end">
               <button
