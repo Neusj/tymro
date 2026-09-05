@@ -1015,6 +1015,15 @@ textarea {
   }
 
   @media (max-width: 639px) {
+    .landing-page {
+      background:
+        radial-gradient(420px circle at 0% 18%, rgba(220, 38, 38, 0.1), transparent 54%),
+        radial-gradient(360px circle at 96% 38%, rgba(249, 115, 22, 0.09), transparent 58%),
+        radial-gradient(340px circle at 88% 4%, rgba(37, 99, 235, 0.1), transparent 52%),
+        #09090b;
+      background-attachment: scroll;
+    }
+
     .landing-tabs {
       @apply grid-cols-1;
     }
@@ -1023,18 +1032,44 @@ textarea {
       @apply bg-brand-orange text-brand-black shadow-soft;
     }
 
+    .landing-hero {
+      @apply pb-6;
+      background:
+        radial-gradient(380px circle at -8% 26%, rgba(220, 38, 38, 0.16), transparent 56%),
+        radial-gradient(340px circle at 108% 58%, rgba(249, 115, 22, 0.14), transparent 60%),
+        radial-gradient(300px circle at 86% 10%, rgba(37, 99, 235, 0.13), transparent 54%),
+        #09090b;
+      min-height: auto;
+    }
+
     .landing-hero-grid {
       @apply gap-5 pt-24;
       min-height: auto;
     }
 
     .hero-brand-stage {
+      background-color: rgba(9, 9, 11, 0.72);
       min-height: 220px;
       transform: none;
     }
 
+    .hero-brand-stage::before {
+      background:
+        linear-gradient(135deg, rgba(255, 255, 255, 0.055), transparent 34%),
+        radial-gradient(circle at 34% 22%, rgba(220, 38, 38, 0.075), transparent 42%),
+        radial-gradient(circle at 76% 38%, rgba(249, 115, 22, 0.065), transparent 44%),
+        radial-gradient(circle at 88% 72%, rgba(37, 99, 235, 0.07), transparent 34%);
+    }
+
     .hero-brand-visual {
       min-height: 220px;
+    }
+
+    .hero-brand-aura {
+      background:
+        radial-gradient(circle at 18% 34%, rgba(220, 38, 38, 0.15), transparent 42%),
+        radial-gradient(circle at 72% 30%, rgba(249, 115, 22, 0.12), transparent 46%),
+        radial-gradient(circle at 88% 70%, rgba(37, 99, 235, 0.115), transparent 38%);
     }
 
     .official-wordmark {
