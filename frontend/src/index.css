@@ -19,7 +19,12 @@
   --dynamic-secondary: #2563eb;
 }
 
-html,
+html {
+  min-height: 100%;
+  overflow-x: clip;
+  overflow-y: auto;
+}
+
 body,
 #root {
   min-height: 100%;
@@ -31,6 +36,7 @@ body,
 
 body {
   margin: 0;
+  overflow-x: clip;
   background:
     radial-gradient(1200px circle at 12% -10%, rgba(249, 115, 22, 0.10), transparent 45%),
     radial-gradient(1000px circle at 100% 0%, rgba(37, 99, 235, 0.10), transparent 40%),
@@ -117,13 +123,13 @@ textarea {
     @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold transition duration-200 ease-snap disabled:cursor-not-allowed disabled:opacity-50;
   }
   .btn-primary {
-    @apply btn border border-transparent bg-brand-blue text-white hover:brightness-110 active:brightness-95;
+    @apply btn border border-transparent bg-brand-blue text-white shadow-soft hover:-translate-y-0.5 hover:brightness-110 active:translate-y-0 active:brightness-95;
   }
   .btn-accent {
-    @apply btn border border-transparent bg-brand-orange text-brand-black hover:brightness-110 active:brightness-95;
+    @apply btn border border-transparent bg-brand-orange text-brand-black shadow-soft hover:-translate-y-0.5 hover:brightness-110 active:translate-y-0 active:brightness-95;
   }
   .btn-ghost {
-    @apply btn border border-brand-line bg-transparent text-brand-white hover:border-brand-orange hover:bg-brand-soft;
+    @apply btn border border-brand-line bg-transparent text-brand-white hover:-translate-y-0.5 hover:border-brand-orange hover:bg-brand-soft active:translate-y-0;
   }
   .btn-danger {
     @apply btn border border-brand-red/50 bg-transparent text-red-200 hover:bg-brand-red/15;
@@ -132,6 +138,909 @@ textarea {
   /* Form control baseline */
   .field {
     @apply min-h-11 w-full rounded-xl border border-brand-line bg-black/30 px-3 py-2 text-sm text-brand-white placeholder:text-brand-dim transition focus:border-brand-blue focus:outline-none;
+  }
+
+  .landing-page {
+    @apply min-h-screen bg-brand-black text-brand-white;
+    overflow-x: clip;
+    overflow-y: visible;
+  }
+
+  @supports selector(:has(*)) {
+    html:has(.landing-page) {
+      scroll-behavior: smooth;
+    }
+  }
+
+  .landing-page h1,
+  .landing-page h2,
+  .landing-page h3,
+  .landing-page h4 {
+    letter-spacing: 0;
+  }
+
+  .landing-container {
+    @apply mx-auto w-full max-w-app px-4 sm:px-6 lg:px-8 3xl:px-12;
+  }
+
+  .landing-header {
+    @apply fixed left-0 right-0 top-0 z-40 mx-auto flex min-h-16 w-full items-center justify-between border-b border-brand-line bg-brand-black/[0.86] px-4 backdrop-blur-md sm:px-6 lg:px-8;
+  }
+
+  .landing-brand-link,
+  .brand-lockup {
+    @apply inline-flex items-center gap-3;
+  }
+
+  .brand-lockup {
+    @apply text-brand-white;
+  }
+
+  .brand-lockup-icon-only {
+    @apply gap-0;
+  }
+
+  .brand-lockup-icon {
+    @apply h-9 w-9 rounded-xl object-contain shadow-soft transition duration-300 ease-snap;
+  }
+
+  .brand-lockup-wordmark {
+    @apply block h-auto w-28 max-w-[38vw] object-contain;
+  }
+
+  .brand-lockup-large {
+    @apply gap-4;
+  }
+
+  .brand-lockup-large .brand-lockup-icon {
+    @apply h-16 w-16 rounded-2xl;
+  }
+
+  .brand-lockup-large .brand-lockup-wordmark {
+    @apply w-52 max-w-[58vw];
+  }
+
+  .landing-brand-link:hover .brand-lockup-icon,
+  .brand-lockup:hover .brand-lockup-icon {
+    @apply -translate-y-0.5 shadow-glow;
+  }
+
+  .landing-nav-link {
+    @apply rounded-xl px-3 py-2 text-sm font-semibold text-brand-muted transition duration-200 ease-snap hover:-translate-y-0.5 hover:bg-brand-soft hover:text-brand-white;
+  }
+
+  .landing-menu-button {
+    @apply inline-flex h-11 w-11 items-center justify-center rounded-xl border border-brand-line bg-brand-soft text-brand-white transition duration-200 ease-snap hover:border-brand-orange hover:text-brand-orange md:hidden;
+  }
+
+  .landing-mobile-menu {
+    @apply pointer-events-none absolute left-3 right-3 top-[calc(100%+0.75rem)] grid origin-top gap-2 rounded-2xl border border-brand-line bg-brand-soft/[0.98] p-3 opacity-0 shadow-float transition duration-200 ease-snap md:hidden;
+    transform: translateY(-0.5rem) scale(0.98);
+  }
+
+  .landing-mobile-menu.is-open {
+    @apply pointer-events-auto opacity-100;
+    transform: translateY(0) scale(1);
+  }
+
+  .landing-mobile-link {
+    @apply rounded-xl px-3 py-3 text-sm font-semibold text-brand-white transition hover:bg-black/25;
+  }
+
+  .landing-hero {
+    @apply relative overflow-hidden border-b border-brand-line bg-brand-black pb-10;
+    min-height: min(920px, 100svh);
+  }
+
+  .landing-hero::before {
+    content: '';
+    @apply pointer-events-none absolute inset-0;
+    background:
+      linear-gradient(120deg, rgba(220, 38, 38, 0.16), transparent 34%),
+      linear-gradient(245deg, rgba(37, 99, 235, 0.14), transparent 38%),
+      linear-gradient(180deg, rgba(249, 115, 22, 0.08), transparent 42%);
+  }
+
+  .landing-hero > .landing-container {
+    @apply relative z-10;
+  }
+
+  .landing-hero-grid {
+    @apply grid gap-8 pt-28 md:grid-cols-[0.92fr_1.08fr] md:items-center md:gap-10 md:pt-32 lg:gap-14;
+  }
+
+  .landing-section {
+    @apply scroll-mt-16 border-b border-brand-line bg-brand-black py-14 md:py-20;
+  }
+
+  .landing-preview-card {
+    @apply overflow-hidden rounded-2xl border border-brand-line bg-brand-soft/[0.88] shadow-glow backdrop-blur-sm transition duration-300 ease-snap hover:-translate-y-1 hover:border-brand-orange/40;
+  }
+
+  .landing-preview-topbar {
+    @apply flex items-center justify-between gap-4 border-b border-brand-line px-4 py-3;
+  }
+
+  .landing-live-pill {
+    @apply rounded-full border border-success-line bg-success-soft px-3 py-1 text-xs font-semibold text-emerald-200;
+  }
+
+  .landing-preview-grid {
+    @apply grid gap-4 p-4 sm:grid-cols-[0.8fr_1.2fr];
+  }
+
+  .landing-preview-sidebar {
+    @apply hidden rounded-xl border border-brand-line bg-black/25 p-3 sm:block;
+  }
+
+  .landing-preview-sidebar span {
+    @apply mb-2 block rounded-lg px-3 py-2 text-xs text-brand-muted transition duration-200 ease-snap;
+  }
+
+  .landing-preview-sidebar span.is-active {
+    @apply bg-brand-orange font-semibold text-brand-black;
+  }
+
+  .landing-mini-stat {
+    @apply rounded-xl border border-brand-line bg-black/25 p-3 transition duration-200 ease-snap hover:border-brand-orange/50 hover:bg-brand-soft;
+  }
+
+  .landing-mini-stat strong {
+    @apply block font-display text-lg font-bold text-brand-white;
+  }
+
+  .landing-mini-stat span {
+    @apply text-[0.68rem] text-brand-muted;
+  }
+
+  .landing-session-card {
+    @apply flex items-center justify-between gap-4 rounded-xl border border-brand-line bg-brand-panel p-4;
+  }
+
+  .landing-session-card > span {
+    @apply shrink-0 rounded-full border border-success-line bg-success-soft px-3 py-1 text-xs font-semibold text-emerald-200;
+  }
+
+  .landing-video-slot {
+    @apply flex min-h-24 items-center justify-center rounded-xl border border-dashed border-brand-hairline bg-black/25 px-4 text-center text-xs font-semibold uppercase tracking-[0.18em] text-brand-dim transition duration-300 ease-snap hover:border-brand-orange/50 hover:text-brand-muted;
+  }
+
+  .landing-feature-card,
+  .landing-addon-card,
+  .landing-plan-card {
+    @apply rounded-2xl border border-brand-line bg-brand-soft/[0.72] p-5 shadow-soft transition duration-300 ease-snap hover:-translate-y-1 hover:border-brand-orange/45 hover:bg-brand-elevated/70 hover:shadow-glow;
+  }
+
+  .landing-feature-icon {
+    @apply mb-4 block h-2.5 w-12 rounded-full;
+  }
+
+  .landing-feature-card.tone-red .landing-feature-icon {
+    @apply bg-brand-red;
+  }
+
+  .landing-feature-card.tone-orange .landing-feature-icon {
+    @apply bg-brand-orange;
+  }
+
+  .landing-feature-card.tone-blue .landing-feature-icon {
+    @apply bg-brand-blue;
+  }
+
+  .landing-tabs,
+  .login-access-tabs {
+    @apply grid gap-2 rounded-2xl border border-brand-line bg-black/25 p-1.5;
+  }
+
+  .landing-tabs {
+    @apply mx-auto mb-4 max-w-3xl sm:grid-cols-3;
+  }
+
+  .login-access-tabs {
+    @apply mt-6 sm:grid-cols-2;
+  }
+
+  .landing-tabs button,
+  .login-access-tabs button {
+    @apply min-h-11 rounded-xl px-4 py-2 text-sm font-semibold text-brand-muted transition duration-300 ease-snap hover:bg-brand-soft hover:text-brand-white;
+  }
+
+  .landing-tabs button.is-active,
+  .login-access-tabs button.is-active {
+    @apply bg-brand-orange text-brand-black shadow-soft;
+  }
+
+  .landing-audience-panel {
+    @apply grid gap-5 rounded-2xl border border-brand-line bg-brand-soft/80 p-5 shadow-soft md:grid-cols-[1.15fr_0.85fr] md:items-center md:p-6;
+  }
+
+  .landing-audience-panel h3 {
+    @apply mt-3 font-display text-2xl font-semibold leading-tight text-brand-white;
+  }
+
+  .landing-audience-panel p {
+    @apply mt-3 text-sm leading-6 text-brand-muted sm:text-base;
+  }
+
+  .landing-audience-stats {
+    @apply grid gap-3 sm:grid-cols-3 md:grid-cols-1;
+  }
+
+  .landing-audience-stats div {
+    @apply rounded-xl border border-brand-line bg-black/25 p-4 transition duration-200 ease-snap hover:border-brand-orange/50;
+  }
+
+  .landing-audience-stats strong {
+    @apply block font-display text-lg text-brand-white;
+  }
+
+  .landing-audience-stats span {
+    @apply text-sm text-brand-muted;
+  }
+
+  .landing-flow {
+    @apply grid gap-3 md:grid-cols-4 md:gap-0;
+  }
+
+  .landing-flow-step {
+    @apply relative rounded-2xl border border-brand-line bg-brand-soft/70 p-5 shadow-soft md:rounded-none md:border-r-0 md:first:rounded-l-2xl md:last:rounded-r-2xl md:last:border-r;
+  }
+
+  .landing-flow-step span {
+    @apply font-display text-xs font-bold uppercase tracking-[0.3em] text-brand-orange;
+  }
+
+  .landing-flow-step h3 {
+    @apply mt-3 font-display text-xl font-semibold text-brand-white;
+  }
+
+  .landing-flow-step p {
+    @apply mt-2 text-sm leading-6 text-brand-muted;
+  }
+
+  .landing-plan-card.is-featured {
+    @apply relative border-brand-orange/70 bg-brand-soft shadow-glow;
+  }
+
+  .landing-plan-card.is-featured:hover {
+    @apply border-brand-orange;
+  }
+
+  .landing-plan-ribbon {
+    @apply mb-5 inline-flex rounded-full border border-brand-orange/50 bg-brand-orange/10 px-3 py-1 text-xs font-bold uppercase tracking-[0.18em] text-orange-100;
+  }
+
+  .landing-plan-row {
+    @apply flex items-center justify-between gap-4 border-b border-brand-line/70 pb-3 last:border-b-0 last:pb-0;
+  }
+
+  .landing-plan-row dt {
+    @apply text-sm text-brand-muted;
+  }
+
+  .landing-plan-row dd {
+    @apply text-right text-sm font-semibold text-brand-white;
+  }
+
+  .landing-addon-card {
+    @apply bg-black/[0.24];
+  }
+
+  .landing-addon-card > div > span {
+    @apply rounded-full border border-brand-line bg-black/25 px-3 py-1 text-xs font-semibold text-brand-muted;
+  }
+
+  .landing-addon-card p {
+    @apply mt-3 text-sm leading-6 text-brand-muted;
+  }
+
+  .landing-capacity-cta {
+    @apply mt-5 rounded-2xl border border-brand-line bg-brand-soft/70 p-5 shadow-soft transition duration-300 ease-snap hover:border-brand-orange/40 sm:flex sm:items-center sm:justify-between sm:gap-6;
+  }
+
+  .landing-capacity-cta h3 {
+    @apply font-display text-xl font-semibold text-brand-white;
+  }
+
+  .landing-capacity-cta p {
+    @apply mt-2 text-sm leading-6 text-brand-muted;
+  }
+
+  .landing-faq {
+    @apply rounded-2xl border border-brand-line bg-brand-soft/70 p-4 shadow-soft transition duration-200 ease-snap hover:border-brand-hairline;
+  }
+
+  .landing-faq summary {
+    @apply cursor-pointer list-none font-display text-base font-semibold text-brand-white;
+  }
+
+  .landing-faq summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .landing-faq summary::after {
+    content: '+';
+    @apply float-right ml-4 text-brand-orange;
+  }
+
+  .landing-faq[open] summary::after {
+    content: '-';
+  }
+
+  .landing-faq p {
+    @apply mt-3 text-sm leading-6 text-brand-muted;
+  }
+
+  .landing-final-cta {
+    @apply rounded-2xl border border-brand-line bg-brand-soft/80 p-6 text-center shadow-glow sm:p-8 md:p-10;
+  }
+
+  .landing-final-cta .brand-lockup {
+    @apply justify-center;
+  }
+
+  .landing-final-cta h2 {
+    @apply mx-auto mt-5 max-w-2xl font-display text-fluid-2xl font-bold text-brand-white;
+  }
+
+  .landing-final-cta p {
+    @apply mx-auto mt-3 max-w-xl text-sm leading-6 text-brand-muted sm:text-base;
+  }
+
+  .landing-final-cta .btn-accent {
+    @apply mt-7;
+  }
+
+  .landing-footer {
+    @apply mt-14 border-t border-brand-line bg-black/20 py-6 text-sm text-brand-muted;
+  }
+
+  .landing-footer .landing-container {
+    @apply flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between;
+  }
+
+  .landing-footer a {
+    @apply text-brand-muted underline-offset-4 transition hover:text-brand-orange hover:underline;
+  }
+
+  .login-submit-button {
+    @apply min-h-12 w-full rounded-xl bg-gradient-to-r from-brand-red via-brand-orange to-brand-blue px-4 py-3 text-sm font-semibold text-white shadow-soft transition duration-200 ease-snap hover:-translate-y-0.5 hover:brightness-110 active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-60;
+  }
+
+  .login-access-tabs {
+    @apply mt-5 grid-cols-2 gap-1 rounded-xl border-white/10 bg-white/[0.04] p-1 shadow-soft;
+  }
+
+  .login-access-tabs button {
+    @apply min-h-10 rounded-lg px-3 py-1.5 text-[0.82rem] font-semibold leading-5 active:scale-[0.98];
+  }
+
+  .login-access-tabs button.is-active {
+    @apply bg-brand-orange text-brand-black shadow-[0_10px_24px_rgba(249,115,22,0.18)];
+  }
+
+  .reveal {
+    @apply opacity-0 transition duration-500 ease-snap;
+    transform: translateY(14px);
+  }
+
+  .reveal.is-visible {
+    @apply opacity-100;
+    transform: translateY(0);
+  }
+}
+
+@layer components {
+  .landing-page {
+    background:
+      radial-gradient(circle at 15% 20%, rgba(220, 38, 38, 0.23), transparent 28%),
+      radial-gradient(circle at 85% 20%, rgba(37, 99, 235, 0.2), transparent 25%),
+      radial-gradient(circle at 50% 100%, rgba(249, 115, 22, 0.18), transparent 30%),
+      #09090b;
+    background-attachment: fixed;
+    overflow-x: clip;
+    overflow-y: visible;
+  }
+
+  .landing-header {
+    @apply min-h-[4.35rem] border-white/10 bg-brand-black/[0.82] shadow-[0_1px_0_rgba(255,255,255,0.04)] supports-[backdrop-filter]:bg-brand-black/70;
+  }
+
+  .landing-menu-button {
+    @apply active:scale-95;
+  }
+
+  .landing-hero {
+    @apply border-white/10 pb-12 sm:pb-16;
+    background: transparent;
+    min-height: min(880px, 100svh);
+  }
+
+  .landing-hero::before {
+    background: transparent;
+  }
+
+  .landing-hero::after {
+    content: none;
+  }
+
+  .landing-hero-grid {
+    @apply grid-cols-1 gap-10 pt-28 sm:pt-32 md:grid-cols-[0.92fr_1.08fr] md:gap-10 lg:gap-16;
+    min-height: clamp(560px, 78svh, 760px);
+  }
+
+  .landing-hero-title {
+    @apply max-w-4xl font-display font-extrabold leading-[0.94] text-brand-white;
+    font-size: clamp(2.45rem, 12vw, 4.35rem);
+  }
+
+  .landing-hero-copy {
+    @apply mt-5 max-w-2xl text-base leading-7 text-brand-muted sm:text-lg lg:text-xl lg:leading-8;
+  }
+
+  .landing-final-cta .btn-accent {
+    @apply min-h-12 px-5 active:scale-[0.98];
+  }
+
+  .hero-brand-visual {
+    @apply relative min-h-[260px] place-self-center self-center sm:min-h-[340px] md:min-h-[460px];
+    perspective: 1200px;
+  }
+
+  .hero-brand-aura {
+    @apply absolute inset-0 rounded-[2rem] blur-3xl;
+    background:
+      radial-gradient(circle at 28% 38%, rgba(220, 38, 38, 0.32), transparent 46%),
+      radial-gradient(circle at 72% 34%, rgba(249, 115, 22, 0.26), transparent 44%),
+      radial-gradient(circle at 78% 68%, rgba(37, 99, 235, 0.14), transparent 42%);
+    transform: translateZ(-80px);
+  }
+
+  .hero-brand-stage {
+    @apply relative flex min-h-[260px] items-center justify-center overflow-hidden rounded-3xl border border-white/10 bg-black/30 px-5 shadow-glow backdrop-blur-sm sm:min-h-[340px] sm:px-8 md:min-h-[460px] lg:px-10;
+    transform: rotateX(4deg) rotateY(-6deg);
+    transition: transform 700ms cubic-bezier(0.22, 1, 0.36, 1), border-color 350ms ease, box-shadow 350ms ease;
+  }
+
+  .hero-brand-stage::before {
+    content: '';
+    @apply pointer-events-none absolute inset-0;
+    background:
+      linear-gradient(135deg, rgba(255, 255, 255, 0.08), transparent 34%),
+      radial-gradient(circle at 52% 0%, rgba(249, 115, 22, 0.18), transparent 46%);
+  }
+
+  .hero-brand-visual:hover .hero-brand-stage {
+    @apply border-brand-orange/40 shadow-float;
+    transform: rotateX(2deg) rotateY(-2deg) translateY(-4px);
+  }
+
+  .official-wordmark {
+    @apply relative z-10 block h-auto w-full max-w-[520px] object-contain;
+  }
+
+  .hero-wordmark {
+    backface-visibility: hidden;
+    transform: translateZ(0);
+  }
+
+  .hero-brand-shadow {
+    @apply absolute bottom-8 h-6 w-3/5 rounded-full bg-black/70 blur-xl;
+  }
+
+  .landing-section {
+    @apply scroll-mt-20 border-white/10 py-16 sm:py-[4.5rem] md:py-24;
+    background: transparent;
+  }
+
+  .section-heading {
+    @apply mx-auto mb-9 max-w-3xl text-center md:mb-12;
+  }
+
+  .section-heading > p {
+    @apply font-display text-lg font-bold uppercase text-brand-orange md:text-2xl;
+    letter-spacing: 0.16em;
+  }
+
+  .section-heading > h2 {
+    @apply mt-3 font-display font-bold leading-[1.03] text-brand-white;
+    font-size: clamp(1.7rem, 4.4vw, 2.85rem);
+  }
+
+  .section-heading > span {
+    @apply mx-auto mt-4 block max-w-2xl text-sm leading-6 text-brand-muted sm:text-base;
+  }
+
+  .landing-tabs {
+    @apply relative mx-auto mb-5 max-w-3xl overflow-hidden rounded-2xl border-white/10 bg-white/[0.04] p-1.5 shadow-soft sm:grid-cols-3;
+  }
+
+  .landing-tabs button {
+    @apply relative z-10 min-h-12 rounded-xl px-3 text-sm text-brand-muted active:scale-[0.98] sm:px-4;
+  }
+
+  .landing-tabs button.is-active {
+    @apply bg-transparent text-brand-black shadow-none;
+  }
+
+  .landing-tab-indicator {
+    @apply absolute left-1.5 top-1.5 z-0 hidden h-[calc(100%-0.75rem)] rounded-xl bg-brand-orange shadow-[0_12px_34px_rgba(249,115,22,0.24)] transition-transform duration-500 ease-snap sm:block;
+    width: calc((100% - 0.75rem) / 3);
+  }
+
+  .landing-tab-indicator.active-centros {
+    transform: translateX(0);
+  }
+
+  .landing-tab-indicator.active-coach {
+    transform: translateX(100%);
+  }
+
+  .landing-tab-indicator.active-personal {
+    transform: translateX(200%);
+  }
+
+  .landing-audience-panel {
+    @apply overflow-hidden rounded-2xl border-white/10 bg-white/[0.045] p-5 shadow-glow backdrop-blur-sm md:grid-cols-[1.05fr_0.95fr] md:p-7;
+    animation: panel-swap 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  .landing-panel-kicker,
+  .landing-plan-kicker {
+    @apply font-display text-xs font-bold uppercase text-brand-orange;
+    letter-spacing: 0.22em;
+  }
+
+  .landing-audience-panel h3 {
+    @apply mt-3 font-display text-2xl font-semibold leading-tight text-brand-white sm:text-3xl md:text-4xl;
+  }
+
+  .landing-audience-panel p {
+    @apply mt-4 text-base leading-7 text-brand-muted;
+  }
+
+  .landing-audience-stats {
+    @apply grid gap-3 sm:grid-cols-3 md:grid-cols-1;
+  }
+
+  .landing-audience-stats div {
+    @apply rounded-2xl border border-white/10 bg-black/30 p-4 shadow-soft transition duration-300 ease-snap hover:-translate-y-0.5 hover:border-brand-orange/45 hover:bg-brand-elevated/70;
+    animation: stat-pop 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  .landing-audience-stats strong {
+    @apply block font-display text-xl text-brand-white;
+  }
+
+  .landing-audience-stats span {
+    @apply mt-1 block text-sm leading-5 text-brand-muted;
+  }
+
+  .landing-feature-grid,
+  .landing-addon-grid {
+    @apply mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4;
+  }
+
+  .landing-feature-card,
+  .landing-addon-card,
+  .landing-plan-card {
+    @apply rounded-2xl border border-white/10 bg-white/[0.045] shadow-soft backdrop-blur-sm transition duration-300 ease-snap hover:-translate-y-1 hover:border-brand-orange/45 hover:bg-brand-elevated/70 hover:shadow-glow active:scale-[0.99];
+  }
+
+  .landing-feature-card {
+    @apply p-5;
+  }
+
+  .landing-feature-card h3,
+  .landing-addon-card h3 {
+    @apply font-display text-xl font-semibold leading-tight text-brand-white;
+  }
+
+  .landing-feature-card p,
+  .landing-addon-card p {
+    @apply mt-3 text-sm leading-6 text-brand-muted;
+  }
+
+  .landing-addon-card {
+    @apply bg-black/[0.22] p-5;
+  }
+
+  .landing-addon-card > div {
+    @apply flex items-start justify-between gap-3;
+  }
+
+  .landing-addon-card > div > span {
+    @apply shrink-0 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-semibold text-brand-muted;
+  }
+
+  .landing-plan-grid {
+    @apply grid gap-5 md:grid-cols-3 md:items-stretch xl:gap-4;
+  }
+
+  .landing-plan-shell {
+    @apply relative pt-12;
+  }
+
+  .landing-plan-card {
+    @apply h-full flex flex-col justify-between p-4 md:p-4 lg:p-5;
+  }
+
+  .landing-plan-card h3 {
+    @apply mt-1 font-display text-3xl font-bold text-brand-white md:text-2xl lg:text-3xl;
+  }
+
+  .landing-plan-card > div > p:last-child {
+    @apply mt-3 text-sm leading-6 text-brand-muted md:text-[0.82rem] md:leading-5 lg:text-sm lg:leading-6;
+  }
+
+  .landing-plan-price {
+    @apply mt-4 font-display text-3xl font-bold leading-none text-brand-white md:text-2xl lg:text-3xl;
+  }
+
+  .landing-plan-price span {
+    @apply ml-2 align-baseline font-sans text-sm font-semibold text-brand-muted;
+  }
+
+  .landing-plan-card dl {
+    @apply mt-5 space-y-2.5 md:mt-4 md:space-y-2 lg:mt-5 lg:space-y-2.5;
+  }
+
+  .landing-plan-row {
+    @apply gap-3 border-white/10 pb-2.5 md:pb-2;
+  }
+
+  .landing-plan-row dt,
+  .landing-plan-row dd {
+    @apply text-sm md:text-xs lg:text-sm;
+  }
+
+  .landing-plan-card.is-featured {
+    @apply border-brand-orange/70 bg-[linear-gradient(180deg,rgba(249,115,22,0.12),rgba(255,255,255,0.045))] shadow-glow;
+  }
+
+  .landing-plan-card.is-featured:hover {
+    @apply border-brand-orange;
+  }
+
+  .landing-plan-card.tone-start:hover {
+    border-color: rgba(220, 38, 38, 0.9);
+    box-shadow: 0 0 0 1px rgba(220, 38, 38, 0.14), 0 18px 42px rgba(220, 38, 38, 0.08), 0 16px 34px rgba(0, 0, 0, 0.32);
+  }
+
+  .landing-plan-card.tone-pro:hover {
+    border-color: rgba(249, 115, 22, 0.9);
+    box-shadow: 0 0 0 1px rgba(249, 115, 22, 0.16), 0 18px 42px rgba(249, 115, 22, 0.1), 0 16px 34px rgba(0, 0, 0, 0.34);
+  }
+
+  .landing-plan-card.tone-max:hover {
+    border-color: rgba(37, 99, 235, 0.9);
+    box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.14), 0 18px 42px rgba(37, 99, 235, 0.08), 0 16px 34px rgba(0, 0, 0, 0.32);
+  }
+
+  .landing-plan-ribbon {
+    @apply pointer-events-none absolute left-4 top-1 z-20 w-fit rounded-full border border-brand-orange/50 bg-brand-black/90 px-3 py-1 text-[0.66rem] font-bold uppercase text-orange-100 shadow-soft;
+    letter-spacing: 0.14em;
+  }
+
+  .landing-plan-ribbon::after {
+    content: '';
+    @apply absolute left-4 top-full h-0 w-0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 5px solid rgba(249, 115, 22, 0.5);
+  }
+
+  .landing-capacity-cta {
+    @apply mt-4 rounded-2xl border-white/10 bg-white/[0.045] p-5 shadow-soft hover:border-brand-orange/40;
+  }
+
+  .landing-capacity-cta h3 {
+    @apply font-display text-xl font-semibold text-brand-white sm:text-2xl;
+  }
+
+  .landing-capacity-cta p {
+    @apply mt-2 text-base leading-6;
+  }
+
+  .landing-capacity-cta a {
+    @apply font-semibold text-brand-orange underline-offset-4 transition duration-200 ease-snap hover:text-orange-200 hover:underline active:opacity-75;
+  }
+
+  .landing-faq {
+    @apply border-white/10 bg-white/[0.045] hover:-translate-y-0.5 hover:border-brand-orange/35;
+  }
+
+  .landing-final-cta {
+    @apply relative overflow-hidden rounded-3xl border-white/10 bg-white/[0.045] p-6 text-center shadow-glow backdrop-blur-sm sm:p-8 md:p-10;
+  }
+
+  .landing-final-cta::before {
+    content: '';
+    @apply pointer-events-none absolute inset-0;
+    background:
+      radial-gradient(circle at 18% 8%, rgba(220, 38, 38, 0.2), transparent 34%),
+      radial-gradient(circle at 82% 2%, rgba(249, 115, 22, 0.16), transparent 36%),
+      radial-gradient(circle at 88% 84%, rgba(37, 99, 235, 0.08), transparent 38%);
+  }
+
+  .landing-final-cta > * {
+    @apply relative z-10;
+  }
+
+  .landing-final-cta .official-wordmark {
+    @apply mx-auto max-w-[320px] sm:max-w-[420px];
+  }
+
+  .landing-final-cta h2 {
+    @apply mx-auto mt-6 max-w-3xl font-display font-bold leading-[1.06] text-brand-white;
+    font-size: clamp(1.65rem, 4.2vw, 2.6rem);
+  }
+
+  .landing-final-cta p {
+    @apply mx-auto mt-4 max-w-2xl text-base leading-7 text-brand-muted sm:text-lg;
+  }
+
+  .landing-final-cta .btn-accent {
+    @apply mt-7;
+  }
+
+  .landing-footer {
+    @apply mt-14 border-white/10 bg-black/25 pb-0 pt-10 text-sm text-brand-muted md:pt-12;
+  }
+
+  .landing-footer .landing-container {
+    @apply grid gap-5 pb-8;
+  }
+
+  .landing-footer-copy,
+  .landing-footer-brand {
+    @apply block w-full text-center font-display text-base font-bold text-brand-white md:text-lg;
+  }
+
+  .landing-footer .landing-footer-copy {
+    @apply px-4 pb-5;
+  }
+
+  .landing-footer-line {
+    @apply block h-px w-full bg-white/10;
+  }
+
+  .landing-footer-contact {
+    @apply grid justify-items-start gap-3;
+  }
+
+  .landing-footer-contact > p {
+    @apply font-display text-xs font-bold uppercase text-brand-orange;
+    letter-spacing: 0.2em;
+  }
+
+  .landing-footer-contact > a {
+    @apply inline-flex min-h-10 items-center gap-3 rounded-xl border border-white/10 bg-white/[0.035] px-3 text-brand-muted transition duration-200 ease-snap hover:-translate-y-0.5 hover:border-brand-orange/50 hover:text-brand-orange;
+  }
+
+  .landing-footer-contact svg {
+    @apply h-5 w-5 shrink-0 fill-current;
+  }
+
+  .landing-social-links {
+    @apply flex items-center gap-2;
+  }
+
+  .landing-social-links a,
+  .landing-social-links span {
+    @apply inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/[0.035] p-0 text-brand-muted transition duration-200 ease-snap;
+  }
+
+  .landing-social-links a:hover {
+    @apply -translate-y-0.5 border-brand-orange/50 text-brand-orange shadow-soft;
+  }
+
+  .landing-social-links a:active {
+    @apply translate-y-0 scale-95;
+  }
+
+  .landing-social-links span {
+    @apply opacity-45;
+  }
+
+  .landing-social-links svg {
+    @apply h-5 w-5 shrink-0 fill-current;
+  }
+
+  .hero-brand-visual.reveal {
+    filter: none;
+  }
+
+  .btn-icon {
+    @apply h-4 w-4 fill-current;
+  }
+
+  .reveal {
+    transition-duration: 650ms;
+    transition-property: opacity, transform, filter;
+    filter: blur(4px);
+    transform: translateY(18px) scale(0.985);
+  }
+
+  .reveal.is-visible {
+    filter: blur(0);
+    transform: translateY(0) scale(1);
+  }
+
+  @media (min-width: 768px) {
+    .landing-hero-title {
+      font-size: clamp(3.15rem, 5.4vw, 5.25rem);
+    }
+  }
+
+  @media (min-width: 768px) and (max-width: 1180px) {
+    .landing-container {
+      @apply px-5;
+    }
+
+    .landing-section {
+      @apply py-[4.5rem];
+    }
+
+    .section-heading {
+      @apply mb-9;
+    }
+  }
+
+  @media (max-width: 639px) {
+    .landing-tabs {
+      @apply grid-cols-1;
+    }
+
+    .landing-tabs button.is-active {
+      @apply bg-brand-orange text-brand-black shadow-soft;
+    }
+
+    .landing-hero-grid {
+      @apply gap-5 pt-24;
+      min-height: auto;
+    }
+
+    .hero-brand-stage {
+      min-height: 220px;
+      transform: none;
+    }
+
+    .hero-brand-visual {
+      min-height: 220px;
+    }
+
+    .official-wordmark {
+      @apply max-w-[360px];
+    }
+
+    .landing-feature-card,
+    .landing-addon-card,
+    .landing-plan-card {
+      @apply p-4;
+    }
+  }
+}
+
+@keyframes panel-swap {
+  0% {
+    opacity: 0;
+    transform: translateY(10px) scale(0.99);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes stat-pop {
+  0% {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
   }
 }
 
@@ -174,6 +1083,12 @@ textarea {
       animation-duration: 0.001ms !important;
       animation-iteration-count: 1 !important;
       transition-duration: 0.001ms !important;
+    }
+
+    .hero-wordmark,
+    .landing-audience-panel,
+    .landing-audience-stats div {
+      animation: none !important;
     }
   }
 }

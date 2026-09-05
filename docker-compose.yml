@@ -45,6 +45,12 @@ services:
       context: ./frontend
       args:
         VITE_API_URL: ${VITE_API_URL:-/api}
+        VITE_PUBLIC_BASE_DOMAIN: ${VITE_PUBLIC_BASE_DOMAIN:-${BASE_DOMAIN:-localhost}}
+        VITE_APP_SUBDOMAIN: ${VITE_APP_SUBDOMAIN:-app}
+        VITE_APP_URL: ${VITE_APP_URL:-}
+        VITE_CONTACT_URL: ${VITE_CONTACT_URL:-}
+        VITE_CONTACT_EMAIL: ${VITE_CONTACT_EMAIL:-}
+        VITE_CONTACT_WHATSAPP: ${VITE_CONTACT_WHATSAPP:-}
     depends_on:
       - backend
     ports:
