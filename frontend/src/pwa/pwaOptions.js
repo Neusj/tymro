@@ -9,7 +9,7 @@ export const pwaOptions = {
   // al instalarse; el boton aplica una recarga fuerte si el navegador queda pegado.
   registerType: 'prompt',
   // Activos sueltos de public/ que también queremos precachear/exponer.
-  includeAssets: ['favicon.svg', 'apple-touch-icon.png'],
+  includeAssets: ['favicon.png', 'apple-touch-icon.png'],
   manifest: {
     name: 'TYMRO — Gestión de Gimnasios',
     short_name: 'TYMRO',
@@ -35,7 +35,7 @@ export const pwaOptions = {
     // Los splash de iOS (apple-touch-startup-image) NO van al precache: son ~1 MB
     // de cosméticos que iOS pide por HTTP al lanzar (no los sirve el SW al shell),
     // así el precache no se infla ni los re-valida en cada update. Siguen en dist/.
-    globIgnores: ['splash/**'],
+    globIgnores: ['splash/**', 'icono.png', 'logo.png'],
     // SPA: cualquier navegación offline cae al app-shell (index.html).
     navigateFallback: '/index.html',
     // No interceptar las rutas de la API ni media con el fallback de navegación.

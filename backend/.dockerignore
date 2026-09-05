@@ -4,3 +4,12 @@ __pycache__/
 .venv/
 db.sqlite3
 media/
+.codex-predeploy-basetemp
+.codex-pytest*
+.codex-tmp*
+.pytest_cache/
+.pytest-cache-local/
+.pytest-tmp*
+pytest-tmp*
+.coverage
+.testmondata

@@ -227,7 +227,7 @@ export default function SuperadminOrganizationsPage() {
                 setSubdomainTouched(true)
                 setForm((prev) => ({ ...prev, subdomain: event.target.value }))
               }}
-              placeholder="r2b"
+              placeholder="gladiador"
               className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
             />
             <span className="block text-xs text-brand-muted">

@@ -1,6 +1,12 @@
 # Contexto de build = raíz del repo. Mantener la imagen limpia y sin secretos.
 .git
 .gitignore
+.codex-predeploy-basetemp
+.codex-pytest*
+.codex-tmp*
+.pytest-cache-local
+.pytest-tmp*
+pytest-tmp*
 **/.env
 **/.env.*
 !**/.env.example
@@ -8,6 +14,20 @@
 **/__pycache__/
 **/*.pyc
 **/.pytest_cache/
+**/.pytest-cache-local/
+**/.pytest-tmp*/
+**/pytest-tmp*/
+**/.codex-predeploy-basetemp/
+**/.codex-pytest*/
+**/.codex-tmp*/
+backend/.codex-predeploy-basetemp
+backend/.codex-pytest*
+backend/.codex-tmp*
+backend/.pytest-cache-local
+backend/.pytest-tmp*
+backend/pytest-tmp*
+**/.coverage
+**/.testmondata
 **/.DS_Store
 
 # El frontend se reconstruye dentro de la imagen.
