@@ -62,6 +62,7 @@ from .models import (
     TeacherPaymentRule,
     TeacherPayout,
     TrialFollowupConfiguration,
+    validate_subdomain_format,
 )
 from .permissions import (
     FinancialResourcePermission,
@@ -1162,6 +1163,34 @@ def _resolve_public_org(request, slug=None):
     if slug:
         return _resolve_invite_org(slug)
     return None
+
+
+def _valid_public_subdomain_candidate(value):
+    subdomain = str(value or '').strip().lower()
+    if not subdomain or len(subdomain) > 50:
+        return ''
+    try:
+        validate_subdomain_format(subdomain)
+    except DjangoValidationError:
+        return ''
+    return subdomain
+
+
+class PublicOrganizationSubdomainCheckView(APIView):
+    """Chequeo público mínimo para acceso por centro desde el login general."""
+
+    authentication_classes = []
+    permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'public_invite'
+
+    def get(self, request):
+        subdomain = _valid_public_subdomain_candidate(request.query_params.get('subdomain'))
+        exists = bool(
+            subdomain
+            and Organization.objects.filter(subdomain__iexact=subdomain, is_active=True).exists()
+        )
+        return Response({'exists': exists})
 
 
 class PublicInviteValidateView(APIView):

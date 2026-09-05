@@ -1,14 +1,25 @@
-﻿import { useState } from 'react'
+import { useState } from 'react'
 import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
+import { publicOrganizationApi } from '../api/client'
 import { defaultRouteByRole } from '../utils/roles'
 import InstallAppButton from '../components/InstallAppButton'
+import { BRAND_ICON } from '../config/publicLanding'
 import {
   buildPublicLandingUrlForWindow,
   buildTenantDisplayHostForWindow,
   buildTenantUrlForWindow,
   resolveHostnameContextForWindow,
+  validateTenantSubdomainInput,
 } from '../utils/publicLandingHost'
+
+function LoginLoadingMark({ className = '' }) {
+  return (
+    <span className={`login-loading-mark ${className}`.trim()} aria-hidden="true">
+      <img src={BRAND_ICON} alt="" width="22" height="22" />
+    </span>
+  )
+}
 
 export default function LoginPage() {
   const { login, isAuthenticated, user } = useAuth()
@@ -21,6 +32,7 @@ export default function LoginPage() {
   const [centerSubdomain, setCenterSubdomain] = useState('')
   const [centerError, setCenterError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [centerLoading, setCenterLoading] = useState(false)
   const hostnameContext = resolveHostnameContextForWindow()
   const showAccessSelector = hostnameContext.shouldShowLoginSelector
   const currentAccessMode = showAccessSelector ? accessMode : 'personal'
@@ -50,14 +62,44 @@ export default function LoginPage() {
 
   const landingUrl = buildPublicLandingUrlForWindow() || '/'
 
-  const onCenterAccess = (event) => {
+  const onCenterAccess = async (event) => {
     event.preventDefault()
+    if (centerLoading) {
+      return
+    }
     setCenterError('')
 
-    const tenantUrl = buildTenantUrlForWindow(centerSubdomain)
+    const validation = validateTenantSubdomainInput(centerSubdomain, {
+      appSubdomain: import.meta.env.VITE_APP_SUBDOMAIN || 'app',
+    })
+    if (!validation.valid) {
+      setCenterError('Ingresa un subdominio válido.')
+      return
+    }
+
+    const tenantUrl = buildTenantUrlForWindow(validation.subdomain)
     if (!tenantUrl) {
       setCenterError('Ingresa el subdominio de tu centro deportivo.')
       return
+    }
+
+    if (validation.isAppSubdomain) {
+      window.location.assign(`${tenantUrl}/login`)
+      return
+    }
+
+    setCenterLoading(true)
+    try {
+      const result = await publicOrganizationApi.checkSubdomain(validation.subdomain)
+      if (!result?.exists) {
+        setCenterError('No encontramos ese centro deportivo.')
+        return
+      }
+    } catch {
+      setCenterError('No encontramos ese centro deportivo.')
+      return
+    } finally {
+      setCenterLoading(false)
     }
 
     window.location.assign(`${tenantUrl}/login`)
@@ -78,7 +120,7 @@ export default function LoginPage() {
 
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-brand-black p-4 lg:p-0">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_15%_20%,rgba(220,38,38,0.23),transparent_28%),radial-gradient(circle_at_85%_20%,rgba(37,99,235,0.2),transparent_25%),radial-gradient(circle_at_50%_100%,rgba(249,115,22,0.18),transparent_30%)]" />
+      <div className="login-brand-atmosphere pointer-events-none absolute inset-0" />
 
       <div className="relative z-10 grid w-full max-w-app overflow-hidden rounded-3xl border border-brand-line bg-brand-soft/95 shadow-glow lg:min-h-[600px] lg:grid-cols-2 lg:rounded-none lg:border-0 lg:bg-transparent lg:shadow-none">
         <a
@@ -89,7 +131,7 @@ export default function LoginPage() {
           Volver a TYMRO
         </a>
 
-        {/* Brand panel — desktop only */}
+        {/* Brand panel - desktop only */}
         <div className="relative hidden flex-col justify-between overflow-hidden bg-gradient-to-br from-brand-red/25 via-brand-black to-brand-blue/25 p-12 lg:flex">
           <div className="pointer-events-none absolute -bottom-24 -left-24 h-72 w-72 rounded-full bg-brand-orange/20 blur-3xl" />
           <div aria-hidden="true" className="h-10" />
@@ -173,7 +215,12 @@ export default function LoginPage() {
                   disabled={loading}
                   className="login-submit-button"
                 >
-                  {loading ? 'Ingresando...' : 'Entrar'}
+                  {loading ? (
+                    <>
+                      <LoginLoadingMark />
+                      <span>Ingresando...</span>
+                    </>
+                  ) : 'Entrar'}
                 </button>
 
                 <p className="text-center text-sm">
@@ -190,7 +237,12 @@ export default function LoginPage() {
                     <input
                       required
                       value={centerSubdomain}
-                      onChange={(e) => setCenterSubdomain(e.target.value)}
+                      onChange={(e) => {
+                        setCenterSubdomain(e.target.value)
+                        if (centerError) {
+                          setCenterError('')
+                        }
+                      }}
                       className="min-h-12 min-w-0 flex-1 bg-transparent px-4 text-brand-white placeholder:text-brand-dim focus:outline-none"
                       placeholder="gladiador"
                       aria-describedby="center-subdomain-help"
@@ -210,8 +262,13 @@ export default function LoginPage() {
 
                 {centerError ? <p className="rounded-xl border border-brand-red/50 bg-brand-red/10 p-3 text-sm text-red-100">{centerError}</p> : null}
 
-                <button type="submit" className="login-submit-button">
-                  Ir al centro
+                <button type="submit" disabled={centerLoading} className="login-submit-button">
+                  {centerLoading ? (
+                    <>
+                      <LoginLoadingMark />
+                      <span>Buscando...</span>
+                    </>
+                  ) : 'Ir al centro'}
                 </button>
               </form>
             )}

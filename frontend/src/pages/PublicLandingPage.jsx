@@ -337,10 +337,9 @@ export default function PublicLandingPage() {
       <section className="landing-hero">
         <div className="landing-container landing-hero-grid">
           <div className="reveal">
-            <h1 className="landing-hero-title">Tu centro deportivo, claro y en movimiento.</h1>
+            <h1 className="landing-hero-title">Entrena, conecta y crece a tu manera.</h1>
             <p className="landing-hero-copy">
-              TYMRO reúne alumnos, clases, reservas, asistencia, pagos, staff y reportes en una plataforma preparada para
-              centros deportivos, coaches y experiencias personales.
+              Todo tu movimiento, en un solo lugar.
             </p>
           </div>
           <HeroBrandVisual />

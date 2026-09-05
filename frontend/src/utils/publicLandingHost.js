@@ -10,6 +10,38 @@ const normalizeSubdomain = (value = '') =>
     .replace(/[^a-z0-9-]/g, '')
     .replace(/^-+|-+$/g, '')
 
+const extractSubdomainCandidate = (value = '') =>
+  String(value)
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .split('/')[0]
+    .split('.')[0]
+
+export function validateTenantSubdomainInput(value = '', { appSubdomain = 'app' } = {}) {
+  const subdomain = extractSubdomainCandidate(value)
+  const normalizedAppSubdomain = normalizeSubdomain(appSubdomain) || 'app'
+
+  if (!subdomain) {
+    return { valid: false, subdomain: '', isAppSubdomain: false, reason: 'empty' }
+  }
+
+  if (
+    subdomain.length > 50 ||
+    !/^[a-z0-9-]+$/.test(subdomain) ||
+    !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(subdomain)
+  ) {
+    return { valid: false, subdomain: '', isAppSubdomain: false, reason: 'format' }
+  }
+
+  return {
+    valid: true,
+    subdomain,
+    isAppSubdomain: subdomain === normalizedAppSubdomain,
+    reason: '',
+  }
+}
+
 const normalizePathname = (pathname = '/') => {
   const value = String(pathname || '/').trim()
   return value || '/'

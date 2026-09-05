@@ -7,6 +7,7 @@ import {
   buildTenantUrl,
   resolveHostnameContext,
   shouldShowPublicLanding,
+  validateTenantSubdomainInput,
 } from './publicLandingHost'
 
 describe('shouldShowPublicLanding', () => {
@@ -116,5 +117,35 @@ describe('buildTenantDisplayHost', () => {
     expect(buildTenantDisplayHost({ baseDomain: 'tymroapp.com', subdomain: 'gladiador' })).toBe(
       'gladiador.tymroapp.com',
     )
+  })
+})
+
+describe('validateTenantSubdomainInput', () => {
+  it('normalizes a typed subdomain before backend lookup', () => {
+    expect(validateTenantSubdomainInput(' Gladiador ')).toEqual({
+      valid: true,
+      subdomain: 'gladiador',
+      isAppSubdomain: false,
+      reason: '',
+    })
+  })
+
+  it('accepts a pasted tenant URL and extracts the organization subdomain', () => {
+    expect(validateTenantSubdomainInput('https://GLADIADOR.tymroapp.com/login').subdomain).toBe('gladiador')
+  })
+
+  it('rejects malformed subdomains instead of silently repairing them', () => {
+    expect(validateTenantSubdomainInput('gym!').valid).toBe(false)
+    expect(validateTenantSubdomainInput('-gym').valid).toBe(false)
+    expect(validateTenantSubdomainInput('gym-').valid).toBe(false)
+  })
+
+  it('keeps the app subdomain as the reserved administrative shortcut', () => {
+    expect(validateTenantSubdomainInput('app')).toEqual({
+      valid: true,
+      subdomain: 'app',
+      isAppSubdomain: true,
+      reason: '',
+    })
   })
 })

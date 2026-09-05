@@ -1,13 +1,27 @@
-﻿import { Navigate, useLocation } from 'react-router-dom'
+import { Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
+import { BRAND_ICON } from '../config/publicLanding'
 import { defaultRouteByRole } from '../utils/roles'
+
+function SessionLoadingMark() {
+  return (
+    <span className="login-loading-mark login-loading-mark-lg" aria-hidden="true">
+      <img src={BRAND_ICON} alt="" width="28" height="28" />
+    </span>
+  )
+}
 
 export default function ProtectedRoute({ allowedRoles, children }) {
   const { user, loading, isAuthenticated, bootstrapError, verifying, retryBootstrap } = useAuth()
   const location = useLocation()
 
   if (loading) {
-    return <div className="flex min-h-screen items-center justify-center text-brand-muted">Cargando sesión...</div>
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-3 text-brand-muted">
+        <SessionLoadingMark />
+        <span>Cargando sesión...</span>
+      </div>
+    )
   }
 
   // No se pudo verificar la sesión por un fallo transitorio (timeout/red). No se

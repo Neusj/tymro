@@ -212,6 +212,15 @@ export const registrationApi = {
   },
 }
 
+export const publicOrganizationApi = {
+  checkSubdomain: async (subdomain) => {
+    const { data } = await publicApi.get('/public/organizations/check-subdomain/', {
+      params: { subdomain },
+    })
+    return data
+  },
+}
+
 export const dashboardApi = {
   summary: async () => {
     const { data } = await api.get('/dashboard/')
