@@ -9,7 +9,7 @@ export const pwaOptions = {
   // que el usuario lo aplique, evitando mezclar el HTML viejo con chunks nuevos.
   registerType: 'prompt',
   // Activos sueltos de public/ que también queremos precachear/exponer.
-  includeAssets: ['favicon.png', 'apple-touch-icon-v2.png'],
+  includeAssets: ['favicon.png', 'apple-touch-icon-v3.png'],
   manifest: {
     name: 'TYMRO — Gestión de Gimnasios',
     short_name: 'TYMRO',
@@ -24,9 +24,9 @@ export const pwaOptions = {
     theme_color: '#09090b',
     categories: ['health', 'fitness', 'sports'],
     icons: [
-      { src: 'pwa-192x192-v2.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
-      { src: 'pwa-512x512-v2.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
-      { src: 'pwa-maskable-512x512-v2.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+      { src: 'pwa-192x192-v3.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+      { src: 'pwa-512x512-v3.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+      { src: 'pwa-maskable-512x512-v3.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
     ],
   },
   workbox: {
@@ -41,9 +41,13 @@ export const pwaOptions = {
       'icono_.png',
       'logo.png',
       'apple-touch-icon.png',
+      'apple-touch-icon-v2.png',
       'pwa-192x192.png',
+      'pwa-192x192-v2.png',
       'pwa-512x512.png',
+      'pwa-512x512-v2.png',
       'pwa-maskable-512x512.png',
+      'pwa-maskable-512x512-v2.png',
     ],
     // SPA: cualquier navegación offline cae al app-shell (index.html).
     navigateFallback: '/index.html',

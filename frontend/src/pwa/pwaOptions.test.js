@@ -6,16 +6,20 @@ import { pwaOptions } from './pwaOptions'
 describe('pwaOptions - contrato de actualizacion in-app', () => {
   it('publica solamente los iconos PWA versionados actuales', () => {
     expect(pwaOptions.manifest.icons).toEqual([
-      { src: 'pwa-192x192-v2.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
-      { src: 'pwa-512x512-v2.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
-      { src: 'pwa-maskable-512x512-v2.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+      { src: 'pwa-192x192-v3.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+      { src: 'pwa-512x512-v3.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+      { src: 'pwa-maskable-512x512-v3.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
     ])
-    expect(pwaOptions.includeAssets).toContain('apple-touch-icon-v2.png')
+    expect(pwaOptions.includeAssets).toContain('apple-touch-icon-v3.png')
     expect(pwaOptions.workbox.globIgnores).toEqual(expect.arrayContaining([
       'apple-touch-icon.png',
+      'apple-touch-icon-v2.png',
       'pwa-192x192.png',
+      'pwa-192x192-v2.png',
       'pwa-512x512.png',
+      'pwa-512x512-v2.png',
       'pwa-maskable-512x512.png',
+      'pwa-maskable-512x512-v2.png',
     ]))
   })
 

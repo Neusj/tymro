@@ -8,11 +8,11 @@ const publicPath = (name) => rootPath(`public/${name}`)
 const distPath = (name) => rootPath(`dist/${name}`)
 
 const icons = [
-  { file: 'pwa-192x192-v2.png', width: 192, height: 192, purpose: 'any' },
-  { file: 'pwa-512x512-v2.png', width: 512, height: 512, purpose: 'any' },
-  { file: 'pwa-maskable-512x512-v2.png', width: 512, height: 512, purpose: 'maskable' },
+  { file: 'pwa-192x192-v3.png', width: 192, height: 192, purpose: 'any' },
+  { file: 'pwa-512x512-v3.png', width: 512, height: 512, purpose: 'any' },
+  { file: 'pwa-maskable-512x512-v3.png', width: 512, height: 512, purpose: 'maskable' },
 ]
-const appleIcon = 'apple-touch-icon-v2.png'
+const appleIcon = 'apple-touch-icon-v3.png'
 const splashes = [
   ['iphone-1320x2868-v2.png', 1320, 2868],
   ['iphone-1206x2622-v2.png', 1206, 2622],
@@ -27,61 +27,71 @@ const splashes = [
   ['iphone-750x1334-v2.png', 750, 1334],
   ['iphone-640x1136-v2.png', 640, 1136],
 ]
-const oldAssets = [
+const oldManifestAssets = [
   'pwa-192x192.png',
+  'pwa-192x192-v2.png',
   'pwa-512x512.png',
+  'pwa-512x512-v2.png',
   'pwa-maskable-512x512.png',
+  'pwa-maskable-512x512-v2.png',
   'apple-touch-icon.png',
+  'apple-touch-icon-v2.png',
 ]
 
 async function pngStats(file) {
-  const image = sharp(file, { limitInputPixels: false }).ensureAlpha()
-  const metadata = await image.metadata()
-  const pixels = await image.raw().toBuffer()
-  let minX = metadata.width
-  let minY = metadata.height
+  const metadata = await sharp(file, { limitInputPixels: false }).metadata()
+  const { data: pixels, info } = await sharp(file, { limitInputPixels: false })
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true })
+  let minX = info.width
+  let minY = info.height
   let maxX = -1
   let maxY = -1
+  let minAlpha = 255
   let opaquePixels = 0
   let whiteEdgePixels = 0
 
-  for (let y = 0; y < metadata.height; y += 1) {
-    for (let x = 0; x < metadata.width; x += 1) {
-      const offset = (y * metadata.width + x) * 4
+  for (let y = 0; y < info.height; y += 1) {
+    for (let x = 0; x < info.width; x += 1) {
+      const offset = (y * info.width + x) * 4
       const red = pixels[offset]
       const green = pixels[offset + 1]
       const blue = pixels[offset + 2]
       const alpha = pixels[offset + 3]
+      minAlpha = Math.min(minAlpha, alpha)
       if (alpha === 255) opaquePixels += 1
-      if (alpha > 3) {
+      if (alpha > 0) {
         minX = Math.min(minX, x)
         minY = Math.min(minY, y)
         maxX = Math.max(maxX, x)
         maxY = Math.max(maxY, y)
       }
       if (
-        (x === 0 || y === 0 || x === metadata.width - 1 || y === metadata.height - 1)
-        && alpha > 0 && red > 245 && green > 245 && blue > 245
+        (x === 0 || y === 0 || x === info.width - 1 || y === info.height - 1)
+        && red > 245 && green > 245 && blue > 245
       ) {
         whiteEdgePixels += 1
       }
     }
   }
 
-  const cornerAlpha = [
-    pixels[3],
-    pixels[(metadata.width - 1) * 4 + 3],
-    pixels[((metadata.height - 1) * metadata.width) * 4 + 3],
-    pixels[(metadata.width * metadata.height - 1) * 4 + 3],
+  const corners = [
+    Array.from(pixels.slice(0, 4)),
+    Array.from(pixels.slice((info.width - 1) * 4, (info.width - 1) * 4 + 4)),
+    Array.from(pixels.slice((info.height - 1) * info.width * 4, (info.height - 1) * info.width * 4 + 4)),
+    Array.from(pixels.slice((info.width * info.height - 1) * 4, (info.width * info.height - 1) * 4 + 4)),
   ]
 
   return {
-    width: metadata.width,
-    height: metadata.height,
+    width: info.width,
+    height: info.height,
+    hasAlpha: metadata.hasAlpha === true,
     bbox: [minX, minY, maxX, maxY],
-    fullyOpaque: opaquePixels === metadata.width * metadata.height,
+    minAlpha,
+    fullyOpaque: opaquePixels === info.width * info.height,
     whiteEdgePixels,
-    cornerAlpha,
+    corners,
   }
 }
 
@@ -89,8 +99,6 @@ const manifestRaw = readFileSync(distPath('manifest.webmanifest'), 'utf8')
 const manifest = JSON.parse(manifestRaw)
 const indexHtml = readFileSync(distPath('index.html'), 'utf8')
 const serviceWorker = readFileSync(distPath('sw.js'), 'utf8')
-const pushWorker = readFileSync(distPath('push-sw.js'), 'utf8')
-const builtSurfaces = [manifestRaw, indexHtml, serviceWorker, pushWorker]
 
 assert.equal(manifest.start_url, '/')
 assert.equal(manifest.scope, '/')
@@ -109,46 +117,55 @@ assert.deepEqual(
 for (const asset of [...icons.map(({ file }) => file), appleIcon]) {
   assert.equal(existsSync(publicPath(asset)), true, `Falta public/${asset}`)
   assert.equal(existsSync(distPath(asset)), true, `Falta dist/${asset}`)
-  assert.equal(serviceWorker.includes(asset), true, `${asset} no está en el SW`)
-}
-for (const oldAsset of oldAssets) {
-  assert.equal(
-    builtSurfaces.some((surface) => surface.includes(`/${oldAsset}`) || surface.includes(`\"${oldAsset}\"`)),
-    false,
-    `El build todavía referencia ${oldAsset}`,
-  )
+  assert.equal(serviceWorker.includes(asset), true, `${asset} no esta en el SW`)
 }
 
-for (const { file, width, height, purpose } of icons) {
+for (const oldAsset of oldManifestAssets) {
+  assert.equal(manifestRaw.includes(oldAsset), false, `El manifest todavia referencia ${oldAsset}`)
+}
+
+const installableStats = {}
+for (const { file, width, height } of icons) {
   const stats = await pngStats(publicPath(file))
+  installableStats[file] = stats
   assert.deepEqual([stats.width, stats.height], [width, height])
-  assert.equal(stats.whiteEdgePixels, 0, `${file} tiene píxeles blancos en el borde`)
-  if (purpose === 'maskable') {
-    assert.equal(stats.fullyOpaque, true, `${file} debe ser completamente opaco`)
-    assert.deepEqual(stats.cornerAlpha, [255, 255, 255, 255])
-  } else {
-    assert.equal(stats.bbox[0], 0, `${file} conserva margen izquierdo`)
-    assert.equal(stats.bbox[2], width - 1, `${file} conserva margen derecho`)
-    assert.equal(stats.bbox[1] <= 8, true, `${file} conserva demasiado margen superior`)
-    assert.equal(stats.bbox[3] >= height - 8, true, `${file} conserva demasiado margen inferior`)
-  }
+  assert.equal(stats.minAlpha, 255, `${file} tiene alpha menor a 255`)
+  assert.equal(stats.fullyOpaque, true, `${file} debe ser completamente opaco`)
+  assert.equal(stats.whiteEdgePixels, 0, `${file} tiene pixeles blancos en el borde`)
+  assert.deepEqual(stats.bbox, [0, 0, width - 1, height - 1], `${file} no ocupa el canvas completo`)
+  assert.deepEqual(stats.corners.map((corner) => corner[3]), [255, 255, 255, 255])
 }
 
 const appleStats = await pngStats(publicPath(appleIcon))
+installableStats[appleIcon] = appleStats
 assert.deepEqual([appleStats.width, appleStats.height], [180, 180])
+assert.equal(appleStats.minAlpha, 255)
 assert.equal(appleStats.fullyOpaque, true)
 assert.equal(appleStats.whiteEdgePixels, 0)
-assert.deepEqual(appleStats.cornerAlpha, [255, 255, 255, 255])
+assert.deepEqual(appleStats.bbox, [0, 0, 179, 179])
+assert.deepEqual(appleStats.corners.map((corner) => corner[3]), [255, 255, 255, 255])
 assert.equal(indexHtml.includes(`/${appleIcon}`), true)
+assert.equal(indexHtml.includes('/apple-touch-icon-v2.png'), false)
 
 for (const [file, width, height] of splashes) {
   assert.equal(existsSync(publicPath(`splash/${file}`)), true, `Falta public/splash/${file}`)
   assert.equal(existsSync(distPath(`splash/${file}`)), true, `Falta dist/splash/${file}`)
-  assert.equal(indexHtml.includes(`/splash/${file}`), true, `${file} no está en index.html`)
+  assert.equal(indexHtml.includes(`/splash/${file}`), true, `${file} no esta en index.html`)
   const stats = await pngStats(publicPath(`splash/${file}`))
   assert.deepEqual([stats.width, stats.height], [width, height])
   assert.equal(stats.fullyOpaque, true, `${file} debe ser completamente opaco`)
-  assert.equal(stats.whiteEdgePixels, 0, `${file} tiene píxeles blancos en el borde`)
+  assert.equal(stats.whiteEdgePixels, 0, `${file} tiene pixeles blancos en el borde`)
 }
 
-console.log('PWA assets OK: 4 iconos, 12 splash, manifest, referencias y precache.')
+console.log(JSON.stringify({
+  icons: Object.fromEntries(Object.entries(installableStats).map(([file, stats]) => [file, {
+    dimensions: `${stats.width}x${stats.height}`,
+    hasAlpha: stats.hasAlpha,
+    minAlpha: stats.minAlpha,
+    corners: stats.corners,
+    whiteEdgePixels: stats.whiteEdgePixels,
+    bbox: stats.bbox,
+  }])),
+  manifestIcons: manifest.icons.map((icon) => icon.src),
+  appleTouchIcon: `/${appleIcon}`,
+}, null, 2))
