@@ -57,109 +57,173 @@ async function getApprovedArtwork() {
 }
 
 async function makeFullBleedOpaque(input, size) {
-  const { data: pixels, info } = await sharp(input, { limitInputPixels: false })
+  const background = await makeFullBleedBackground(input, size)
+  const foreground = await sharp(input, { limitInputPixels: false })
     .resize(size, size, { fit: 'fill', withoutEnlargement: false })
+    .ensureAlpha()
+    .png()
+    .toBuffer()
+
+  return sharp(background)
+    .composite([{ input: foreground, gravity: 'center' }])
+    .removeAlpha()
+    .png({ compressionLevel: 9 })
+    .toBuffer()
+}
+
+async function makeFullBleedBackground(input, size) {
+  const svg = `
+    <svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="base" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#09090b"/>
+          <stop offset="0.42" stop-color="#09090b"/>
+          <stop offset="0.72" stop-color="#071325"/>
+          <stop offset="1" stop-color="#002d7a"/>
+        </linearGradient>
+      </defs>
+      <rect width="${size}" height="${size}" fill="url(#base)"/>
+    </svg>
+  `
+
+  return sharp(Buffer.from(svg))
+    .png({ compressionLevel: 9 })
+    .toBuffer()
+}
+
+async function makeMarkLayer(input, canvasSize, markSize = canvasSize) {
+  const { data: pixels, info } = await sharp(input, { limitInputPixels: false })
+    .resize(markSize, markSize, { fit: 'fill', withoutEnlargement: false })
     .ensureAlpha()
     .raw()
     .toBuffer({ resolveWithObject: true })
   const { width, height } = info
-  const nearest = new Int32Array(width * height)
-  const distance = new Float64Array(width * height)
-  const maxDistance = width * width + height * height
+  const candidates = new Uint8Array(width * height)
+  const visited = new Uint8Array(width * height)
 
-  for (let index = 0; index < nearest.length; index += 1) {
-    const alpha = pixels[index * 4 + 3]
-    nearest[index] = alpha === 255 ? index : -1
-    distance[index] = alpha === 255 ? 0 : maxDistance
-  }
+  for (let index = 0; index < candidates.length; index += 1) {
+    const offset = index * 4
+    const red = pixels[offset]
+    const green = pixels[offset + 1]
+    const blue = pixels[offset + 2]
+    const alpha = pixels[offset + 3]
+    const x = index % width
+    const y = Math.floor(index / width)
+    const warmMark = red > 105 && red > blue * 0.75 && green > 18
+    const blueMark = blue > 130 && green > 70 && red < 95 && y < height * 0.48
+    const awayFromContainerEdge = (
+      x > width * 0.03
+      && y > height * 0.03
+      && x < width * 0.94
+      && y < height * 0.94
+    )
 
-  // Felzenszwalb/Huttenlocher distance transform in two dimensions, tracking
-  // the source pixel so transparent rounded corners inherit the icon background.
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 1; x < width; x += 1) {
-      const index = y * width + x
-      const previous = index - 1
-      if (distance[previous] + 1 < distance[index]) {
-        distance[index] = distance[previous] + 1
-        nearest[index] = nearest[previous]
-      }
-    }
-    for (let x = width - 2; x >= 0; x -= 1) {
-      const index = y * width + x
-      const next = index + 1
-      if (distance[next] + 1 < distance[index]) {
-        distance[index] = distance[next] + 1
-        nearest[index] = nearest[next]
-      }
+    if (alpha > 12 && awayFromContainerEdge && (warmMark || blueMark)) {
+      candidates[index] = 1
     }
   }
 
-  for (let x = 0; x < width; x += 1) {
-    for (let y = 1; y < height; y += 1) {
-      const index = y * width + x
-      const previous = index - width
-      if (distance[previous] + 1 < distance[index]) {
-        distance[index] = distance[previous] + 1
-        nearest[index] = nearest[previous]
+  let bestComponent = []
+  const queue = []
+  for (let start = 0; start < candidates.length; start += 1) {
+    if (!candidates[start] || visited[start]) continue
+
+    const component = []
+    let touchesEdge = false
+    let minX = width
+    let minY = height
+    let maxX = -1
+    let maxY = -1
+    visited[start] = 1
+    queue.length = 0
+    queue.push(start)
+
+    for (let cursor = 0; cursor < queue.length; cursor += 1) {
+      const index = queue[cursor]
+      const x = index % width
+      const y = Math.floor(index / width)
+      component.push(index)
+      minX = Math.min(minX, x)
+      minY = Math.min(minY, y)
+      maxX = Math.max(maxX, x)
+      maxY = Math.max(maxY, y)
+      if (x <= 1 || y <= 1 || x >= width - 2 || y >= height - 2) {
+        touchesEdge = true
+      }
+
+      const neighbors = [
+        x > 0 ? index - 1 : -1,
+        x < width - 1 ? index + 1 : -1,
+        y > 0 ? index - width : -1,
+        y < height - 1 ? index + width : -1,
+      ]
+      for (const neighbor of neighbors) {
+        if (neighbor >= 0 && candidates[neighbor] && !visited[neighbor]) {
+          visited[neighbor] = 1
+          queue.push(neighbor)
+        }
       }
     }
-    for (let y = height - 2; y >= 0; y -= 1) {
-      const index = y * width + x
-      const next = index + width
-      if (distance[next] + 1 < distance[index]) {
-        distance[index] = distance[next] + 1
-        nearest[index] = nearest[next]
-      }
+
+    const componentWidth = maxX - minX + 1
+    const componentHeight = maxY - minY + 1
+    const isContainerGlow = componentWidth > width * 0.88 || componentHeight > height * 0.88
+    if (!touchesEdge && !isContainerGlow && component.length > bestComponent.length) {
+      bestComponent = component
     }
   }
 
-  for (let index = 0; index < nearest.length; index += 1) {
-    const sourceIndex = nearest[index]
-    const targetOffset = index * 4
-    const sourceOffset = sourceIndex * 4
-    if (sourceIndex !== index) {
-      pixels[targetOffset] = pixels[sourceOffset]
-      pixels[targetOffset + 1] = pixels[sourceOffset + 1]
-      pixels[targetOffset + 2] = pixels[sourceOffset + 2]
-    }
-    pixels[targetOffset + 3] = 255
+  const markPixels = Buffer.alloc(width * height * 4)
+  for (const index of bestComponent) {
+    const offset = index * 4
+    markPixels[offset] = pixels[offset]
+    markPixels[offset + 1] = pixels[offset + 1]
+    markPixels[offset + 2] = pixels[offset + 2]
+    markPixels[offset + 3] = pixels[offset + 3]
   }
 
-  return sharp(pixels, {
+  const mark = await sharp(markPixels, {
     raw: {
       width,
       height,
       channels: 4,
     },
   })
-    .removeAlpha()
-    .png({ compressionLevel: 9 })
+    .png()
+    .toBuffer()
+
+  return sharp({
+    create: {
+      width: canvasSize,
+      height: canvasSize,
+      channels: 4,
+      background: { r: 0, g: 0, b: 0, alpha: 0 },
+    },
+  })
+    .composite([{ input: mark, gravity: 'center' }])
+    .png()
     .toBuffer()
 }
 
 async function writePwaIcon(size, out) {
-  await sharp(await makeFullBleedOpaque(await getApprovedArtwork(), size))
+  const artwork = await getApprovedArtwork()
+  const background = await makeFullBleedBackground(artwork, size)
+  const mark = await makeMarkLayer(artwork, size)
+
+  await sharp(background)
+    .composite([{ input: mark, gravity: 'center' }])
+    .removeAlpha()
+    .png({ compressionLevel: 9 })
     .toFile(publicPath(out))
   console.log(`wrote ${out} (${size}x${size}, full bleed opaque)`)
 }
 
 async function writeMaskableIcon() {
-  const icon = await sharp(await makeFullBleedOpaque(await getApprovedArtwork(), 512))
-    .resize(MASKABLE_ARTWORK_SIZE, MASKABLE_ARTWORK_SIZE, {
-      fit: 'contain',
-      withoutEnlargement: false,
-    })
-    .png()
-    .toBuffer()
+  const artwork = await getApprovedArtwork()
+  const background = await makeFullBleedBackground(artwork, 512)
+  const icon = await makeMarkLayer(artwork, 512, MASKABLE_ARTWORK_SIZE)
 
-  await sharp({
-    create: {
-      width: 512,
-      height: 512,
-      channels: 4,
-      background: { r: 9, g: 9, b: 11, alpha: 1 },
-    },
-  })
+  await sharp(background)
     .composite([{ input: icon, gravity: 'center' }])
     .removeAlpha()
     .png({ compressionLevel: 9 })

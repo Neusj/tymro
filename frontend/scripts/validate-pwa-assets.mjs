@@ -13,20 +13,6 @@ const icons = [
   { file: 'pwa-maskable-512x512-v3.png', width: 512, height: 512, purpose: 'maskable' },
 ]
 const appleIcon = 'apple-touch-icon-v3.png'
-const splashes = [
-  ['iphone-1320x2868-v2.png', 1320, 2868],
-  ['iphone-1206x2622-v2.png', 1206, 2622],
-  ['iphone-1290x2796-v2.png', 1290, 2796],
-  ['iphone-1179x2556-v2.png', 1179, 2556],
-  ['iphone-1284x2778-v2.png', 1284, 2778],
-  ['iphone-1170x2532-v2.png', 1170, 2532],
-  ['iphone-1242x2688-v2.png', 1242, 2688],
-  ['iphone-828x1792-v2.png', 828, 1792],
-  ['iphone-1125x2436-v2.png', 1125, 2436],
-  ['iphone-1242x2208-v2.png', 1242, 2208],
-  ['iphone-750x1334-v2.png', 750, 1334],
-  ['iphone-640x1136-v2.png', 640, 1136],
-]
 const oldManifestAssets = [
   'pwa-192x192.png',
   'pwa-192x192-v2.png',
@@ -146,16 +132,9 @@ assert.deepEqual(appleStats.bbox, [0, 0, 179, 179])
 assert.deepEqual(appleStats.corners.map((corner) => corner[3]), [255, 255, 255, 255])
 assert.equal(indexHtml.includes(`/${appleIcon}`), true)
 assert.equal(indexHtml.includes('/apple-touch-icon-v2.png'), false)
-
-for (const [file, width, height] of splashes) {
-  assert.equal(existsSync(publicPath(`splash/${file}`)), true, `Falta public/splash/${file}`)
-  assert.equal(existsSync(distPath(`splash/${file}`)), true, `Falta dist/splash/${file}`)
-  assert.equal(indexHtml.includes(`/splash/${file}`), true, `${file} no esta en index.html`)
-  const stats = await pngStats(publicPath(`splash/${file}`))
-  assert.deepEqual([stats.width, stats.height], [width, height])
-  assert.equal(stats.fullyOpaque, true, `${file} debe ser completamente opaco`)
-  assert.equal(stats.whiteEdgePixels, 0, `${file} tiene pixeles blancos en el borde`)
-}
+assert.equal(indexHtml.includes('apple-touch-startup-image'), false)
+assert.equal(indexHtml.includes('/pwa-512x512-v3.png'), true)
+assert.equal(indexHtml.includes('/pwa-192x192-v2.png'), false)
 
 console.log(JSON.stringify({
   icons: Object.fromEntries(Object.entries(installableStats).map(([file, stats]) => [file, {
