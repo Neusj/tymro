@@ -5,8 +5,8 @@ export const pwaOptions = {
   // Permite desactivar el service worker (p.ej. en E2E, donde el SW puede
   // servir un shell cacheado y enmascarar cambios). VITE_DISABLE_PWA=1.
   disable: process.env.VITE_DISABLE_PWA === '1',
-  // 'prompt' conserva el aviso visible de actualizacion. El SW nuevo toma control
-  // al instalarse; el boton aplica una recarga fuerte si el navegador queda pegado.
+  // 'prompt' conserva el aviso visible de actualización. El SW nuevo espera hasta
+  // que el usuario lo aplique, evitando mezclar el HTML viejo con chunks nuevos.
   registerType: 'prompt',
   // Activos sueltos de public/ que también queremos precachear/exponer.
   includeAssets: ['favicon.png', 'apple-touch-icon.png'],
@@ -35,14 +35,14 @@ export const pwaOptions = {
     // Los splash de iOS (apple-touch-startup-image) NO van al precache: son ~1 MB
     // de cosméticos que iOS pide por HTTP al lanzar (no los sirve el SW al shell),
     // así el precache no se infla ni los re-valida en cada update. Siguen en dist/.
-    globIgnores: ['splash/**', 'icono.png', 'logo.png'],
+    globIgnores: ['splash/**', 'icono.png', 'icono_.png', 'logo.png'],
     // SPA: cualquier navegación offline cae al app-shell (index.html).
     navigateFallback: '/index.html',
     // No interceptar las rutas de la API ni media con el fallback de navegación.
     navigateFallbackDenylist: [/^\/api\//, /^\/media\//],
     cleanupOutdatedCaches: true,
     clientsClaim: true,
-    skipWaiting: true,
+    skipWaiting: false,
     importScripts: ['push-sw.js'],
     runtimeCaching: [
       {

@@ -1,15 +1,15 @@
 import { describe, it, expect } from 'vitest'
 import { pwaOptions } from './pwaOptions'
 
-// Contrato de actualizacion in-app. La app mantiene el boton visible cuando detecta
-// una version nueva, pero el SW puede tomar control sin quedar esperando al viejo.
+// Contrato de actualización in-app. La app mantiene el shell actual completo hasta
+// que el usuario acepta la nueva versión desde el botón visible.
 describe('pwaOptions - contrato de actualizacion in-app', () => {
   it('mantiene registerType en prompt para mostrar boton de actualizacion', () => {
     expect(pwaOptions.registerType).toBe('prompt')
   })
 
-  it('el service worker nuevo puede tomar control sin quedar pegado al viejo', () => {
-    expect(pwaOptions.workbox.skipWaiting).toBe(true)
+  it('el service worker nuevo espera para no mezclar versiones del app shell', () => {
+    expect(pwaOptions.workbox.skipWaiting).toBe(false)
     expect(pwaOptions.workbox.clientsClaim).toBe(true)
   })
 
