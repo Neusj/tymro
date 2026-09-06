@@ -1,4 +1,4 @@
-export const BRAND_ICON = '/pwa-192x192.png'
+export const BRAND_ICON = '/pwa-192x192-v2.png'
 export const BRAND_WORDMARK = '/marca.png'
 
 export const CONTACT_EMAIL = import.meta.env.VITE_CONTACT_EMAIL || 'contacto@tymroapp.com'

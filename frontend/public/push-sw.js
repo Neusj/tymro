@@ -9,8 +9,8 @@ self.addEventListener('push', (event) => {
   const title = payload.title || 'TYMRO'
   const options = {
     body: payload.body || '',
-    icon: '/pwa-192x192.png',
-    badge: '/pwa-192x192.png',
+    icon: '/pwa-192x192-v2.png',
+    badge: '/pwa-192x192-v2.png',
     data: payload.data || {},
   }
 

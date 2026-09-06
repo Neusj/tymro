@@ -12,25 +12,25 @@ import { fileURLToPath } from 'node:url'
 
 const BG = '#09090b'
 const ACCENT = '#f97316'
-const ICON_FRACTION = 0.38
+const ICON_FRACTION = 0.46
 
 const publicPath = (name) => fileURLToPath(new URL(`../public/${name}`, import.meta.url))
-const sourceIcon = publicPath('icono.png')
+const sourceIcon = publicPath('pwa-512x512-v2.png')
 
 // widthPx x heightPx = native portrait framebuffer size.
 const targets = [
-  { file: 'iphone-1320x2868.png', w: 1320, h: 2868 }, // 16 Pro Max
-  { file: 'iphone-1206x2622.png', w: 1206, h: 2622 }, // 16 Pro
-  { file: 'iphone-1290x2796.png', w: 1290, h: 2796 }, // 16 Plus / 15 Pro Max / 15 Plus / 14 Pro Max
-  { file: 'iphone-1179x2556.png', w: 1179, h: 2556 }, // 16 / 15 Pro / 15 / 14 Pro
-  { file: 'iphone-1284x2778.png', w: 1284, h: 2778 }, // 14 Plus / 13 Pro Max / 12 Pro Max
-  { file: 'iphone-1170x2532.png', w: 1170, h: 2532 }, // 14 / 13 Pro / 13 / 12 Pro / 12
-  { file: 'iphone-1242x2688.png', w: 1242, h: 2688 }, // 11 Pro Max / XS Max
-  { file: 'iphone-828x1792.png', w: 828, h: 1792 }, // 11 / XR
-  { file: 'iphone-1125x2436.png', w: 1125, h: 2436 }, // 11 Pro / XS / X / 13 mini / 12 mini
-  { file: 'iphone-1242x2208.png', w: 1242, h: 2208 }, // 8 Plus / 7 Plus / 6s Plus
-  { file: 'iphone-750x1334.png', w: 750, h: 1334 }, // SE 2/3 / 8 / 7 / 6s
-  { file: 'iphone-640x1136.png', w: 640, h: 1136 }, // SE 1 / 5s / 5
+  { file: 'iphone-1320x2868-v2.png', w: 1320, h: 2868 }, // 16 Pro Max
+  { file: 'iphone-1206x2622-v2.png', w: 1206, h: 2622 }, // 16 Pro
+  { file: 'iphone-1290x2796-v2.png', w: 1290, h: 2796 }, // 16 Plus / 15 Pro Max / 15 Plus / 14 Pro Max
+  { file: 'iphone-1179x2556-v2.png', w: 1179, h: 2556 }, // 16 / 15 Pro / 15 / 14 Pro
+  { file: 'iphone-1284x2778-v2.png', w: 1284, h: 2778 }, // 14 Plus / 13 Pro Max / 12 Pro Max
+  { file: 'iphone-1170x2532-v2.png', w: 1170, h: 2532 }, // 14 / 13 Pro / 13 / 12 Pro / 12
+  { file: 'iphone-1242x2688-v2.png', w: 1242, h: 2688 }, // 11 Pro Max / XS Max
+  { file: 'iphone-828x1792-v2.png', w: 828, h: 1792 }, // 11 / XR
+  { file: 'iphone-1125x2436-v2.png', w: 1125, h: 2436 }, // 11 Pro / XS / X / 13 mini / 12 mini
+  { file: 'iphone-1242x2208-v2.png', w: 1242, h: 2208 }, // 8 Plus / 7 Plus / 6s Plus
+  { file: 'iphone-750x1334-v2.png', w: 750, h: 1334 }, // SE 2/3 / 8 / 7 / 6s
+  { file: 'iphone-640x1136-v2.png', w: 640, h: 1136 }, // SE 1 / 5s / 5
 ]
 
 const outDir = fileURLToPath(new URL('../public/splash/', import.meta.url))

@@ -10,7 +10,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "icons": "node scripts/generate-icons.mjs",
-    "splash": "node scripts/generate-splash.mjs"
+    "splash": "node scripts/generate-splash.mjs",
+    "validate:pwa-assets": "node scripts/validate-pwa-assets.mjs"
   },
   "dependencies": {
     "@zxing/browser": "^0.2.0",
