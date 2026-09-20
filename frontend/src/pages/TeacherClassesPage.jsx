@@ -437,15 +437,11 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
       return
     }
 
-    const { row, actionName } = classReasonAction
+    const { row } = classReasonAction
     setWorking(true)
     setError('')
     try {
-      if (actionName === 'cancel') {
-        await classesApi.cancel(row.id, comment.trim())
-      } else {
-        await classesApi.completeEarly(row.id, comment.trim())
-      }
+      await classesApi.completeEarly(row.id, comment.trim())
       setClassReasonAction(null)
       await loadData()
     } catch (apiError) {
@@ -608,14 +604,6 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
                   >
                     Reactivar clase
                   </button>
-                  <button
-                    type="button"
-                    disabled={working}
-                    onClick={() => prepareClassAction(row, (resolvedRow) => setClassReasonAction({ row: resolvedRow, actionName: 'cancel' }))}
-                    className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 transition hover:bg-brand-red/10 disabled:opacity-60"
-                  >
-                    Cancelar clase
-                  </button>
                 </>
               ) : null}
               {mode === 'upcoming' && isCancelled ? (
@@ -661,14 +649,6 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
                     className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue disabled:opacity-60"
                   >
                     Finalizar (cierre anticipado)
-                  </button>
-                  <button
-                    type="button"
-                    disabled={!canOperate || working}
-                    onClick={() => prepareClassAction(row, (resolvedRow) => setClassReasonAction({ row: resolvedRow, actionName: 'cancel' }))}
-                    className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 transition hover:bg-brand-red/10 disabled:opacity-60"
-                  >
-                    Cancelar clase
                   </button>
                 </>
               ) : null}
@@ -726,14 +706,6 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
                   >
                     Reactivar clase
                   </button>
-                  <button
-                    type="button"
-                    disabled={working}
-                    onClick={() => prepareClassAction(row, (resolvedRow) => setClassReasonAction({ row: resolvedRow, actionName: 'cancel' }))}
-                    className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 transition hover:bg-brand-red/10 disabled:opacity-60"
-                  >
-                    Cancelar clase
-                  </button>
                 </>
               ) : null}
               {mode === 'upcoming' && isCancelled ? (
@@ -779,14 +751,6 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
                     className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue disabled:opacity-60"
                   >
                     Finalizar (cierre anticipado)
-                  </button>
-                  <button
-                    type="button"
-                    disabled={!canOperate || working}
-                    onClick={() => prepareClassAction(row, (resolvedRow) => setClassReasonAction({ row: resolvedRow, actionName: 'cancel' }))}
-                    className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 transition hover:bg-brand-red/10 disabled:opacity-60"
-                  >
-                    Cancelar clase
                   </button>
                 </>
               ) : null}
@@ -1000,7 +964,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
 
       <BulkActionModal
         open={mode === 'upcoming' && bulkModalOpen}
-        title="Finalizar o cancelar clases"
+        title="Finalizar clases"
         selectedCount={selectedIds.length}
         loading={working}
         actions={[
@@ -1009,14 +973,9 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
             label: 'Finalizar anticipadamente',
             description: 'Cierra anticipadamente las clases seleccionadas (estado finalizada anticipada).',
           },
-          {
-            value: 'cancel',
-            label: 'Cancelar clases',
-            description: 'Cancela clases seleccionadas y preserva historico operativo.',
-          },
         ]}
-        requiresCommentActions={['complete_early', 'cancel']}
-        defaultAction="cancel"
+        requiresCommentActions={['complete_early']}
+        defaultAction="complete_early"
         onClose={() => setBulkModalOpen(false)}
         onConfirm={runBulkAction}
       />
@@ -1067,11 +1026,11 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
 
       <ConfirmWithReasonDialog
         open={Boolean(classReasonAction)}
-        title={classReasonAction?.actionName === 'cancel' ? 'Cancelar clase' : 'Finalizar anticipadamente'}
+        title="Finalizar anticipadamente"
         description={`Se actualizara ${classReasonAction?.row?.name || 'esta clase'} preservando trazabilidad.`}
-        reasonLabel={classReasonAction?.actionName === 'cancel' ? 'Motivo de cancelacion' : 'Motivo de cierre anticipado'}
-        confirmLabel={classReasonAction?.actionName === 'cancel' ? 'Cancelar clase' : 'Finalizar clase'}
-        variant={classReasonAction?.actionName === 'cancel' ? 'danger' : 'warning'}
+        reasonLabel="Motivo de cierre anticipado"
+        confirmLabel="Finalizar clase"
+        variant="warning"
         loading={working}
         onCancel={() => {
           if (!working) {

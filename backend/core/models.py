@@ -375,6 +375,14 @@ class GymClass(TimestampedModel):
         blank=True,
         related_name='suspended_classes',
     )
+    reactivated_at = models.DateTimeField(null=True, blank=True)
+    reactivated_by = models.ForeignKey(
+        'accounts.CustomUser',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='reactivated_classes',
+    )
     reactivation_expected_date = models.DateField(null=True, blank=True)
     is_active = models.BooleanField(default=True)
     # Clase con suplente (P4 #A): registro/visualización PURO, no toca a quién se le paga.

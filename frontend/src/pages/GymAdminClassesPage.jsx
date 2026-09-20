@@ -49,6 +49,7 @@ const STATUS_OPTIONS = [
   { value: 'in_progress', label: 'En curso' },
   { value: 'completed', label: 'Finalizada' },
   { value: 'completed_early', label: 'Finalizada anticipadamente' },
+  { value: 'suspended', label: 'Suspendida' },
   { value: 'cancelled', label: 'Cancelada' },
 ]
 
@@ -78,7 +79,7 @@ function projectedDateFromId(row) {
 // `reservable` lo calcula el backend (ventana de reserva de la org); el piso de hoy hay que
 // mirarlo aparte porque la ventana solo tiene techo.
 function canManageEnrollments(row) {
-  if (row?.status === 'cancelled') {
+  if (['cancelled', 'suspended'].includes(row?.status)) {
     return false
   }
   if (!isVirtualClass(row)) {
@@ -277,11 +278,7 @@ export default function GymAdminClassesPage({ embedded = false, onOpenSchedule }
     setError('')
     setWorking(true)
     try {
-      if (actionName === 'cancel') {
-        await classesApi.cancel(gymClass.id, comment.trim())
-      } else {
-        await classesApi.completeEarly(gymClass.id, comment.trim())
-      }
+      await classesApi.completeEarly(gymClass.id, comment.trim())
       setSingleAction(null)
       await loadData()
     } catch (apiError) {
@@ -383,8 +380,8 @@ export default function GymAdminClassesPage({ embedded = false, onOpenSchedule }
           </Link>
         ),
         mobileActionsRender: (row) => {
-          const canClose = !['completed', 'cancelled', 'completed_early'].includes(row.status)
-          const canReopen = row.status === 'cancelled'
+          const canClose = ['scheduled', 'in_progress'].includes(row.status)
+          const canReopen = ['cancelled', 'suspended'].includes(row.status)
           const isVirtual = isVirtualClass(row)
           const enrollmentDisabled = !canManageEnrollments(row)
           const canDeleteRecord = !row.class_template
@@ -407,7 +404,6 @@ export default function GymAdminClassesPage({ embedded = false, onOpenSchedule }
                   Inscribir alumnos
                 </button>
                 <button type="button" disabled={working} onClick={() => prepareClassAction(row, setSuspending)} className="w-full rounded-lg border border-brand-orange/50 px-2.5 py-1.5 text-left text-xs text-brand-white disabled:opacity-60">Suspender clase</button>
-                <button type="button" disabled={working} onClick={() => requestCloseSingleClass(row, 'cancel')} className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 disabled:opacity-60">Cancelar clase</button>
               </>
             ) : (
               <p className="rounded-lg border border-brand-line bg-black/20 px-2.5 py-2 text-xs text-brand-muted">
@@ -417,15 +413,7 @@ export default function GymAdminClassesPage({ embedded = false, onOpenSchedule }
           }
           return canManage ? (
             <>
-              <button
-                type="button"
-                disabled={!canClose || working}
-                onClick={() => requestCloseSingleClass(row, 'cancel')}
-                className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 transition hover:bg-brand-red/10 disabled:opacity-60"
-              >
-                Cancelar clase
-              </button>
-              <button type="button" disabled={!canClose || working} onClick={() => prepareClassAction(row, setSuspending)} className="w-full rounded-lg border border-brand-orange/50 px-2.5 py-1.5 text-left text-xs text-brand-white disabled:opacity-60">Suspender clase</button>
+              <button type="button" disabled={!['scheduled', 'in_progress'].includes(row.status) || working} onClick={() => prepareClassAction(row, setSuspending)} className="w-full rounded-lg border border-brand-orange/50 px-2.5 py-1.5 text-left text-xs text-brand-white disabled:opacity-60">Suspender clase</button>
               <button
                 type="button"
                 disabled={enrollmentDisabled || working}
@@ -474,7 +462,7 @@ export default function GymAdminClassesPage({ embedded = false, onOpenSchedule }
                   onClick={() => setReactivating(row)}
                   className="w-full rounded-lg border border-emerald-500/50 px-2.5 py-1.5 text-left text-xs text-emerald-200 transition hover:border-emerald-400 disabled:opacity-60"
                 >
-                  Reabrir clase
+                  Reactivar clase
                 </button>
               ) : null}
               {canDeleteRecord ? (
@@ -490,8 +478,8 @@ export default function GymAdminClassesPage({ embedded = false, onOpenSchedule }
           ) : null
         },
         render: (row) => {
-          const canClose = !['completed', 'cancelled', 'completed_early'].includes(row.status)
-          const canReopen = row.status === 'cancelled'
+          const canClose = ['scheduled', 'in_progress'].includes(row.status)
+          const canReopen = ['cancelled', 'suspended'].includes(row.status)
           const isVirtual = isVirtualClass(row)
           const enrollmentDisabled = !canManageEnrollments(row)
           const canDeleteRecord = !row.class_template
@@ -514,7 +502,6 @@ export default function GymAdminClassesPage({ embedded = false, onOpenSchedule }
                   Inscribir alumnos
                 </button>
                 <button type="button" disabled={working} onClick={() => prepareClassAction(row, setSuspending)} className="w-full rounded-lg border border-brand-orange/50 px-2.5 py-1.5 text-left text-xs text-brand-white disabled:opacity-60">Suspender clase</button>
-                <button type="button" disabled={working} onClick={() => requestCloseSingleClass(row, 'cancel')} className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 disabled:opacity-60">Cancelar clase</button>
               </>
             ) : (
               <p className="rounded-lg border border-brand-line bg-black/20 px-2.5 py-2 text-xs text-brand-muted">
@@ -533,15 +520,7 @@ export default function GymAdminClassesPage({ embedded = false, onOpenSchedule }
               </Link>
               {canManage ? (
                 <>
-                  <button
-                    type="button"
-                    disabled={!canClose || working}
-                    onClick={() => requestCloseSingleClass(row, 'cancel')}
-                    className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 transition hover:bg-brand-red/10 disabled:opacity-60"
-                  >
-                    Cancelar clase
-                  </button>
-                  <button type="button" disabled={!canClose || working} onClick={() => prepareClassAction(row, setSuspending)} className="w-full rounded-lg border border-brand-orange/50 px-2.5 py-1.5 text-left text-xs text-brand-white disabled:opacity-60">Suspender clase</button>
+                  <button type="button" disabled={!['scheduled', 'in_progress'].includes(row.status) || working} onClick={() => prepareClassAction(row, setSuspending)} className="w-full rounded-lg border border-brand-orange/50 px-2.5 py-1.5 text-left text-xs text-brand-white disabled:opacity-60">Suspender clase</button>
                   <button
                     type="button"
                     disabled={enrollmentDisabled || working}
@@ -590,7 +569,7 @@ export default function GymAdminClassesPage({ embedded = false, onOpenSchedule }
                       onClick={() => setReactivating(row)}
                       className="w-full rounded-lg border border-emerald-500/50 px-2.5 py-1.5 text-left text-xs text-emerald-200 transition hover:border-emerald-400 disabled:opacity-60"
                     >
-                      Reabrir clase
+                      Reactivar clase
                     </button>
                   ) : null}
                   {canDeleteRecord ? (
@@ -708,14 +687,9 @@ export default function GymAdminClassesPage({ embedded = false, onOpenSchedule }
             label: 'Cerrar anticipadamente clases',
             description: 'Cierra las clases seleccionadas sin borrar historico.',
           },
-          {
-            value: 'cancel',
-            label: 'Cancelar clases',
-            description: 'Cancela clases futuras seleccionadas y preserva trazabilidad.',
-          },
         ]}
-        requiresCommentActions={['complete_early', 'cancel']}
-        defaultAction="cancel"
+        requiresCommentActions={['complete_early']}
+        defaultAction="complete_early"
         onClose={() => setBulkModalOpen(false)}
         onConfirm={runBulkAction}
       />
@@ -732,11 +706,11 @@ export default function GymAdminClassesPage({ embedded = false, onOpenSchedule }
 
       <ConfirmWithReasonDialog
         open={Boolean(singleAction)}
-        title={singleAction?.actionName === 'cancel' ? 'Cancelar clase' : 'Cerrar anticipadamente'}
+        title="Cerrar anticipadamente"
         description={`Se actualizara ${singleAction?.gymClass?.name || 'esta clase'} preservando trazabilidad.`}
-        reasonLabel={singleAction?.actionName === 'cancel' ? 'Motivo de cancelacion' : 'Motivo de cierre anticipado'}
-        confirmLabel={singleAction?.actionName === 'cancel' ? 'Cancelar clase' : 'Cerrar anticipadamente'}
-        variant={singleAction?.actionName === 'cancel' ? 'danger' : 'warning'}
+        reasonLabel="Motivo de cierre anticipado"
+        confirmLabel="Cerrar anticipadamente"
+        variant="warning"
         loading={working}
         onCancel={() => {
           if (!working) {
@@ -748,9 +722,9 @@ export default function GymAdminClassesPage({ embedded = false, onOpenSchedule }
 
       <ConfirmDialog
         open={Boolean(reactivating)}
-        title="Reabrir clase"
-        description={`Se reabrira ${reactivating?.name || 'esta clase'}. Las reservas canceladas no se restauraran automaticamente; los alumnos deberan volver a inscribirse o reservar si tienen cupos disponibles.`}
-        confirmLabel="Reabrir clase"
+        title="Reactivar clase"
+        description={`Se reactivara ${reactivating?.name || 'esta clase'}. Las reservas anuladas no se restauraran automaticamente; los alumnos deberan volver a inscribirse o reservar.`}
+        confirmLabel="Reactivar clase"
         variant="default"
         loading={working}
         onCancel={() => {

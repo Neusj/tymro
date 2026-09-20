@@ -12,6 +12,7 @@ function resolveConfig(kind, value) {
     completed: { label: 'Finalizada', cls: 'border-emerald-500/40 text-emerald-200' },
     completed_early: { label: 'Finalizada anticipadamente', cls: 'border-amber-500/40 text-amber-200' },
     cancelled: { label: 'Cancelada', cls: 'border-brand-red/40 text-red-200' },
+    suspended: { label: 'Suspendida', cls: 'border-brand-orange/50 text-amber-200' },
     active: { label: 'Activa', cls: 'border-emerald-500/40 text-emerald-200' },
     inactive: { label: 'Inactiva', cls: 'border-brand-line text-brand-muted' },
     paused: { label: 'Pausada', cls: 'border-amber-500/40 text-amber-200' },

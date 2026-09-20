@@ -9,6 +9,7 @@ vi.mock('../api/client', () => ({
     byDate: vi.fn(),
     cancel: vi.fn(),
     completeEarly: vi.fn(),
+    suspend: vi.fn(),
     reactivate: vi.fn(),
     remove: vi.fn(),
     bulkClose: vi.fn(),
@@ -86,6 +87,7 @@ beforeEach(() => {
   classesApi.byDate.mockResolvedValue([projectedRow])
   classesApi.enrolledStudents.mockResolvedValue([])
   classesApi.enrollableStudents.mockResolvedValue([])
+  classesApi.suspend.mockResolvedValue({ status: 'suspended' })
   disciplinesApi.list.mockResolvedValue([])
   classTemplatesApi.enrollableStudents.mockResolvedValue([candidate])
   enrollmentsApi.create.mockResolvedValue({ id: 1, gym_class: 501 })
@@ -102,6 +104,25 @@ beforeEach(() => {
 })
 
 describe('inscripcion sobre una clase proyectada', () => {
+  it('expone Suspender y retira Cancelar clase', async () => {
+    const user = userEvent.setup()
+    renderPage()
+    await openRowActions(user)
+
+    expect(await screen.findByRole('button', { name: 'Suspender clase' })).toBeEnabled()
+    expect(screen.queryByRole('button', { name: 'Cancelar clase' })).not.toBeInTheDocument()
+  })
+
+  it('muestra Reactivar para una clase suspendida', async () => {
+    const user = userEvent.setup()
+    classesApi.byDate.mockResolvedValue([{ ...realClass, status: 'suspended' }])
+    renderPage()
+    await openRowActions(user)
+
+    expect(await screen.findByRole('button', { name: 'Reactivar clase' })).toBeEnabled()
+    expect(screen.getAllByText('Suspendida').length).toBeGreaterThan(0)
+  })
+
   it('ofrece inscribir alumnos en una fila proyectada', async () => {
     const user = userEvent.setup()
     renderPage()

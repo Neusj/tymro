@@ -165,7 +165,7 @@ export default function StudentClassesPage({ mode = 'available' }) {
     setError('')
     try {
       const [scheduledClasses, completedClasses, myReservations, myRecurring, myMemberships] = await Promise.allSettled([
-        classesApi.byDate(date, { status_in: 'scheduled,in_progress,cancelled', ordering: 'start_datetime' }),
+        classesApi.byDate(date, { status_in: 'scheduled,in_progress,suspended,cancelled', ordering: 'start_datetime' }),
         classesApi.byDate(date, { mine: true, status_in: 'completed,completed_early', ordering: 'start_datetime' }),
         enrollmentsApi.my(),
         recurringEnrollmentsApi.my(),

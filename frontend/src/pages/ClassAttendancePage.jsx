@@ -10,7 +10,7 @@ import { canManageOperational } from '../utils/roles'
 import { formatDateTime } from './teacherClasses.helpers'
 
 function canToggleAttendance(user, gymClass) {
-  if (!user || !gymClass || gymClass.status === 'cancelled') {
+  if (!user || !gymClass || ['cancelled', 'suspended'].includes(gymClass.status)) {
     return false
   }
   if (user.role === 'superadmin' || user.role === 'gym_admin') {
@@ -28,7 +28,7 @@ function canToggleAttendance(user, gymClass) {
 }
 
 function canEnrollFromAttendance(user, gymClass) {
-  if (!user || !gymClass || gymClass.status === 'cancelled') {
+  if (!user || !gymClass || ['cancelled', 'suspended'].includes(gymClass.status)) {
     return false
   }
   if (canManageOperational(user.role)) {

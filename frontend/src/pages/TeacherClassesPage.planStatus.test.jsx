@@ -304,6 +304,20 @@ describe('TeacherClassesPage — suplencias disponibles', () => {
 })
 
 describe('TeacherClassesPage - reabrir canceladas', () => {
+  it('distingue una suspendida y oculta acciones incompatibles', async () => {
+    const user = userEvent.setup()
+    classesApi.list.mockResolvedValue([{ ...GYM_CLASS, id: 302, status: 'suspended', enrollments_count: 0 }])
+
+    renderTeacherClassesPage('upcoming')
+    await waitFor(() => expect(shown('BJJ Fundamentos')).toBeGreaterThan(0))
+    expect(shown('Suspendida')).toBeGreaterThan(0)
+    await user.click(screen.getAllByRole('button', { name: 'Abrir acciones' })[0])
+
+    expect(await screen.findByRole('button', { name: 'Reactivar clase' })).toBeEnabled()
+    expect(screen.queryByRole('button', { name: 'Inscribir alumnos' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Cancelar clase' })).not.toBeInTheDocument()
+  })
+
   it('incluye canceladas en proximas y permite reabrirlas sin restaurar reservas', async () => {
     const user = userEvent.setup()
     classesApi.list.mockResolvedValue([{ ...GYM_CLASS, id: 303, status: 'cancelled', enrollments_count: 0 }])

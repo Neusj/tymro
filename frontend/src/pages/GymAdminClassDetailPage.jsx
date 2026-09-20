@@ -90,6 +90,7 @@ export default function GymAdminClassDetailPage() {
 
   const enrollments = gymClass?.enrollments || []
   const activeEnrollments = enrollments.filter((item) => item.status === 'active')
+  const isSuspended = gymClass?.status === 'suspended'
   const enrolledStudentIds = useMemo(() => new Set(enrollments.map((item) => String(item.student))), [enrollments])
   const attendanceByStudent = useMemo(() => {
     const byStudent = {}
@@ -260,7 +261,7 @@ export default function GymAdminClassDetailPage() {
         subtitle={gymClass ? `${gymClass.name} · ${gymClass.branch_name}` : 'Cargando clase...'}
         back={{ to: backTo?.pathname ? `${backTo.pathname}${backTo.search || ''}` : '/gym-admin/classes', label: 'Volver', state: location.state }}
         extra={
-          canManage ? (
+          canManage && !isSuspended ? (
             <div className="flex gap-2">
               <button type="button" onClick={() => setModalOpen(true)} className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white">
                 Inscribir alumno
@@ -330,7 +331,7 @@ export default function GymAdminClassDetailPage() {
           <h2 className="panel-title">Asistencia</h2>
           <button
             type="button"
-            disabled={attendanceSaving || activeEnrollments.length === 0}
+            disabled={isSuspended || attendanceSaving || activeEnrollments.length === 0}
             onClick={() => setAttendanceOpen(true)}
             className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
           >

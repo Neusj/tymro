@@ -371,7 +371,7 @@ def test_by_date_student_uses_existing_visibility_and_mine_rules(api_client, org
     assert all_resp.status_code == 200, all_resp.content
     all_ids = _ids(all_resp.json())
     assert visible.id in all_ids
-    assert suspended.id not in all_ids
+    assert suspended.id in all_ids
     assert f'virtual:{template.id}:{target.isoformat()}' in all_ids
 
     assert mine_resp.status_code == 200, mine_resp.content

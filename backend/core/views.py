@@ -409,10 +409,11 @@ def _can_close_or_cancel(user, gym_class):
 
 
 def _refund_active_enrollments_for_cancelled_class(gym_class):
-    """Al cancelar una clase, cada inscripción activa se cancela y se devuelve la
-    clase consumida al plan del alumno (should_refund_consumption ya es True porque
-    la clase quedó en estado CANCELLED). Devuelve la cantidad de inscripciones
-    afectadas."""
+    """Anula inscripciones activas y devuelve sus consumos al cerrar o suspender.
+
+    El nombre se conserva por compatibilidad interna; ``should_refund_consumption``
+    reconoce tanto CANCELLED como SUSPENDED. Devuelve la cantidad afectada.
+    """
     refunded = 0
     for enrollment in gym_class.enrollments.filter(status='active').select_related('student'):
         enrollment.gym_class = gym_class  # asegura que el refund vea el estado CANCELLED en memoria
@@ -3918,8 +3919,6 @@ class GymClassViewSet(ModelViewSet):
         if _is_student(user):
             mine_param = str(self.request.query_params.get('mine', '')).lower()
             queryset = self.queryset.filter(organization_id=user.organization_id) if user.organization_id else self.queryset.none()
-            # Una clase suspendida no es visible ni reservable para alumnos.
-            queryset = queryset.exclude(status=GymClass.Status.SUSPENDED)
             if mine_param in {'1', 'true', 'yes'}:
                 queryset = queryset.filter(enrollments__student_id=user.id, enrollments__status='active').distinct()
             queryset = self._apply_class_common_filters(
@@ -4466,8 +4465,8 @@ class GymClassViewSet(ModelViewSet):
 
         gym_class.refresh_status_from_schedule(save=True)
 
-        if gym_class.status == GymClass.Status.CANCELLED:
-            raise PermissionDenied('No puedes registrar asistencia en una clase cancelada.')
+        if gym_class.status in [GymClass.Status.CANCELLED, GymClass.Status.SUSPENDED]:
+            raise PermissionDenied('No puedes registrar asistencia en una clase cancelada o suspendida.')
 
         serializer = AttendanceBulkWriteSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -4575,8 +4574,8 @@ class GymClassViewSet(ModelViewSet):
 
         gym_class.refresh_status_from_schedule(save=True)
 
-        if gym_class.status == GymClass.Status.CANCELLED:
-            raise PermissionDenied('No puedes registrar asistencia en una clase cancelada.')
+        if gym_class.status in [GymClass.Status.CANCELLED, GymClass.Status.SUSPENDED]:
+            raise PermissionDenied('No puedes registrar asistencia en una clase cancelada o suspendida.')
 
         try:
             student_id = int(request.data.get('student_id'))
@@ -4691,8 +4690,11 @@ class GymClassViewSet(ModelViewSet):
             raise PermissionDenied('No tienes permisos para cerrar anticipadamente esta clase.')
         if not comment:
             return Response({'detail': 'Debes enviar un comentario o motivo para cerrar anticipadamente.'}, status=status.HTTP_400_BAD_REQUEST)
-        if gym_class.status in [GymClass.Status.CANCELLED, GymClass.Status.COMPLETED, GymClass.Status.COMPLETED_EARLY]:
-            return Response({'detail': 'La clase ya está cerrada.'}, status=status.HTTP_400_BAD_REQUEST)
+        if gym_class.status not in [GymClass.Status.SCHEDULED, GymClass.Status.IN_PROGRESS]:
+            return Response(
+                {'detail': 'Solo puedes cerrar anticipadamente una clase programada o en curso.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         gym_class.status = GymClass.Status.COMPLETED_EARLY
         gym_class.is_active = False
@@ -4721,18 +4723,24 @@ class GymClassViewSet(ModelViewSet):
         reason = str(request.data.get('suspend_reason', '')).strip()
         reactivation_date = request.data.get('reactivation_expected_date') or None
 
-        gym_class.status = GymClass.Status.SUSPENDED
-        gym_class.suspend_reason = reason
-        gym_class.suspended_at = timezone.now()
-        gym_class.suspended_by = user
-        gym_class.reactivation_expected_date = reactivation_date
-        gym_class.is_active = False
-        gym_class.save(update_fields=[
-            'status', 'suspend_reason', 'suspended_at', 'suspended_by',
-            'reactivation_expected_date', 'is_active', 'updated_at',
-        ])
+        affected_students = _active_students_for_class(gym_class)
+        with transaction.atomic():
+            gym_class.status = GymClass.Status.SUSPENDED
+            gym_class.suspend_reason = reason
+            gym_class.suspended_at = timezone.now()
+            gym_class.suspended_by = user
+            gym_class.reactivated_at = None
+            gym_class.reactivated_by = None
+            gym_class.reactivation_expected_date = reactivation_date
+            gym_class.is_active = False
+            gym_class.save(update_fields=[
+                'status', 'suspend_reason', 'suspended_at', 'suspended_by',
+                'reactivated_at', 'reactivated_by', 'reactivation_expected_date',
+                'is_active', 'updated_at',
+            ])
+            _refund_active_enrollments_for_cancelled_class(gym_class)
 
-        self._notify_suspension(gym_class)
+        self._notify_suspension(gym_class, students=affected_students)
         return Response(self.get_serializer(gym_class).data)
 
     @action(detail=True, methods=['post'], url_path='reactivate')
@@ -4757,30 +4765,27 @@ class GymClassViewSet(ModelViewSet):
         new_status = GymClass.Status.IN_PROGRESS if now >= gym_class.start_datetime else GymClass.Status.SCHEDULED
 
         gym_class.status = new_status
-        gym_class.suspend_reason = ''
-        gym_class.suspended_at = None
-        gym_class.suspended_by = None
         gym_class.reactivation_expected_date = None
+        gym_class.reactivated_at = now
+        gym_class.reactivated_by = user
         gym_class.closed_by = None
         gym_class.closed_at = None
         gym_class.closure_comment = ''
         gym_class.is_active = True
         gym_class.save(update_fields=[
-            'status', 'suspend_reason', 'suspended_at', 'suspended_by',
-            'reactivation_expected_date', 'closed_by', 'closed_at',
+            'status', 'reactivation_expected_date', 'reactivated_at', 'reactivated_by',
+            'closed_by', 'closed_at',
             'closure_comment', 'is_active', 'updated_at',
         ])
 
         return Response(self.get_serializer(gym_class).data)
 
-    def _notify_suspension(self, gym_class):
+    def _notify_suspension(self, gym_class, students=None):
         """Avisa por email a los alumnos con inscripción activa. No bloquea la
         suspensión si el envío falla (fail_silently)."""
-        recipients = [
-            enrollment.student.email
-            for enrollment in gym_class.enrollments.filter(status='active').select_related('student')
-            if enrollment.student and enrollment.student.email
-        ]
+        if students is None:
+            students = _active_students_for_class(gym_class)
+        recipients = [student.email for student in students if student and student.email]
         if not recipients:
             return
         when = timezone.localtime(gym_class.start_datetime).strftime('%d/%m %H:%M')

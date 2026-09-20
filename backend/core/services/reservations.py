@@ -421,7 +421,10 @@ def get_enrollment_student_plan(enrollment):
 
 def should_refund_consumption(enrollment, now=None):
     gym_class = enrollment.gym_class
-    if getattr(gym_class, 'status', None) == GymClass.Status.CANCELLED or bool(getattr(gym_class, 'is_cancelled', False)):
+    if getattr(gym_class, 'status', None) in {
+        GymClass.Status.CANCELLED,
+        GymClass.Status.SUSPENDED,
+    } or bool(getattr(gym_class, 'is_cancelled', False)):
         return True
 
     reference_now = now or timezone.now()

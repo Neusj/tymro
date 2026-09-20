@@ -44,6 +44,36 @@ beforeEach(() => {
   })
 })
 
+describe('StudentClassesPage - clases suspendidas', () => {
+  it('muestra Suspendida sin permitir reserva', async () => {
+    const future = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+    classesApi.byDate.mockImplementation((_date, params = {}) => {
+      if (params.status_in?.includes('completed')) {
+        return Promise.resolve([])
+      }
+      return Promise.resolve([{
+        id: 700,
+        name: 'Yoga suspendido',
+        status: 'suspended',
+        start_datetime: future,
+        end_datetime: future,
+        capacity: 10,
+        enrollments_count: 0,
+        branch_name: 'Sede',
+        teacher_name: 'Prof',
+        discipline_name: 'Yoga',
+        reservable: false,
+      }])
+    })
+
+    renderPage('available')
+
+    expect((await screen.findAllByText('Suspendida')).length).toBeGreaterThan(0)
+    expect(screen.getByRole('button', { name: 'Reservar' })).toBeDisabled()
+    expect(enrollmentsApi.create).not.toHaveBeenCalled()
+  })
+})
+
 // R5 — banner de vencimiento: la página lee `show_expiry_banner` del array que YA
 // carga (getMyMemberships) y lo pasa a MembershipExpiryBanner. Nada de umbrales acá:
 // solo se verifica que el flag/mensaje del backend llegan a pantalla.
