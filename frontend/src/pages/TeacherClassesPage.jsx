@@ -243,18 +243,36 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
     setError('')
     setWorking(true)
     try {
-      const students = await classesApi.enrolledStudents(row.id)
+      const resolved = await classesApi.resolveProjection(row.id)
+      const students = await classesApi.enrolledStudents(resolved.id)
       const draft = {}
       students.forEach((item) => {
         draft[item.student_id] = item.attendance_status || 'absent'
       })
       setAttendanceStudents(students)
       setAttendanceMap(draft)
-      setAttendanceClass(row)
+      setAttendanceClass({ ...row, ...resolved, id: resolved.id })
       setAttendanceReadOnly(mode === 'history' || !canOperateClass(row))
       setAttendanceOpen(true)
     } catch (apiError) {
       setError(firstApiError(apiError?.response?.data, 'No se pudo cargar la lista de asistencia.'))
+    } finally {
+      setWorking(false)
+    }
+  }
+
+  const resolveClassRow = async (row) => {
+    const resolved = await classesApi.resolveProjection(row.id)
+    return { ...row, ...resolved, id: resolved.id }
+  }
+
+  const prepareClassAction = async (row, setter) => {
+    setWorking(true)
+    setError('')
+    try {
+      setter(await resolveClassRow(row))
+    } catch (apiError) {
+      setError(firstApiError(apiError?.response?.data, 'No se pudo preparar la clase.'))
     } finally {
       setWorking(false)
     }
@@ -296,10 +314,11 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
     setError('')
     setWorking(true)
     try {
-      const [candidates, enrolled] = await Promise.all([classesApi.enrollableStudents(row.id), classesApi.enrolledStudents(row.id)])
-      setEnrollClass(row)
+      const resolvedRow = await resolveClassRow(row)
+      const [candidates, enrolled] = await Promise.all([classesApi.enrollableStudents(resolvedRow.id), classesApi.enrolledStudents(resolvedRow.id)])
+      setEnrollClass(resolvedRow)
       setEnrollStudents(candidates)
-      setEnrolledClass(row)
+      setEnrolledClass(resolvedRow)
       setEnrolledStudents(enrolled)
       setEnrollSelectedIds([])
       setEnrollSearch('')
@@ -320,10 +339,11 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
     setError('')
     setWorking(true)
     try {
-      const [candidates, enrolled] = await Promise.all([classesApi.enrollableStudents(row.id), classesApi.enrolledStudents(row.id)])
-      setEnrollClass(row)
+      const resolvedRow = await resolveClassRow(row)
+      const [candidates, enrolled] = await Promise.all([classesApi.enrollableStudents(resolvedRow.id), classesApi.enrolledStudents(resolvedRow.id)])
+      setEnrollClass(resolvedRow)
       setEnrollStudents(candidates)
-      setEnrolledClass(row)
+      setEnrolledClass(resolvedRow)
       setEnrolledStudents(enrolled)
       setEnrolledSelectedIds([])
       setEnrolledSearch('')
@@ -480,16 +500,11 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
       setError('Selecciona al menos una clase del conjunto filtrado.')
       return
     }
-    const persistedIds = selectedIds.filter((id) => !String(id).startsWith('virtual:'))
-    if (persistedIds.length === 0) {
-      setError('Las clases proyectadas se podran operar cuando exista la instancia.')
-      return
-    }
-
     setWorking(true)
     try {
+      const resolvedClasses = await Promise.all(selectedIds.map((id) => classesApi.resolveProjection(id)))
       await classesApi.bulkClose({
-        class_ids: persistedIds,
+        class_ids: resolvedClasses.map((item) => item.id),
         action,
         comment,
       })
@@ -552,23 +567,13 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
         hideActionsInDetail: true,
         mobilePrimaryReplacesDetail: true,
         mobilePrimary: (row) =>
-          isVirtualClass(row) ? (
-            <button
-              type="button"
-              disabled
-              className="rounded-lg border border-brand-line px-3 py-2 text-center text-xs font-semibold text-brand-white opacity-60"
-            >
-              Asistencia
-            </button>
-          ) : (
-            <Link
-              to={`/teacher/classes/${row.id}/attendance`}
-              state={classListRouteState}
-              className="block rounded-lg border border-brand-blue/70 bg-brand-blue/15 px-3 py-2 text-center text-xs font-semibold text-brand-white transition hover:border-brand-blue"
-            >
-              Asistencia
-            </Link>
-          ),
+          <Link
+            to={`/teacher/classes/${row.id}/attendance`}
+            state={classListRouteState}
+            className="block rounded-lg border border-brand-blue/70 bg-brand-blue/15 px-3 py-2 text-center text-xs font-semibold text-brand-white transition hover:border-brand-blue"
+          >
+            Asistencia
+          </Link>,
         mobileActionsRender: (row) => {
           const canOperate = canOperateClass(row)
           const isSuspended = row.status === 'suspended'
@@ -586,8 +591,8 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
               {mode === 'upcoming' && canReleaseSubstitution ? (
                 <button
                   type="button"
-                  disabled={working || isVirtual}
-                  onClick={() => setReleasingClass(row)}
+                  disabled={working}
+                  onClick={() => prepareClassAction(row, setReleasingClass)}
                   className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-red hover:text-red-100 disabled:opacity-60"
                 >
                   Dejar de cubrir
@@ -597,16 +602,16 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
                 <>
                   <button
                     type="button"
-                    disabled={working || isVirtual}
-                    onClick={() => setReactivatingClass(row)}
+                    disabled={working}
+                    onClick={() => prepareClassAction(row, setReactivatingClass)}
                     className="w-full rounded-lg border border-emerald-500/50 px-2.5 py-1.5 text-left text-xs text-emerald-200 transition hover:border-emerald-400 disabled:opacity-60"
                   >
                     Reactivar clase
                   </button>
                   <button
                     type="button"
-                    disabled={working || isVirtual}
-                    onClick={() => setClassReasonAction({ row, actionName: 'cancel' })}
+                    disabled={working}
+                    onClick={() => prepareClassAction(row, (resolvedRow) => setClassReasonAction({ row: resolvedRow, actionName: 'cancel' }))}
                     className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 transition hover:bg-brand-red/10 disabled:opacity-60"
                   >
                     Cancelar clase
@@ -616,8 +621,8 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
               {mode === 'upcoming' && isCancelled ? (
                 <button
                   type="button"
-                  disabled={working || isVirtual}
-                  onClick={() => setReactivatingClass(row)}
+                  disabled={working}
+                  onClick={() => prepareClassAction(row, setReactivatingClass)}
                   className="w-full rounded-lg border border-emerald-500/50 px-2.5 py-1.5 text-left text-xs text-emerald-200 transition hover:border-emerald-400 disabled:opacity-60"
                 >
                   Reabrir clase
@@ -627,7 +632,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
                 <>
                   <button
                     type="button"
-                    disabled={!canOperate || working || isVirtual}
+                    disabled={!canOperate || working}
                     onClick={() => openEnrollModal(row)}
                     className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue disabled:opacity-60"
                   >
@@ -635,7 +640,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
                   </button>
                   <button
                     type="button"
-                    disabled={!canOperate || working || isVirtual}
+                    disabled={!canOperate || working}
                     onClick={() => openEnrolledModal(row)}
                     className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue disabled:opacity-60"
                   >
@@ -643,24 +648,24 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
                   </button>
                   <button
                     type="button"
-                    disabled={!canOperate || working || isVirtual}
-                    onClick={() => setSuspendingClass(row)}
+                    disabled={!canOperate || working}
+                    onClick={() => prepareClassAction(row, setSuspendingClass)}
                     className="w-full rounded-lg border border-brand-orange/50 px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-orange disabled:opacity-60"
                   >
                     Suspender clase
                   </button>
                   <button
                     type="button"
-                    disabled={!canOperate || working || isVirtual}
-                    onClick={() => setClassReasonAction({ row, actionName: 'complete_early' })}
+                    disabled={!canOperate || working}
+                    onClick={() => prepareClassAction(row, (resolvedRow) => setClassReasonAction({ row: resolvedRow, actionName: 'complete_early' }))}
                     className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue disabled:opacity-60"
                   >
                     Finalizar (cierre anticipado)
                   </button>
                   <button
                     type="button"
-                    disabled={!canOperate || working || isVirtual}
-                    onClick={() => setClassReasonAction({ row, actionName: 'cancel' })}
+                    disabled={!canOperate || working}
+                    onClick={() => prepareClassAction(row, (resolvedRow) => setClassReasonAction({ row: resolvedRow, actionName: 'cancel' }))}
                     className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 transition hover:bg-brand-red/10 disabled:opacity-60"
                   >
                     Cancelar clase
@@ -704,8 +709,8 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
               {mode === 'upcoming' && canReleaseSubstitution ? (
                 <button
                   type="button"
-                  disabled={working || isVirtual}
-                  onClick={() => setReleasingClass(row)}
+                  disabled={working}
+                  onClick={() => prepareClassAction(row, setReleasingClass)}
                   className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-red hover:text-red-100 disabled:opacity-60"
                 >
                   Dejar de cubrir
@@ -715,16 +720,16 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
                 <>
                   <button
                     type="button"
-                    disabled={working || isVirtual}
-                    onClick={() => setReactivatingClass(row)}
+                    disabled={working}
+                    onClick={() => prepareClassAction(row, setReactivatingClass)}
                     className="w-full rounded-lg border border-emerald-500/50 px-2.5 py-1.5 text-left text-xs text-emerald-200 transition hover:border-emerald-400 disabled:opacity-60"
                   >
                     Reactivar clase
                   </button>
                   <button
                     type="button"
-                    disabled={working || isVirtual}
-                    onClick={() => setClassReasonAction({ row, actionName: 'cancel' })}
+                    disabled={working}
+                    onClick={() => prepareClassAction(row, (resolvedRow) => setClassReasonAction({ row: resolvedRow, actionName: 'cancel' }))}
                     className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 transition hover:bg-brand-red/10 disabled:opacity-60"
                   >
                     Cancelar clase
@@ -734,8 +739,8 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
               {mode === 'upcoming' && isCancelled ? (
                 <button
                   type="button"
-                  disabled={working || isVirtual}
-                  onClick={() => setReactivatingClass(row)}
+                  disabled={working}
+                  onClick={() => prepareClassAction(row, setReactivatingClass)}
                   className="w-full rounded-lg border border-emerald-500/50 px-2.5 py-1.5 text-left text-xs text-emerald-200 transition hover:border-emerald-400 disabled:opacity-60"
                 >
                   Reabrir clase
@@ -745,7 +750,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
                 <>
                   <button
                     type="button"
-                    disabled={!canOperate || working || isVirtual}
+                    disabled={!canOperate || working}
                     onClick={() => openEnrollModal(row)}
                     className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue disabled:opacity-60"
                   >
@@ -753,7 +758,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
                   </button>
                   <button
                     type="button"
-                    disabled={!canOperate || working || isVirtual}
+                    disabled={!canOperate || working}
                     onClick={() => openEnrolledModal(row)}
                     className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue disabled:opacity-60"
                   >
@@ -761,24 +766,24 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
                   </button>
                   <button
                     type="button"
-                    disabled={!canOperate || working || isVirtual}
-                    onClick={() => setSuspendingClass(row)}
+                    disabled={!canOperate || working}
+                    onClick={() => prepareClassAction(row, setSuspendingClass)}
                     className="w-full rounded-lg border border-brand-orange/50 px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-orange disabled:opacity-60"
                   >
                     Suspender clase
                   </button>
                   <button
                     type="button"
-                    disabled={!canOperate || working || isVirtual}
-                    onClick={() => setClassReasonAction({ row, actionName: 'complete_early' })}
+                    disabled={!canOperate || working}
+                    onClick={() => prepareClassAction(row, (resolvedRow) => setClassReasonAction({ row: resolvedRow, actionName: 'complete_early' }))}
                     className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue disabled:opacity-60"
                   >
                     Finalizar (cierre anticipado)
                   </button>
                   <button
                     type="button"
-                    disabled={!canOperate || working || isVirtual}
-                    onClick={() => setClassReasonAction({ row, actionName: 'cancel' })}
+                    disabled={!canOperate || working}
+                    onClick={() => prepareClassAction(row, (resolvedRow) => setClassReasonAction({ row: resolvedRow, actionName: 'cancel' }))}
                     className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 transition hover:bg-brand-red/10 disabled:opacity-60"
                   >
                     Cancelar clase
@@ -868,7 +873,7 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
               <button
                 type="button"
                 disabled={working}
-                onClick={() => setReleasingClass(row)}
+                onClick={() => prepareClassAction(row, setReleasingClass)}
                 className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-red hover:text-red-100 disabled:opacity-60"
               >
                 Dejar de cubrir

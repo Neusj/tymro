@@ -5,6 +5,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('../api/client', () => ({
   classesApi: {
+    resolveProjection: vi.fn(),
     byDate: vi.fn(),
     cancel: vi.fn(),
     completeEarly: vi.fn(),
@@ -27,7 +28,7 @@ vi.mock('../auth/AuthContext', () => ({
 import { classesApi, classTemplatesApi, disciplinesApi, enrollmentsApi } from '../api/client'
 import GymAdminClassesPage from './GymAdminClassesPage'
 
-const PROJECTED_DATE = '2026-09-15'
+const PROJECTED_DATE = '2026-09-25'
 
 // Fila proyectada tal como la devuelve `by_date`: id sintetico `virtual:<serie>:<fecha>`,
 // sin PK real detras.
@@ -80,6 +81,7 @@ async function clickEnroll(user) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  classesApi.resolveProjection.mockImplementation((id) => Promise.resolve({ id }))
   mockRole = 'gym_admin'
   classesApi.byDate.mockResolvedValue([projectedRow])
   classesApi.enrolledStudents.mockResolvedValue([])

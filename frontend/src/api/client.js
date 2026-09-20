@@ -573,6 +573,13 @@ export const studentDiscountConfigApi = {
     const { data } = await api.get(`/organizations/${orgId}/student-discount-config/`)
     return data
   },
+  resolveProjection: async (id) => {
+    if (!String(id || '').startsWith('virtual:')) {
+      return { id }
+    }
+    const { data } = await api.post('/classes/resolve-projection/', { id })
+    return data.gym_class
+  },
   update: async (orgId, payload) => {
     const { data } = await api.put(`/organizations/${orgId}/student-discount-config/`, payload)
     return data

@@ -54,6 +54,7 @@ export default function GymAdminClassDetailPage() {
   const [selectedStudentId, setSelectedStudentId] = useState('')
   const [error, setError] = useState('')
   const [deleting, setDeleting] = useState(null)
+  const [classId, setClassId] = useState(id)
 
   const [attendanceMap, setAttendanceMap] = useState({})
   const [attendanceOpen, setAttendanceOpen] = useState(false)
@@ -68,10 +69,16 @@ export default function GymAdminClassDetailPage() {
 
   const loadData = async () => {
     setLoading(true)
+    setError('')
     try {
-      const [classData, studentsData] = await Promise.all([classesApi.retrieve(id), usersApi.list({ role: studentSubjectRoleParam })])
+      const resolved = await classesApi.resolveProjection(id)
+      const resolvedId = resolved.id
+      const [classData, studentsData] = await Promise.all([classesApi.retrieve(resolvedId), usersApi.list({ role: studentSubjectRoleParam })])
+      setClassId(resolvedId)
       setGymClass(classData)
       setStudents(studentsData)
+    } catch (apiError) {
+      setError(firstApiError(apiError?.response?.data, 'No se pudo cargar el detalle de la clase.'))
     } finally {
       setLoading(false)
     }
@@ -123,7 +130,7 @@ export default function GymAdminClassDetailPage() {
     setHistoryLoading(true)
     setHistoryError('')
     try {
-      const data = await classesApi.getAttendanceHistory(id)
+      const data = await classesApi.getAttendanceHistory(classId)
       setHistory(data)
     } catch (apiError) {
       setHistoryError(firstApiError(apiError?.response?.data, 'No se pudo cargar el historial de correcciones.'))
@@ -150,7 +157,7 @@ export default function GymAdminClassDetailPage() {
         student_id: enrollment.student,
         status: attendanceMap[enrollment.student] || 'absent',
       }))
-      await classesApi.saveAttendance(id, payload)
+      await classesApi.saveAttendance(classId, payload)
       setAttendanceOpen(false)
       setAttendanceSearch('')
       await loadData()
@@ -183,7 +190,7 @@ export default function GymAdminClassDetailPage() {
     setError('')
     try {
       await enrollmentsApi.create({
-        gym_class: Number(id),
+        gym_class: Number(classId),
         student: Number(selectedStudentId),
         status: 'active',
       })
@@ -258,13 +265,15 @@ export default function GymAdminClassDetailPage() {
               <button type="button" onClick={() => setModalOpen(true)} className="rounded-xl bg-brand-blue px-4 py-2 text-sm font-semibold text-white">
                 Inscribir alumno
               </button>
-              <Link to={`/gym-admin/classes/${id}/edit`} state={location.state} className="rounded-xl border border-brand-line px-4 py-2 text-sm font-semibold text-brand-muted">
+              <Link to={`/gym-admin/classes/${classId}/edit`} state={location.state} className="rounded-xl border border-brand-line px-4 py-2 text-sm font-semibold text-brand-muted">
                 Editar
               </Link>
             </div>
           ) : null
         }
       />
+
+      {error ? <p className="rounded-lg border border-brand-red/50 bg-brand-red/10 px-3 py-2 text-sm text-red-200">{error}</p> : null}
 
       <section className="grid gap-4 md:grid-cols-5">
         <article className="card-surface p-4">

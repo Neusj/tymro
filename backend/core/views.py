@@ -3936,6 +3936,50 @@ class GymClassViewSet(ModelViewSet):
     def get_queryset(self):
         return self._get_scoped_class_queryset()
 
+    @action(detail=False, methods=['post'], url_path='resolve-projection')
+    def resolve_projection(self, request):
+        """Materializa una fila de ``by-date`` para que staff opere con una PK real."""
+        virtual_id = str(request.data.get('id') or '').strip()
+        parts = virtual_id.split(':')
+        if len(parts) != 3 or parts[0] != 'virtual':
+            raise ValidationError({'id': 'Referencia de clase proyectada invalida.'})
+
+        target_date = parse_date(parts[2])
+        if target_date is None or parts[2] != target_date.isoformat():
+            raise ValidationError({'id': 'Referencia de clase proyectada invalida.'})
+
+        user = request.user
+        if not (
+            _is_superadmin(user)
+            or roles.is_org_admin(user)
+            or _is_monitor(user)
+            or _is_teacher_eligible_actor(user)
+        ):
+            raise PermissionDenied('No tienes permisos para operar clases proyectadas.')
+
+        try:
+            template_id = int(parts[1])
+        except (TypeError, ValueError):
+            raise ValidationError({'id': 'Referencia de clase proyectada invalida.'})
+
+        # El mismo scope que construye la fila virtual impide resolver una plantilla ajena
+        # o una clase que el profesor no tenga asignada.
+        template = self._virtual_template_queryset(target_date).filter(pk=template_id).first()
+        if template is None:
+            raise NotFound('Clase proyectada no encontrada.')
+
+        gym_class, created = _materialize_template_instance(
+            organization_id=template.organization_id,
+            class_template_id=template.id,
+            raw_date=target_date.isoformat(),
+            enforce_reservation_window=False,
+        )
+        serializer = GymClassSerializer(gym_class, context={'request': request})
+        return Response(
+            {'gym_class': serializer.data, 'created': created},
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
     def _class_is_reservable(self, gym_class):
         active_count = getattr(gym_class, 'active_enrollments_count', None)
         if active_count is None:
@@ -4882,12 +4926,14 @@ def _parse_weekdays_param(raw):
     return sorted(days)
 
 
-def _materialize_template_instance(*, organization_id, class_template_id, raw_date):
+def _materialize_template_instance(
+    *, organization_id, class_template_id, raw_date, enforce_reservation_window=True
+):
     """Hace EXISTIR la clase de una serie para una fecha puntual. Devuelve `(gym_class, creada)`.
 
     FUENTE ÚNICA de la materialización on-demand: la comparten la reserva del alumno
-    (`POST /api/enrollments/` con `class_template_id` + `date`) y la materialización del
-    admin (`POST /api/class-templates/{id}/materialize/`). Que sea una sola función es a
+    (`POST /api/enrollments/` con `class_template_id` + `date`) y el resolver operativo
+    de staff (`POST /api/classes/resolve-projection/`). Que sea una sola función es a
     propósito: son el MISMO acto de negocio —hacer existir una clase proyectada— y si
     divergieran, el admin podría crear clases que el alumno no puede reservar, o al revés.
 
@@ -4924,13 +4970,14 @@ def _materialize_template_instance(*, organization_id, class_template_id, raw_da
     if target_date is None or str(raw_date) != target_date.isoformat():
         raise ValidationError({'date': 'Formato invalido. Usa YYYY-MM-DD.'})
 
-    today = timezone.localdate()
-    if target_date < today:
-        raise ValidationError({'date': 'No puedes reservar clases pasadas.'})
-    try:
-        validate_reservation_window_for_date(template.organization, target_date, today=today)
-    except ReservationRuleError as exc:
-        raise ValidationError(reservation_error_payload(exc))
+    if enforce_reservation_window:
+        today = timezone.localdate()
+        if target_date < today:
+            raise ValidationError({'date': 'No puedes reservar clases pasadas.'})
+        try:
+            validate_reservation_window_for_date(template.organization, target_date, today=today)
+        except ReservationRuleError as exc:
+            raise ValidationError(reservation_error_payload(exc))
 
     if target_date.weekday() != template.weekday:
         raise ValidationError({'date': 'La fecha no corresponde al dia de la plantilla.'})

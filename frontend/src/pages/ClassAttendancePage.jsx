@@ -57,6 +57,7 @@ export default function ClassAttendancePage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [enrollmentModalOpen, setEnrollmentModalOpen] = useState(false)
+  const [classId, setClassId] = useState(id)
 
   const isTeacherRoute = location.pathname.startsWith('/teacher/')
   const backTo = location.state?.classListBackTo
@@ -68,15 +69,18 @@ export default function ClassAttendancePage() {
     setLoading(true)
     setError('')
     try {
+      const resolved = await classesApi.resolveProjection(id)
+      const resolvedId = resolved.id
       const [classData, roster] = await Promise.all([
-        classesApi.retrieve(id),
-        classesApi.enrolledStudents(id),
+        classesApi.retrieve(resolvedId),
+        classesApi.enrolledStudents(resolvedId),
       ])
       const draft = {}
       roster.forEach((student) => {
         draft[student.student_id] = student.attendance_status || 'absent'
       })
       setGymClass(classData)
+      setClassId(resolvedId)
       setStudents(roster)
       setAttendanceMap(draft)
     } catch (apiError) {
@@ -117,7 +121,7 @@ export default function ClassAttendancePage() {
     }))
 
     try {
-      const saved = await classesApi.toggleAttendance(id, {
+      const saved = await classesApi.toggleAttendance(classId, {
         student_id: student.student_id,
         status: nextStatus,
       })

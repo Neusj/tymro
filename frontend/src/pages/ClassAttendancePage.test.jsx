@@ -5,6 +5,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('../api/client', () => ({
   classesApi: {
+    resolveProjection: vi.fn(),
     retrieve: vi.fn(),
     enrolledStudents: vi.fn(),
     enrollableStudents: vi.fn(),
@@ -66,6 +67,7 @@ function renderPage() {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  classesApi.resolveProjection.mockImplementation((id) => Promise.resolve({ id }))
   classesApi.retrieve.mockResolvedValue(GYM_CLASS)
   classesApi.enrolledStudents.mockResolvedValue(STUDENTS)
   classesApi.enrollableStudents.mockResolvedValue([])
@@ -73,6 +75,39 @@ beforeEach(() => {
 })
 
 describe('ClassAttendancePage - boton de asistencia', () => {
+  it('materializa una proyeccion y usa exclusivamente la PK real', async () => {
+    classesApi.resolveProjection.mockResolvedValue({ ...GYM_CLASS, id: 501 })
+    render(
+      <MemoryRouter initialEntries={['/teacher/classes/virtual:77:2026-10-20/attendance']}>
+        <Routes>
+          <Route path="/teacher/classes/:id/attendance" element={<ClassAttendancePage />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    await screen.findByText('Ana Perez')
+
+    expect(classesApi.resolveProjection).toHaveBeenCalledWith('virtual:77:2026-10-20')
+    expect(classesApi.retrieve).toHaveBeenCalledWith(501)
+    expect(classesApi.enrolledStudents).toHaveBeenCalledWith(501)
+    expect(classesApi.retrieve).not.toHaveBeenCalledWith(expect.stringContaining('virtual:'))
+  })
+
+  it('muestra el error de materializacion sin consultar endpoints con el ID virtual', async () => {
+    classesApi.resolveProjection.mockRejectedValue({ response: { data: { detail: 'No se pudo materializar.' } } })
+    render(
+      <MemoryRouter initialEntries={['/teacher/classes/virtual:77:2026-10-20/attendance']}>
+        <Routes>
+          <Route path="/teacher/classes/:id/attendance" element={<ClassAttendancePage />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('No se pudo materializar.')).toBeInTheDocument()
+    expect(classesApi.retrieve).not.toHaveBeenCalled()
+    expect(classesApi.enrolledStudents).not.toHaveBeenCalled()
+  })
+
   it('permite confirmar y quitar asistencia desde el boton rapido', async () => {
     const user = userEvent.setup()
     renderPage()

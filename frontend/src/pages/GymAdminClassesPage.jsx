@@ -123,6 +123,7 @@ export default function GymAdminClassesPage({ embedded = false, onOpenSchedule }
   const [deleting, setDeleting] = useState(null)
   const [singleAction, setSingleAction] = useState(null)
   const [reactivating, setReactivating] = useState(null)
+  const [suspending, setSuspending] = useState(null)
   const [enrollmentClass, setEnrollmentClass] = useState(null)
   const [enrollmentInitialView, setEnrollmentInitialView] = useState('enroll')
   const [selectedIds, setSelectedIds] = useState([])
@@ -214,15 +215,11 @@ export default function GymAdminClassesPage({ embedded = false, onOpenSchedule }
       setError('Selecciona al menos una clase del conjunto filtrado.')
       return
     }
-    const persistedIds = selectedIds.filter((id) => !String(id).startsWith('virtual:'))
-    if (persistedIds.length === 0) {
-      setError('Las clases proyectadas se podran operar cuando exista la instancia.')
-      return
-    }
     setWorking(true)
     try {
+      const resolvedClasses = await Promise.all(selectedIds.map((id) => classesApi.resolveProjection(id)))
       await classesApi.bulkClose({
-        class_ids: persistedIds,
+        class_ids: resolvedClasses.map((item) => item.id),
         action,
         comment,
       })
@@ -237,12 +234,26 @@ export default function GymAdminClassesPage({ embedded = false, onOpenSchedule }
     }
   }
 
-  const requestCloseSingleClass = (gymClass, actionName) => {
-    if (isVirtualClass(gymClass)) {
-      setError('Las clases proyectadas se podran operar cuando exista la instancia.')
-      return
+  const resolveClassRow = async (row) => {
+    const resolved = await classesApi.resolveProjection(row.id)
+    return { ...row, ...resolved, id: resolved.id }
+  }
+
+  const prepareClassAction = async (row, setter) => {
+    setError('')
+    setWorking(true)
+    try {
+      setter(await resolveClassRow(row))
+    } catch (apiError) {
+      const detail = apiError?.response?.data
+      setError(detail?.detail || 'No se pudo preparar la clase.')
+    } finally {
+      setWorking(false)
     }
-    setSingleAction({ gymClass, actionName })
+  }
+
+  const requestCloseSingleClass = (gymClass, actionName) => {
+    prepareClassAction(gymClass, (resolved) => setSingleAction({ gymClass: resolved, actionName }))
   }
 
   const openEnrollmentModal = (gymClass, initialView = 'enroll') => {
@@ -300,6 +311,24 @@ export default function GymAdminClassesPage({ embedded = false, onOpenSchedule }
     }
   }
 
+  const suspendClass = async (reason) => {
+    if (!suspending?.id) {
+      return
+    }
+    setError('')
+    setWorking(true)
+    try {
+      await classesApi.suspend(suspending.id, { suspend_reason: reason.trim() })
+      setSuspending(null)
+      await loadData()
+    } catch (apiError) {
+      const detail = apiError?.response?.data
+      setError(detail?.detail || 'No se pudo suspender la clase.')
+    } finally {
+      setWorking(false)
+    }
+  }
+
   const columns = useMemo(
     () => [
       { key: 'name', label: 'Clase' },
@@ -344,18 +373,15 @@ export default function GymAdminClassesPage({ embedded = false, onOpenSchedule }
         sortable: false,
         hideActionsInDetail: true,
         mobilePrimaryReplacesDetail: true,
-        mobilePrimary: (row) =>
-          isVirtualClass(row) ? (
-            null
-          ) : (
-            <Link
-              to={`/gym-admin/classes/${row.id}/attendance`}
-              state={classListRouteState}
-              className="block rounded-lg border border-brand-blue/70 bg-brand-blue/15 px-3 py-2 text-center text-xs font-semibold text-brand-white transition hover:border-brand-blue"
-            >
-              Asistencia
-            </Link>
-          ),
+        mobilePrimary: (row) => (
+          <Link
+            to={`/gym-admin/classes/${row.id}/attendance`}
+            state={classListRouteState}
+            className="block rounded-lg border border-brand-blue/70 bg-brand-blue/15 px-3 py-2 text-center text-xs font-semibold text-brand-white transition hover:border-brand-blue"
+          >
+            Asistencia
+          </Link>
+        ),
         mobileActionsRender: (row) => {
           const canClose = !['completed', 'cancelled', 'completed_early'].includes(row.status)
           const canReopen = row.status === 'cancelled'
@@ -365,6 +391,13 @@ export default function GymAdminClassesPage({ embedded = false, onOpenSchedule }
           if (isVirtual) {
             return canManage ? (
               <>
+                <Link
+                  to={`/gym-admin/classes/${row.id}`}
+                  state={classListRouteState}
+                  className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue"
+                >
+                  Detalle
+                </Link>
                 <button
                   type="button"
                   disabled={enrollmentDisabled || working}
@@ -373,9 +406,8 @@ export default function GymAdminClassesPage({ embedded = false, onOpenSchedule }
                 >
                   Inscribir alumnos
                 </button>
-                <p className="rounded-lg border border-brand-line bg-black/20 px-2.5 py-2 text-xs text-brand-muted">
-                  Clase proyectada: se crea al abrir la inscripcion.
-                </p>
+                <button type="button" disabled={working} onClick={() => prepareClassAction(row, setSuspending)} className="w-full rounded-lg border border-brand-orange/50 px-2.5 py-1.5 text-left text-xs text-brand-white disabled:opacity-60">Suspender clase</button>
+                <button type="button" disabled={working} onClick={() => requestCloseSingleClass(row, 'cancel')} className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 disabled:opacity-60">Cancelar clase</button>
               </>
             ) : (
               <p className="rounded-lg border border-brand-line bg-black/20 px-2.5 py-2 text-xs text-brand-muted">
@@ -393,6 +425,7 @@ export default function GymAdminClassesPage({ embedded = false, onOpenSchedule }
               >
                 Cancelar clase
               </button>
+              <button type="button" disabled={!canClose || working} onClick={() => prepareClassAction(row, setSuspending)} className="w-full rounded-lg border border-brand-orange/50 px-2.5 py-1.5 text-left text-xs text-brand-white disabled:opacity-60">Suspender clase</button>
               <button
                 type="button"
                 disabled={enrollmentDisabled || working}
@@ -465,6 +498,13 @@ export default function GymAdminClassesPage({ embedded = false, onOpenSchedule }
           if (isVirtual) {
             return canManage ? (
               <>
+                <Link
+                  to={`/gym-admin/classes/${row.id}`}
+                  state={classListRouteState}
+                  className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue"
+                >
+                  Detalle
+                </Link>
                 <button
                   type="button"
                   disabled={enrollmentDisabled || working}
@@ -473,9 +513,8 @@ export default function GymAdminClassesPage({ embedded = false, onOpenSchedule }
                 >
                   Inscribir alumnos
                 </button>
-                <p className="rounded-lg border border-brand-line bg-black/20 px-2.5 py-2 text-xs text-brand-muted">
-                  Clase proyectada: se crea al abrir la inscripcion.
-                </p>
+                <button type="button" disabled={working} onClick={() => prepareClassAction(row, setSuspending)} className="w-full rounded-lg border border-brand-orange/50 px-2.5 py-1.5 text-left text-xs text-brand-white disabled:opacity-60">Suspender clase</button>
+                <button type="button" disabled={working} onClick={() => requestCloseSingleClass(row, 'cancel')} className="w-full rounded-lg border border-brand-red/40 px-2.5 py-1.5 text-left text-xs text-red-200 disabled:opacity-60">Cancelar clase</button>
               </>
             ) : (
               <p className="rounded-lg border border-brand-line bg-black/20 px-2.5 py-2 text-xs text-brand-muted">
@@ -502,6 +541,7 @@ export default function GymAdminClassesPage({ embedded = false, onOpenSchedule }
                   >
                     Cancelar clase
                   </button>
+                  <button type="button" disabled={!canClose || working} onClick={() => prepareClassAction(row, setSuspending)} className="w-full rounded-lg border border-brand-orange/50 px-2.5 py-1.5 text-left text-xs text-brand-white disabled:opacity-60">Suspender clase</button>
                   <button
                     type="button"
                     disabled={enrollmentDisabled || working}
@@ -719,6 +759,23 @@ export default function GymAdminClassesPage({ embedded = false, onOpenSchedule }
           }
         }}
         onConfirm={reactivateClass}
+      />
+
+      <ConfirmWithReasonDialog
+        open={Boolean(suspending)}
+        title="Suspender clase"
+        description={`Se suspendera ${suspending?.name || 'esta clase'} y podra reactivarse mas adelante.`}
+        reasonLabel="Motivo de suspension (opcional)"
+        reasonRequired={false}
+        confirmLabel="Suspender clase"
+        variant="warning"
+        loading={working}
+        onCancel={() => {
+          if (!working) {
+            setSuspending(null)
+          }
+        }}
+        onConfirm={suspendClass}
       />
 
       <ClassEnrollmentModal

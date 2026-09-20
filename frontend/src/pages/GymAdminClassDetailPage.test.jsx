@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 // de asistencia. Los mockeamos para controlar el roster y las respuestas del backend.
 vi.mock('../api/client', () => ({
   classesApi: {
+    resolveProjection: vi.fn(),
     retrieve: vi.fn(),
     saveAttendance: vi.fn(),
     getAttendanceHistory: vi.fn(),
@@ -71,6 +72,7 @@ async function openAttendanceModal(user) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  classesApi.resolveProjection.mockImplementation((id) => Promise.resolve({ id }))
   classesApi.retrieve.mockResolvedValue(gymClassFixture())
   usersApi.list.mockResolvedValue([])
   classesApi.saveAttendance.mockResolvedValue([])
