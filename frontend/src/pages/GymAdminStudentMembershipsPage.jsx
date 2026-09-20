@@ -28,6 +28,7 @@ const editInitialForm = {
   enrollment_fee_paid_at: '',
   enrollment_fee_due_at: '',
   is_active: true,
+  payment_method: '',
   reason: '',
 }
 
@@ -178,6 +179,7 @@ export default function GymAdminStudentMembershipsPage() {
       enrollment_fee_paid_at: asDateTimeInput(membership.enrollment_fee_paid_at),
       enrollment_fee_due_at: asDateInput(membership.enrollment_fee_due_at),
       is_active: Boolean(membership.is_active),
+      payment_method: membership.payment_method || '',
       reason: '',
     })
     setChangeLog([])
@@ -219,6 +221,9 @@ export default function GymAdminStudentMembershipsPage() {
         enrollment_fee_due_at: editForm.enrollment_fee_due_at || null,
         is_active: Boolean(editForm.is_active),
         reason: editForm.reason.trim(),
+      }
+      if (editing.payment_method_editable) {
+        payload.payment_method = editForm.payment_method
       }
       await updatePlanMembership(editing.plan, editing.id, payload)
       setNotice(`Membresia actualizada para ${studentName(student)}.`)
@@ -556,6 +561,31 @@ export default function GymAdminStudentMembershipsPage() {
               />
               <span>Membresia activa</span>
             </label>
+            {editing?.payment_method ? (
+              <label className="min-w-0 space-y-1 text-sm">
+                <span>Tipo de pago</span>
+                <select
+                  disabled={working || !editing.payment_method_editable}
+                  value={editForm.payment_method}
+                  onChange={(event) => setEditForm((prev) => ({ ...prev, payment_method: event.target.value }))}
+                  className="w-full min-w-0 max-w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2 disabled:opacity-60"
+                >
+                  {editing.payment_method_editable ? (
+                    <>
+                      <option value="cash">Efectivo</option>
+                      <option value="transfer">Transferencia</option>
+                      <option value="card">Tarjeta</option>
+                      <option value="check">Cheque</option>
+                    </>
+                  ) : (
+                    <option value="mercadopago">Mercado Pago</option>
+                  )}
+                </select>
+                {!editing.payment_method_editable ? (
+                  <span className="block text-xs text-brand-muted">Los pagos de Mercado Pago no se pueden modificar.</span>
+                ) : null}
+              </label>
+            ) : null}
             <label className="min-w-0 space-y-1 text-sm md:col-span-2">
               <span>Motivo del cambio</span>
               <textarea

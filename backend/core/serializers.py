@@ -2349,6 +2349,9 @@ class StudentPlanSerializer(serializers.ModelSerializer):
     show_expiry_banner = serializers.SerializerMethodField()
     enrollment_fee_status = serializers.SerializerMethodField()
     payment_status = serializers.SerializerMethodField()
+    payment_method = serializers.SerializerMethodField()
+    payment_method_label = serializers.SerializerMethodField()
+    payment_method_editable = serializers.SerializerMethodField()
     # `line_items`/`line_items_total` (#12): igual que `payment_status` arriba, es dato
     # financiero y hereda los mismos lectores — el monitor queda afuera por el check INLINE
     # de `memberships` (views.py ~3721-3722) y por el scope de rol del resto de superficies,
@@ -2388,6 +2391,9 @@ class StudentPlanSerializer(serializers.ModelSerializer):
             'enrollment_fee_due_at',
             'enrollment_fee_status',
             'payment_status',
+            'payment_method',
+            'payment_method_label',
+            'payment_method_editable',
             'line_items',
             'line_items_total',
             'active_freeze',
@@ -2407,6 +2413,44 @@ class StudentPlanSerializer(serializers.ModelSerializer):
         if getattr(obj, 'unlimited_classes', False):
             return None
         return max((obj.total_classes or 0) - (obj.classes_used or 0), 0)
+
+    def _payment_method(self, obj):
+        cache_key = getattr(obj, 'pk', None)
+        if not hasattr(self, '_payment_method_by_membership'):
+            self._payment_method_by_membership = {}
+        if cache_key not in self._payment_method_by_membership:
+            provider_payment = next((
+                transaction for transaction in obj.origin_transactions.all()
+                if transaction.status == PaymentTransaction.STATUS_APPROVED
+                and transaction.organization_id == obj.organization_id
+                and (transaction.plan_amount or 0) > 0
+            ), None)
+            if provider_payment:
+                value = ('mercadopago', 'Mercado Pago', False)
+            else:
+                manual_payment = next((
+                    payment for payment in obj.manual_payments.all()
+                    if payment.organization_id == obj.organization_id
+                ), None)
+                if manual_payment:
+                    value = (
+                        manual_payment.method,
+                        manual_payment.get_method_display() if manual_payment.method else 'Sin registrar',
+                        True,
+                    )
+                else:
+                    value = (None, None, False)
+            self._payment_method_by_membership[cache_key] = value
+        return self._payment_method_by_membership[cache_key]
+
+    def get_payment_method(self, obj):
+        return self._payment_method(obj)[0]
+
+    def get_payment_method_label(self, obj):
+        return self._payment_method(obj)[1]
+
+    def get_payment_method_editable(self, obj):
+        return self._payment_method(obj)[2]
 
     def get_enrollment_fee_status(self, obj):
         """PINTA desde la fuente única (8.4), no decide: `self._state(obj).enrollment_fee_status`
@@ -2682,6 +2726,7 @@ class StudentPlanAdminUpdateSerializer(serializers.Serializer):
     enrollment_fee_paid_at = serializers.DateTimeField(required=False, allow_null=True)
     enrollment_fee_due_at = serializers.DateField(required=False, allow_null=True)
     is_active = serializers.BooleanField(required=False)
+    payment_method = serializers.ChoiceField(choices=ManualPayment.METHOD_CHOICES, required=False)
     reason = serializers.CharField(max_length=500, trim_whitespace=True)
 
     EDITABLE_FIELDS = {
@@ -2706,6 +2751,8 @@ class StudentPlanAdminUpdateSerializer(serializers.Serializer):
     def validate(self, attrs):
         instance = self.context.get('instance')
         touched = self.EDITABLE_FIELDS.intersection(attrs.keys())
+        if 'payment_method' in attrs:
+            touched.add('payment_method')
         if not touched:
             raise serializers.ValidationError({'detail': 'No hay campos de membresía para actualizar.'})
 

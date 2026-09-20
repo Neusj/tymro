@@ -3,7 +3,7 @@ from datetime import timedelta
 import pytest
 from django.utils import timezone
 
-from core.models import Plan, StudentPlan, StudentPlanChangeLog
+from core.models import ManualPayment, PaymentTransaction, Plan, StudentPlan, StudentPlanChangeLog
 
 pytestmark = pytest.mark.django_db
 
@@ -120,3 +120,61 @@ def test_membership_update_rejects_used_classes_over_total(api_client, make_orga
     assert membership.classes_used == 2
     assert not StudentPlanChangeLog.objects.filter(student_plan=membership).exists()
 
+
+def test_gym_admin_changes_manual_payment_method_and_audits_it(api_client, make_organization, make_user):
+    org = make_organization()
+    admin = make_user('admin-payment-method', organization=org, role='gym_admin')
+    student = make_user('student-payment-method', organization=org, role='student')
+    plan = _plan(org)
+    membership = _membership(student, plan)
+    payment = ManualPayment.objects.create(
+        organization=org,
+        student_plan=membership,
+        amount=30000,
+        method=ManualPayment.METHOD_TRANSFER,
+        recorded_by=admin,
+    )
+    api_client.force_authenticate(admin)
+
+    response = api_client.patch(
+        f'/api/plans/{plan.id}/memberships/{membership.id}/edit/',
+        {'payment_method': ManualPayment.METHOD_CASH, 'reason': 'Era efectivo'},
+        format='json',
+    )
+
+    assert response.status_code == 200, response.content
+    payment.refresh_from_db()
+    assert payment.method == ManualPayment.METHOD_CASH
+    assert response.data['payment_method'] == ManualPayment.METHOD_CASH
+    log = StudentPlanChangeLog.objects.get(student_plan=membership, field='payment_method')
+    assert log.old_value == ManualPayment.METHOD_TRANSFER
+    assert log.new_value == ManualPayment.METHOD_CASH
+    assert log.reason == 'Era efectivo'
+
+
+def test_gym_admin_cannot_change_mercadopago_method(api_client, make_organization, make_user):
+    org = make_organization()
+    admin = make_user('admin-mp-method', organization=org, role='gym_admin')
+    student = make_user('student-mp-method', organization=org, role='student')
+    plan = _plan(org)
+    membership = _membership(student, plan)
+    PaymentTransaction.objects.create(
+        organization=org,
+        user=student,
+        plan=plan,
+        student_plan=membership,
+        amount=30000,
+        plan_amount=30000,
+        status=PaymentTransaction.STATUS_APPROVED,
+    )
+    api_client.force_authenticate(admin)
+
+    response = api_client.patch(
+        f'/api/plans/{plan.id}/memberships/{membership.id}/edit/',
+        {'payment_method': ManualPayment.METHOD_CASH, 'reason': 'Intento de cambio'},
+        format='json',
+    )
+
+    assert response.status_code == 400, response.content
+    assert 'Mercado Pago' in str(response.data['payment_method'])
+    assert not StudentPlanChangeLog.objects.filter(student_plan=membership).exists()

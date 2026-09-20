@@ -44,6 +44,8 @@ from .models import (
     Enrollment,
     GymClass,
     Holiday,
+    ManualPayment,
+    PaymentTransaction,
     Plan,
     PersonalizedClassSession,
     Organization,
@@ -6755,6 +6757,33 @@ class MembershipPlanViewSet(ModelViewSet):
             editable_fields = StudentPlanAdminUpdateSerializer.EDITABLE_FIELDS
             changes = []
 
+            payment_method = validated.get('payment_method')
+            manual_payment = None
+            if payment_method is not None:
+                has_mercadopago_payment = PaymentTransaction.objects.select_for_update().filter(
+                    student_plan=membership,
+                    organization_id=membership.organization_id,
+                    status=PaymentTransaction.STATUS_APPROVED,
+                    plan_amount__gt=0,
+                ).exists()
+                if has_mercadopago_payment:
+                    raise ValidationError({
+                        'payment_method': 'Los pagos realizados por Mercado Pago no se pueden modificar.'
+                    })
+                manual_payment = (
+                    ManualPayment.objects.select_for_update()
+                    .filter(
+                        student_plan=membership,
+                        organization_id=membership.organization_id,
+                    )
+                    .order_by('-recorded_at', '-id')
+                    .first()
+                )
+                if manual_payment is None:
+                    raise ValidationError({
+                        'payment_method': 'Esta membresía no tiene un pago manual para modificar.'
+                    })
+
             for field in editable_fields:
                 if field not in validated:
                     continue
@@ -6780,6 +6809,21 @@ class MembershipPlanViewSet(ModelViewSet):
                     )
                     for field, old_value, new_value in changes
                 ])
+
+            if manual_payment is not None and manual_payment.method != payment_method:
+                old_method = manual_payment.method
+                manual_payment.method = payment_method
+                manual_payment.full_clean()
+                manual_payment.save(update_fields=['method', 'updated_at'])
+                StudentPlanChangeLog.objects.create(
+                    student_plan=membership,
+                    organization=membership.organization,
+                    changed_by=user if getattr(user, 'is_authenticated', False) else None,
+                    field='payment_method',
+                    old_value=old_method,
+                    new_value=payment_method,
+                    reason=reason,
+                )
 
         membership = (
             StudentPlan.objects.select_related('user', 'plan')
