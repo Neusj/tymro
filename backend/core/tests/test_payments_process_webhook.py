@@ -2,7 +2,7 @@ from decimal import Decimal
 
 import pytest
 
-from core.models import Plan, PaymentTransaction, StudentPlan
+from core.models import IndividualConsultation, Plan, PaymentTransaction, StudentPlan
 from core.services import payments
 from core.services.providers.base import PaymentStatus
 
@@ -57,6 +57,30 @@ def test_idempotent_double_processing_creates_one_plan(scenario):
     tx.refresh_from_db()
     assert tx.processed_at == first_processed            # no se re-procesó
     assert StudentPlan.objects.filter(user=student, is_active=True).count() == 1   # un solo plan
+
+
+def test_approved_consultation_purchase_creates_one_consultation(make_organization, make_user):
+    org = make_organization()
+    payments.connect_callback(code='C', state=payments._sign_state(org.id))
+    student = make_user('consult-student', organization=org, role='student')
+    professional = make_user('consult-pro', organization=org, role='teacher')
+    plan = Plan.objects.create(
+        organization=org, name='Nutrición', plan_type=Plan.PlanType.CONSULTATION,
+        total_classes=1, duration_days=90, price=30000, consultation_duration_minutes=60,
+        consultation_professional=professional,
+    )
+    tx, _ = payments.create_checkout(organization=org, user=student, plan=plan)
+    from core.services.providers import get_payment_provider
+    provider = get_payment_provider()
+    provider.queue_payment(external_reference=str(tx.id), status=PaymentStatus.APPROVED,
+                           amount=Decimal('30000'), provider_payment_id='PAYCONSULT')
+    payments.process_payment_notification(tx_id=str(tx.id), provider_payment_id='PAYCONSULT')
+    payments.process_payment_notification(tx_id=str(tx.id), provider_payment_id='PAYCONSULT')
+    consultation = IndividualConsultation.objects.get(payment_transaction=tx)
+    assert consultation.student_id == student.id
+    assert consultation.professional_id == professional.id
+    assert consultation.status == IndividualConsultation.Status.AVAILABLE
+    assert IndividualConsultation.objects.filter(payment_transaction=tx).count() == 1
 
 
 def test_rejected_payment_does_not_activate(scenario):

@@ -9,6 +9,7 @@ const PLAN_TYPE_LABEL = {
   pack: 'Pack',
   single_class: 'Clase suelta',
   personalized: 'Clases personalizadas',
+  consultation: 'Consulta individual',
 }
 
 // Un plan es "comprable" si es público, activo y no es trial ni giftcard.
@@ -28,7 +29,7 @@ function planPricing(plan) {
 function PlanCard({ plan, onPay, paying }) {
   const { price, discount, discountAmount, final, source } = planPricing(plan)
   const typeLabel = PLAN_TYPE_LABEL[plan.plan_type] || plan.plan_type
-  const classesLabel = plan.unlimited_classes ? 'Clases ilimitadas' : `${plan.total_classes} clases`
+  const classesLabel = plan.plan_type === 'consultation' ? `Consulta · ${plan.consultation_duration_minutes || 60} min` : plan.unlimited_classes ? 'Clases ilimitadas' : `${plan.total_classes} clases`
   const isStudentDiscount = source === 'student_benefit'
 
   return (

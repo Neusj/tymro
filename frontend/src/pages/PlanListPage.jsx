@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { createPlan, getPlans, organizationsApi, removePlan, teacherPaymentConfigApi, updatePlan } from '../api/client'
+import { createPlan, getPlans, organizationsApi, removePlan, teacherPaymentConfigApi, updatePlan, usersApi } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import ConfirmDialog from '../components/ConfirmDialog'
 import DashboardHeader from '../components/DashboardHeader'
@@ -20,6 +20,8 @@ const initialForm = {
   is_public: true,
   is_active: true,
   organization: '',
+  consultation_duration_minutes: 60,
+  consultation_professional: '',
 }
 
 const planTypeLabel = {
@@ -29,6 +31,7 @@ const planTypeLabel = {
   trial: 'Trial',
   giftcard: 'Giftcard',
   personalized: 'Clases personalizadas',
+  consultation: 'Consulta individual',
 }
 
 function firstApiError(detail, fallback) {
@@ -77,6 +80,7 @@ export default function PlanListPage({
   const { user } = useAuth()
   const [plans, setPlans] = useState([])
   const [organizations, setOrganizations] = useState([])
+  const [professionals, setProfessionals] = useState([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -101,6 +105,8 @@ export default function PlanListPage({
     try {
       const data = await getPlans()
       setPlans(data)
+      const people = await usersApi.list()
+      setProfessionals((Array.isArray(people) ? people : people?.results || []).filter((person) => ['teacher', 'gym_admin'].includes(person.role)))
       if (user?.role === 'superadmin') {
         const orgs = await organizationsApi.list()
         setOrganizations(orgs)
@@ -161,6 +167,8 @@ export default function PlanListPage({
       duration_days: Number(form.duration_days),
       price: Number(form.price),
       discount_percentage: Number(form.discount_percentage),
+      consultation_duration_minutes: Number(form.consultation_duration_minutes || 60),
+      consultation_professional: form.plan_type === 'consultation' ? Number(form.consultation_professional) : null,
       is_public: toBool(form.is_public, true),
       is_active: toBool(form.is_active, true),
     }
@@ -241,6 +249,8 @@ export default function PlanListPage({
       is_public: toBool(plan.is_public, true),
       is_active: toBool(plan.is_active, true),
       organization: plan.organization || '',
+      consultation_duration_minutes: plan.consultation_duration_minutes ?? 60,
+      consultation_professional: plan.consultation_professional || '',
     })
     setOpen(true)
   }
@@ -387,8 +397,22 @@ export default function PlanListPage({
               <option value="trial">Trial</option>
               <option value="giftcard">Giftcard</option>
               <option value="personalized">Clases personalizadas</option>
+              <option value="consultation">Consulta individual</option>
             </select>
           </label>
+          {form.plan_type === 'consultation' ? <>
+            <label className="space-y-1 text-sm">
+              <span>Profesional</span>
+              <select required value={form.consultation_professional} onChange={(event) => setForm((prev) => ({ ...prev, consultation_professional: event.target.value }))} className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2">
+                <option value="">Selecciona profesional</option>
+                {professionals.map((person) => <option key={person.id} value={person.id}>{`${person.first_name || ''} ${person.last_name || ''}`.trim() || person.email}</option>)}
+              </select>
+            </label>
+            <label className="space-y-1 text-sm">
+              <span>Duración esperada (minutos)</span>
+              <input required type="number" min="1" value={form.consultation_duration_minutes} onChange={(event) => setForm((prev) => ({ ...prev, consultation_duration_minutes: event.target.value }))} className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2" />
+            </label>
+          </> : null}
           <label className="space-y-1 text-sm">
             <span>Clases totales</span>
             <input

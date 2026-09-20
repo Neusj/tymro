@@ -2218,6 +2218,7 @@ class PlanSerializer(serializers.ModelSerializer):
             'unlimited_classes',
             'duration_days',
             'consultation_duration_minutes',
+            'consultation_professional',
             'price',
             'discount_percentage',
             'effective_price',
@@ -2274,6 +2275,16 @@ class PlanSerializer(serializers.ModelSerializer):
                     raise serializers.ValidationError({field_name: message})
                 if field_name == 'allowed_personalized_teachers' and value.role not in TEACHER_ELIGIBLE_ROLES:
                     raise serializers.ValidationError({field_name: 'Solo puedes permitir profesores de la organización.'})
+
+        plan_type = attrs.get('plan_type', getattr(instance, 'plan_type', None))
+        professional = attrs.get('consultation_professional', getattr(instance, 'consultation_professional', None))
+        if plan_type == Plan.PlanType.CONSULTATION:
+            if professional is None:
+                raise serializers.ValidationError({'consultation_professional': 'Una consulta debe tener un profesional asignado antes de publicarse.'})
+            if professional.organization_id != organization.id or professional.role not in TEACHER_ELIGIBLE_ROLES or not professional.is_active:
+                raise serializers.ValidationError({'consultation_professional': 'El profesional debe estar activo y pertenecer a la organización.'})
+        elif 'consultation_professional' in attrs and professional is not None:
+            raise serializers.ValidationError({'consultation_professional': 'Este campo solo corresponde a productos de consulta.'})
 
         return attrs
 

@@ -29,6 +29,33 @@ def expire_due_consultations(organization_id, now=None):
     ).update(status=IndividualConsultation.Status.EXPIRED, updated_at=now)
 
 
+def create_consultation_from_payment(*, payment_transaction):
+    """Materializa una sola consulta desde la transacción aprobada.
+
+    La relación uno-a-uno con PaymentTransaction es la barrera de BD para los
+    reintentos del webhook; no se introduce un identificador paralelo.
+    """
+    tx = payment_transaction
+    product = tx.plan
+    if not product or product.plan_type != Plan.PlanType.CONSULTATION:
+        return None
+    professional = product.consultation_professional
+    if not professional or professional.organization_id != tx.organization_id or professional.role not in TEACHER_ELIGIBLE_ROLES or not professional.is_active:
+        raise ConsultationError('El producto de consulta no tiene un profesional válido configurado.')
+    now = timezone.now()
+    consultation, _created = IndividualConsultation.objects.get_or_create(
+        payment_transaction=tx,
+        defaults={
+            'organization_id': tx.organization_id, 'product': product, 'student': tx.user,
+            'professional': professional, 'assigned_at': now,
+            'expires_at': now + timedelta(days=product.duration_days),
+            'expected_duration_minutes': product.consultation_duration_minutes,
+            'status': IndividualConsultation.Status.AVAILABLE,
+        },
+    )
+    return consultation
+
+
 @transaction.atomic
 def assign_consultation(*, actor, student_id, professional_id, product_id, agreed_at=None):
     if not actor or actor.role != 'gym_admin' or not actor.organization_id:

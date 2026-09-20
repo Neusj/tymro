@@ -13,6 +13,7 @@ from django.utils import timezone
 
 from core.models import PaymentAccount, PaymentTransaction, Plan
 from .plans import quote_plan_purchase
+from .individual_consultations import create_consultation_from_payment
 from .providers import PaymentProviderError, get_payment_provider
 from .providers.base import BackUrls, CheckoutItem, PaymentStatus, RevocationUnverified
 from .public_urls import organization_public_base_url
@@ -432,6 +433,10 @@ def create_checkout(*, organization, user, plan=None, target_student_plan=None):
             raise CheckoutError('El plan no pertenece a la organización.')
         if plan.plan_type in Plan.NOT_PURCHASABLE_ONLINE:
             raise CheckoutError('Este plan no se puede comprar en línea.')
+        if plan.plan_type == Plan.PlanType.CONSULTATION:
+            professional = plan.consultation_professional
+            if not professional or professional.organization_id != organization.id:
+                raise CheckoutError('Este producto de consulta no tiene un profesional configurado.')
         branch = plan.branch
         quote = quote_plan_purchase(student=user, plan=plan)
         plan_original_amount = quote.original_amount
@@ -623,7 +628,9 @@ def apply_provider_payment(*, tx, payment):
             # se escribe UNA vez; un reintento del webhook no puede moverlo de período.
             tx.collected_at = tx.collected_at or timezone.now()
             from .plans import PlanOrganizationMismatch, activate_student_plan
-            if tx.plan_id:
+            if tx.plan_id and tx.plan.plan_type == Plan.PlanType.CONSULTATION:
+                create_consultation_from_payment(payment_transaction=tx)
+            elif tx.plan_id:
                 tx_discount = (
                     tx.discount_percentage
                     if tx.discount_source or (tx.discount_percentage or 0) > 0

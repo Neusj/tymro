@@ -750,7 +750,7 @@ class Plan(TimestampedModel):
     # la usan `create_checkout` (rechaza la compra) y el catálogo del alumno en
     # `MembershipPlanViewSet.get_queryset` (los saca de la vitrina). Estaban duplicados como
     # literales en el servicio de pagos y en el frontend, y por eso divergieron.
-    NOT_PURCHASABLE_ONLINE = frozenset({PlanType.TRIAL, PlanType.GIFTCARD, PlanType.CONSULTATION})
+    NOT_PURCHASABLE_ONLINE = frozenset({PlanType.TRIAL, PlanType.GIFTCARD})
 
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='legacy_plans')
     # Alcance del plan: NULL = GLOBAL (vale en toda la organización); con sucursal =
@@ -797,6 +797,11 @@ class Plan(TimestampedModel):
     # Sólo aplica a productos de consulta. Mantenerlo en el producto evita una
     # configuración paralela y deja un snapshot en la consulta al asignarla.
     consultation_duration_minutes = models.PositiveIntegerField(default=60)
+    consultation_professional = models.ForeignKey(
+        'accounts.CustomUser', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='consultation_products',
+        help_text='Profesional que presta este producto de consulta.',
+    )
 
     class Meta:
         ordering = ['name']
@@ -1167,6 +1172,10 @@ class IndividualConsultation(TimestampedModel):
 
     organization = models.ForeignKey(Organization, on_delete=models.PROTECT, related_name='individual_consultations')
     product = models.ForeignKey(Plan, on_delete=models.PROTECT, related_name='individual_consultations')
+    payment_transaction = models.OneToOneField(
+        'PaymentTransaction', on_delete=models.PROTECT, null=True, blank=True,
+        related_name='individual_consultation',
+    )
     student = models.ForeignKey('accounts.CustomUser', on_delete=models.PROTECT, related_name='individual_consultations')
     professional = models.ForeignKey('accounts.CustomUser', on_delete=models.PROTECT, related_name='assigned_individual_consultations')
     assigned_by = models.ForeignKey('accounts.CustomUser', on_delete=models.SET_NULL, null=True, blank=True, related_name='created_individual_consultations')

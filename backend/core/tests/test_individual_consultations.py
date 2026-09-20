@@ -3,7 +3,8 @@ from datetime import timedelta
 import pytest
 from django.utils import timezone
 
-from core.models import ConsultationDateChange, IndividualConsultation, Plan
+from core.models import ConsultationDateChange, IndividualConsultation, PaymentTransaction, Plan
+from core.services.individual_consultations import create_consultation_from_payment
 
 pytestmark = pytest.mark.django_db
 
@@ -67,3 +68,19 @@ def test_wrong_professional_and_expired_consultation_cannot_start(api_client, se
     assert response.status_code == 400
     consultation.refresh_from_db()
     assert consultation.status == IndividualConsultation.Status.EXPIRED
+
+
+def test_approved_purchase_materializes_one_consultation_with_product_professional(setup):
+    setup['product'].consultation_professional = setup['professional']
+    setup['product'].save(update_fields=['consultation_professional'])
+    transaction = PaymentTransaction.objects.create(
+        organization=setup['org'], user=setup['student'], plan=setup['product'],
+        amount=setup['product'].price, plan_amount=setup['product'].price,
+    )
+    first = create_consultation_from_payment(payment_transaction=transaction)
+    second = create_consultation_from_payment(payment_transaction=transaction)
+    assert first.id == second.id
+    assert first.professional_id == setup['professional'].id
+    assert first.student_id == setup['student'].id
+    assert first.status == IndividualConsultation.Status.AVAILABLE
+    assert first.expected_duration_minutes == 60
