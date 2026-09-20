@@ -177,6 +177,7 @@ from .services.reservations import (
     should_refund_consumption,
     validate_reservation_candidate_for_student,
     validate_reservation_window_for_date,
+    usable_student_plan_candidates,
 )
 # El robot de la ventana rodante, el mismo que corre el cron diario: `AdvanceClassWindowsView` lo
 # dispara para UNA org (la del actor) y no reimplementa ni una línea de sus tres fases.
@@ -3695,7 +3696,8 @@ class HolidayViewSet(ModelViewSet):
         raise PermissionDenied('No tienes permisos para eliminar festivos.')
 
 
-def _enrollable_students_payload(*, user, organization_id, teacher_id, active_enrolled_ids):
+def _enrollable_students_payload(*, user, organization_id, teacher_id, active_enrolled_ids,
+                                 target_date=None, branch_id=None):
     """Candidatos inscribibles, calculados SIN necesitar una GymClass.
 
     Lo comparten el picker de una clase real (`/classes/{id}/enrollable-students/`) y el de
@@ -3730,6 +3732,7 @@ def _enrollable_students_payload(*, user, organization_id, teacher_id, active_en
     active_plan_by_student = _get_active_student_plan_map(candidate_ids, organization_id)
     latest_plan_by_student = _get_latest_student_plan_map(candidate_ids, organization_id)
     today = timezone.localdate()
+    target_date = target_date or today
 
     results = []
     for student in candidates:
@@ -3746,6 +3749,20 @@ def _enrollable_students_payload(*, user, organization_id, teacher_id, active_en
             state, expose_reason=expose_reason, include_financial_axes=False
         )
         full_name = f'{student.first_name} {student.last_name}'.strip()
+        usable_plans = []
+        for candidate in usable_student_plan_candidates(
+            student,
+            organization_id=organization_id,
+            on_date=target_date,
+            branch_id=branch_id,
+        ):
+            candidate_state = describe_student_plan(candidate, target_date)
+            usable_plans.append({
+                'id': candidate.id,
+                'plan_name': candidate.plan.name,
+                'end_date': candidate.end_date,
+                'remaining_classes': candidate_state.remaining_classes,
+            })
         results.append(
             {
                 'id': student.id,
@@ -3756,6 +3773,7 @@ def _enrollable_students_payload(*, user, organization_id, teacher_id, active_en
                 'available_classes': remaining_classes,
                 'has_available_classes': has_available,
                 'unlimited_classes': unlimited,
+                'usable_plans': usable_plans,
                 **plan_status,
             }
         )
@@ -4451,6 +4469,8 @@ class GymClassViewSet(ModelViewSet):
             organization_id=gym_class.organization_id,
             teacher_id=gym_class.teacher_id,
             active_enrolled_ids=active_enrolled_ids,
+            target_date=timezone.localtime(gym_class.start_datetime).date(),
+            branch_id=gym_class.branch_id,
         ))
 
     @action(detail=True, methods=['post'], url_path='attendance')
@@ -5238,6 +5258,8 @@ class ClassTemplateViewSet(ModelViewSet):
             teacher_id=template.teacher_id,
             # Una clase que todavia no existe no tiene inscritos: el picker los muestra a todos.
             active_enrolled_ids=set(),
+            target_date=parse_date(request.query_params.get('date') or '') or timezone.localdate(),
+            branch_id=template.branch_id,
         ))
 
     @action(detail=True, methods=['post'], url_path='generate')

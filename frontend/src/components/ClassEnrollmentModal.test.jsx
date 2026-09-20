@@ -66,8 +66,8 @@ describe('ClassEnrollmentModal', () => {
       />,
     )
 
-    const row = (await screen.findByText('Ana Perez')).closest('label')
-    await user.click(within(row).getByRole('checkbox'))
+    await screen.findByText('Ana Perez')
+    await user.click(screen.getByRole('checkbox', { name: 'Seleccionar Ana Perez' }))
     await user.click(screen.getByRole('button', { name: 'Inscribir seleccionados' }))
 
     await waitFor(() => expect(enrollmentsApi.create).toHaveBeenCalledWith({
@@ -101,5 +101,31 @@ describe('ClassEnrollmentModal', () => {
     await waitFor(() => expect(enrollmentsApi.cancel).toHaveBeenCalledWith(77))
     await waitFor(() => expect(onChanged).toHaveBeenCalled())
     expect(onClose).toHaveBeenCalled()
+  })
+
+  it('preselecciona FEFO y permite cambiar la membresía antes de inscribir', async () => {
+    const user = userEvent.setup()
+    classesApi.enrollableStudents.mockResolvedValue([{
+      ...candidate,
+      usable_plans: [
+        { id: 21, plan_name: 'Plan próximo', end_date: '2026-09-30', remaining_classes: 2 },
+        { id: 22, plan_name: 'Plan largo', end_date: '2026-12-31', remaining_classes: 8 },
+      ],
+    }])
+
+    render(<ClassEnrollmentModal open gymClass={gymClass} onClose={vi.fn()} onChanged={vi.fn()} />)
+
+    expect(await screen.findByText(/Se utilizará: Plan próximo/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Cambiar' }))
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Membresía para Ana Perez' }), '22')
+    await user.click(screen.getByRole('checkbox', { name: 'Seleccionar Ana Perez' }))
+    await user.click(screen.getByRole('button', { name: 'Inscribir seleccionados' }))
+
+    await waitFor(() => expect(enrollmentsApi.create).toHaveBeenCalledWith({
+      gym_class: 101,
+      student: 11,
+      status: 'active',
+      student_plan_id: 22,
+    }))
   })
 })

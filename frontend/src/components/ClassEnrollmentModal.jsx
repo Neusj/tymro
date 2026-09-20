@@ -31,6 +31,11 @@ function studentMatchesSearch(student, rawQuery) {
   return text.includes(query)
 }
 
+function planLabel(plan) {
+  const expiry = plan?.end_date ? new Date(`${plan.end_date}T00:00:00`).toLocaleDateString('es-CL') : 'sin fecha'
+  return `${plan?.plan_name || 'Plan'} · vence ${expiry}`
+}
+
 export default function ClassEnrollmentModal({
   open,
   gymClass,
@@ -48,6 +53,8 @@ export default function ClassEnrollmentModal({
   const [loading, setLoading] = useState(false)
   const [working, setWorking] = useState(false)
   const [error, setError] = useState('')
+  const [selectedPlanByStudent, setSelectedPlanByStudent] = useState({})
+  const [changingPlanFor, setChangingPlanFor] = useState(null)
 
   // Una fila `virtual:<serie>:<fecha>` es una clase PROYECTADA: la serie dice que ese dia hay
   // clase, pero todavia no existe la fila en la BD. El modal sabe operar sobre eso sin
@@ -73,8 +80,9 @@ export default function ClassEnrollmentModal({
     try {
       if (!targetId) {
         // Clase inexistente: los candidatos salen de la serie y no hay inscritos que leer.
-        const candidates = await classTemplatesApi.enrollableStudents(templateId)
+        const candidates = await classTemplatesApi.enrollableStudents(templateId, { date: projectedDate })
         setEnrollStudents(candidates)
+        setSelectedPlanByStudent(Object.fromEntries(candidates.map((item) => [item.id, item.usable_plans?.[0]?.id || ''])))
         setEnrolledStudents([])
       } else {
         const [candidates, enrolled] = await Promise.all([
@@ -82,6 +90,7 @@ export default function ClassEnrollmentModal({
           classesApi.enrolledStudents(targetId),
         ])
         setEnrollStudents(candidates)
+        setSelectedPlanByStudent(Object.fromEntries(candidates.map((item) => [item.id, item.usable_plans?.[0]?.id || ''])))
         setEnrolledStudents(enrolled)
       }
     } catch (apiError) {
@@ -101,6 +110,7 @@ export default function ClassEnrollmentModal({
     setEnrolledSelectedIds([])
     setEnrollSearch('')
     setEnrolledSearch('')
+    setChangingPlanFor(null)
     loadRoster()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, classId, initialView])
@@ -136,11 +146,12 @@ export default function ClassEnrollmentModal({
       // misma referencia de serie sin duplicar la clase.
       let realClassId = classId
       for (const studentId of enrollSelectedIds) {
+        const studentPlanId = selectedPlanByStudent[studentId]
         // eslint-disable-next-line no-await-in-loop
         const created = await enrollmentsApi.create(
           realClassId
-            ? { gym_class: realClassId, student: studentId, status: 'active' }
-            : { class_template_id: templateId, date: projectedDate, student: studentId, status: 'active' },
+            ? { gym_class: realClassId, student: studentId, status: 'active', ...(studentPlanId ? { student_plan_id: Number(studentPlanId) } : {}) }
+            : { class_template_id: templateId, date: projectedDate, student: studentId, status: 'active', ...(studentPlanId ? { student_plan_id: Number(studentPlanId) } : {}) },
         )
         realClassId = realClassId || created?.gym_class || null
       }
@@ -239,7 +250,7 @@ export default function ClassEnrollmentModal({
             <div className="max-h-[24rem] space-y-2 overflow-y-auto rounded-lg border border-brand-line p-2">
               {loading ? <p className="text-sm text-brand-muted">Cargando alumnos...</p> : null}
               {!loading && filteredEnrollStudents.map((student) => (
-                <label key={student.id} className="flex items-center justify-between gap-3 rounded-lg border border-brand-line px-3 py-2 text-sm">
+                <div key={student.id} className="flex items-center justify-between gap-3 rounded-lg border border-brand-line px-3 py-2 text-sm">
                   <span>
                     <span className="font-semibold">{student.name}</span>
                     <span className="block text-xs text-brand-muted">{student.email || student.username}</span>
@@ -249,9 +260,35 @@ export default function ClassEnrollmentModal({
                     <span className="mt-1 block">
                       <PlanStatusBadge student={student} />
                     </span>
+                    {student.usable_plans?.length ? (
+                      <span className="mt-1 block text-xs text-brand-muted">
+                        Se utilizará: {planLabel(student.usable_plans.find((plan) => String(plan.id) === String(selectedPlanByStudent[student.id])) || student.usable_plans[0])}
+                        {student.usable_plans.length > 1 ? (
+                          <button
+                            type="button"
+                            className="ml-2 text-brand-blue underline"
+                            onClick={(event) => { event.preventDefault(); setChangingPlanFor(changingPlanFor === student.id ? null : student.id) }}
+                          >
+                            Cambiar
+                          </button>
+                        ) : null}
+                      </span>
+                    ) : null}
+                    {changingPlanFor === student.id ? (
+                      <select
+                        aria-label={`Membresía para ${student.name}`}
+                        className="field mt-2 bg-black/20"
+                        value={selectedPlanByStudent[student.id] || ''}
+                        onClick={(event) => event.preventDefault()}
+                        onChange={(event) => setSelectedPlanByStudent((prev) => ({ ...prev, [student.id]: event.target.value }))}
+                      >
+                        {student.usable_plans.map((plan) => <option key={plan.id} value={plan.id}>{planLabel(plan)}</option>)}
+                      </select>
+                    ) : null}
                   </span>
                   <input
                     type="checkbox"
+                    aria-label={`Seleccionar ${student.name}`}
                     disabled={!student.has_available_classes}
                     checked={enrollSelectedIds.includes(student.id)}
                     onChange={(event) =>
@@ -260,7 +297,7 @@ export default function ClassEnrollmentModal({
                       )
                     }
                   />
-                </label>
+                </div>
               ))}
               {!loading && enrollStudents.length === 0 ? <p className="text-sm text-brand-muted">No hay alumnos disponibles para inscribir.</p> : null}
               {!loading && enrollStudents.length > 0 && filteredEnrollStudents.length === 0 ? <p className="text-sm text-brand-muted">No hay resultados para la busqueda.</p> : null}

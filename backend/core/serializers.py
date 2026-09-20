@@ -1106,6 +1106,7 @@ class EnrollmentSerializer(serializers.ModelSerializer):
     student_name = serializers.SerializerMethodField()
     student_email = serializers.EmailField(source='student.email', read_only=True)
     gym_class_name = serializers.CharField(source='gym_class.name', read_only=True)
+    class_branch_id = serializers.IntegerField(source='gym_class.branch_id', read_only=True)
     class_branch_name = serializers.CharField(source='gym_class.branch.name', read_only=True)
     class_teacher_name = serializers.SerializerMethodField()
     class_discipline_name = serializers.CharField(source='gym_class.discipline.name', read_only=True)
@@ -1142,6 +1143,7 @@ class EnrollmentSerializer(serializers.ModelSerializer):
             'student_email',
             'gym_class',
             'gym_class_name',
+            'class_branch_id',
             'class_branch_name',
             'class_teacher_name',
             'class_discipline_name',
@@ -1983,6 +1985,10 @@ class RecurringEnrollmentSerializer(serializers.ModelSerializer):
             'student_plan_id',
         ]
         read_only_fields = ['created_by', 'created_at', 'updated_at', 'last_sync', 'student_plan']
+        # `validate()` reconstruye los valores efectivos en PATCH y comprueba la misma
+        # unicidad. El validador automático de DRF corre antes y falla con un KeyError
+        # cuando el PATCH solo trae el `student_plan_id` write-only.
+        validators = []
         extra_kwargs = {
             'student': {'required': False},
         }
@@ -2335,6 +2341,7 @@ class ChargeLineItemSerializer(serializers.ModelSerializer):
 class StudentPlanSerializer(serializers.ModelSerializer):
     plan_name = serializers.CharField(source='plan.name', read_only=True)
     plan_type = serializers.CharField(source='plan.plan_type', read_only=True)
+    plan_branch_id = serializers.IntegerField(source='plan.branch_id', read_only=True)
     user_name = serializers.SerializerMethodField()
     user_email = serializers.CharField(source='user.email', read_only=True)
     remaining_classes = serializers.SerializerMethodField()
@@ -2371,6 +2378,7 @@ class StudentPlanSerializer(serializers.ModelSerializer):
             'plan',
             'plan_name',
             'plan_type',
+            'plan_branch_id',
             'start_date',
             'end_date',
             'total_classes',

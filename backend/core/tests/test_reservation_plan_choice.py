@@ -199,20 +199,22 @@ def test_single_usable_plan_resolves_without_a_choice(setup):
 # f. Dos planes usables, sin student_plan_id: `plan_choice_required`.
 # --------------------------------------------------------------------------------------
 
-def test_two_usable_plans_without_a_choice_requires_one(setup):
+def test_two_usable_plans_without_a_choice_uses_fefo(setup):
     plan_a = _student_plan(setup['org'], setup['student'])
     plan_b = _student_plan(setup['org'], setup['student'])
+    plan_a.end_date = TODAY + timedelta(days=20)
+    plan_a.save(update_fields=['end_date'])
+    plan_b.end_date = TODAY + timedelta(days=5)
+    plan_b.save(update_fields=['end_date'])
     gym_class = _future_class(setup['org'], setup['branch'], setup['teacher'])
 
-    with pytest.raises(ReservationRuleError) as exc_info:
-        reserve_student_in_class(student=setup['student'], gym_class=gym_class)
+    enrollment = reserve_student_in_class(student=setup['student'], gym_class=gym_class)
 
-    assert exc_info.value.code == 'plan_choice_required'
-    assert exc_info.value.message == 'Tienes más de un plan vigente. Elige con cuál reservar.'
     plan_a.refresh_from_db()
     plan_b.refresh_from_db()
+    assert enrollment.student_plan_id == plan_b.id
     assert plan_a.classes_used == 0
-    assert plan_b.classes_used == 0
+    assert plan_b.classes_used == 1
 
 
 # --------------------------------------------------------------------------------------
@@ -242,7 +244,7 @@ def test_zero_usable_plans_is_the_pre_existing_error(setup):
 #    alta ahora exigiría el `student_plan_id` y nunca llegaría a este skip.
 # --------------------------------------------------------------------------------------
 
-def test_recurring_materialization_skips_with_plan_choice_required_when_ambiguous(setup):
+def test_recurring_materialization_with_multiple_plans_uses_fefo(setup):
     """`_create_enrollment_if_possible` le pasa a `reserve_student_in_class` el
     `student_plan_id` de la SUSCRIPCIÓN, que en esta fila es NULL: no hay ningún humano
     eligiendo en el job de materialización, así que antes de 9.1 le descontaba a una
@@ -269,9 +271,9 @@ def test_recurring_materialization_skips_with_plan_choice_required_when_ambiguou
 
     summary = create_enrollments_for_recurring_subscription(recurring, class_instances=[gym_class])
 
-    assert summary['created_count'] == 0
-    assert summary['skipped'] == [{'class_id': gym_class.id, 'reason': 'plan_choice_required'}]
-    assert not Enrollment.objects.filter(gym_class=gym_class, student=setup['student']).exists()
+    assert summary['created_count'] == 1
+    assert summary['skipped'] == []
+    assert Enrollment.objects.filter(gym_class=gym_class, student=setup['student']).exists()
 
 
 # --------------------------------------------------------------------------------------

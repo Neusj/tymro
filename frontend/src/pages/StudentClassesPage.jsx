@@ -127,6 +127,13 @@ function reservationBlockedMessage(row) {
   return ''
 }
 
+function membershipLabel(membership) {
+  const expiry = membership?.end_date
+    ? new Date(`${membership.end_date}T00:00:00`).toLocaleDateString('es-CL')
+    : 'sin fecha'
+  return `${membership?.plan_name || 'Plan'} · vence ${expiry}`
+}
+
 export default function StudentClassesPage({ mode = 'available' }) {
   const [availableClasses, setAvailableClasses] = useState([])
   const [historyClasses, setHistoryClasses] = useState([])
@@ -159,6 +166,7 @@ export default function StudentClassesPage({ mode = 'available' }) {
   // Plan elegido en el selector del diálogo de confirmación (#9 T4). Se resetea al
   // abrir/cerrar cualquiera de los tres flujos de reserva.
   const [selectedPlanId, setSelectedPlanId] = useState('')
+  const [planSelectorOpen, setPlanSelectorOpen] = useState(false)
 
   const loadData = async (date = selectedDate) => {
     setLoading(true)
@@ -265,12 +273,27 @@ export default function StudentClassesPage({ mode = 'available' }) {
       item.validity_status === 'active'
       && !item.active_freeze
       && (item.remaining_classes === null || item.remaining_classes > 0)
-    )),
+    )).sort((a, b) => String(a.end_date || '').localeCompare(String(b.end_date || '')) || a.id - b.id),
     [memberships],
   )
   const frozenMemberships = useMemo(
     () => memberships.filter((item) => item.active_freeze || item.validity_status === 'frozen'),
     [memberships],
+  )
+  // Los planes estándar solo tienen compatibilidad por sucursal. La lista del diálogo
+  // se restringe a la(s) sucursal(es) de la acción pendiente; el backend conserva la
+  // validación definitiva para cambios entre carga y submit.
+  const pendingBranchIds = useMemo(() => {
+    if (pendingBulkReserve) return pendingBulkReserve.map((item) => item.branch).filter(Boolean)
+    if (pendingRebook) return [pendingRebook.class_branch_id].filter(Boolean)
+    if (pendingReserve) return [pendingReserve.branch].filter(Boolean)
+    if (pendingRecurringReserve) return [pendingRecurringReserve.branch].filter(Boolean)
+    if (pendingSuggestionRequest) return [pendingSuggestionRequest.gymClass?.branch].filter(Boolean)
+    return []
+  }, [pendingBulkReserve, pendingRebook, pendingRecurringReserve, pendingReserve, pendingSuggestionRequest])
+  const compatibleUsableMemberships = useMemo(
+    () => usableMemberships.filter((item) => !item.plan_branch_id || pendingBranchIds.every((branchId) => Number(branchId) === Number(item.plan_branch_id))),
+    [pendingBranchIds, usableMemberships],
   )
   const hasPlanBalance = usableMemberships.length > 0
   const hasUnlimitedUsableMembership = usableMemberships.some((item) => item.remaining_classes === null)
@@ -279,17 +302,26 @@ export default function StudentClassesPage({ mode = 'available' }) {
   // Regla del contrato (#9 T4): con 2+ planes usables, TODA creación de reserva debe
   // mandar student_plan_id (el alumno elige); con exactamente 1, se omite (lo resuelve
   // el backend); con 0 el bloqueo de siempre (hasPlanBalance) sigue vigente.
-  const requiresPlanChoice = usableMemberships.length >= 2
+  const requiresPlanChoice = compatibleUsableMemberships.length >= 2
   const reservationLimitForPlan = (studentPlanId) => {
     const membership = requiresPlanChoice
-      ? usableMemberships.find((item) => String(item.id) === String(studentPlanId))
-      : usableMemberships[0]
+      ? compatibleUsableMemberships.find((item) => String(item.id) === String(studentPlanId))
+      : compatibleUsableMemberships[0]
     if (!membership) {
       return 0
     }
     return membership.remaining_classes === null ? 24 : membership.remaining_classes
   }
-  const resetPlanSelection = () => setSelectedPlanId('')
+  const resetPlanSelection = () => {
+    setSelectedPlanId(compatibleUsableMemberships[0]?.id ? String(compatibleUsableMemberships[0].id) : '')
+    setPlanSelectorOpen(false)
+  }
+
+  useEffect(() => {
+    if (!compatibleUsableMemberships.some((item) => String(item.id) === String(selectedPlanId))) {
+      setSelectedPlanId(compatibleUsableMemberships[0]?.id ? String(compatibleUsableMemberships[0].id) : '')
+    }
+  }, [compatibleUsableMemberships, selectedPlanId])
 
   useEffect(() => {
     setSelectedReservationIds((prev) => prev.filter((id) => filteredReservations.some((item) => item.id === id)))
@@ -391,7 +423,10 @@ export default function StudentClassesPage({ mode = 'available' }) {
     const current = gymClass.class_template ? recurringByTemplate[gymClass.class_template] : null
     const isReactivation = Boolean(current && !current.is_active)
     if (!isReactivation && requiresPlanChoice) {
-      resetPlanSelection()
+      // La suscripción recurrente conserva su UX existente: se decide explícitamente
+      // una vez al crear la serie. FEFO aplica a reservas/inscripciones puntuales.
+      setSelectedPlanId('')
+      setPlanSelectorOpen(true)
       setPendingRecurringReserve(gymClass)
       return
     }
@@ -1037,6 +1072,7 @@ export default function StudentClassesPage({ mode = 'available' }) {
             ? 'suggestion'
             : null
   const showPlanSelector = pendingReserveKind !== null && requiresPlanChoice
+    && (pendingReserveKind === 'recurring' || planSelectorOpen)
   const confirmDialogOpen = pendingReserveKind !== null
   const confirmDialogLoading =
     pendingReserveKind === 'single'
@@ -1069,7 +1105,7 @@ export default function StudentClassesPage({ mode = 'available' }) {
           ? 'Elige el plan para calcular cuantas proximas clases puedes reservar.'
           : 'Seguro que quieres reservar esta clase? Se descontara una clase de tu plan.'
   const confirmDialogLabel = pendingReserveKind === 'bulk' ? 'Confirmar reservas' : pendingReserveKind === 'suggestion' ? 'Buscar clases' : pendingReserveKind === 'recurring' ? 'Activar recurrencia' : 'Reservar'
-  const confirmDialogDisabled = showPlanSelector && !selectedPlanId
+  const confirmDialogDisabled = requiresPlanChoice && !selectedPlanId
   const handleConfirmDialogConfirm = () => {
     if (pendingReserveKind === 'single') {
       return confirmPendingReserve()
@@ -1221,10 +1257,20 @@ export default function StudentClassesPage({ mode = 'available' }) {
             <p>Se consumira una clase por cada reserva confirmada.</p>
           </div>
         ) : null}
+        {pendingReserveKind !== null && pendingReserveKind !== 'recurring' && compatibleUsableMemberships.length ? (
+          <div className="mt-3 text-left text-xs text-brand-muted">
+            Se utilizará: {membershipLabel(compatibleUsableMemberships.find((item) => String(item.id) === String(selectedPlanId)) || compatibleUsableMemberships[0])}
+            {requiresPlanChoice ? (
+              <button type="button" className="ml-2 text-brand-blue underline" onClick={() => setPlanSelectorOpen((value) => !value)}>
+                Cambiar
+              </button>
+            ) : null}
+          </div>
+        ) : null}
         {showPlanSelector ? (
           <div className="mt-3 space-y-1 text-left">
             <label className="text-xs text-brand-muted" htmlFor="reserve-plan-select">
-              Elige con qué plan reservar
+              Membresía para esta reserva
             </label>
             <select
               id="reserve-plan-select"
@@ -1232,12 +1278,11 @@ export default function StudentClassesPage({ mode = 'available' }) {
               onChange={(event) => setSelectedPlanId(event.target.value)}
               className="field bg-black/20"
             >
-              <option value="">Selecciona un plan</option>
-              {usableMemberships.map((membership) => (
+              {compatibleUsableMemberships.map((membership) => (
                 <option key={membership.id} value={membership.id}>
-                  {membership.remaining_classes === null
-                    ? `${membership.plan_name} — clases ilimitadas`
-                    : `${membership.plan_name} — quedan ${membership.remaining_classes}`}
+                  {membershipLabel(membership)}{membership.remaining_classes === null
+                    ? ' — clases ilimitadas'
+                    : ` — quedan ${membership.remaining_classes}`}
                 </option>
               ))}
             </select>

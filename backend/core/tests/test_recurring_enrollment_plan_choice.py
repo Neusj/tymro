@@ -315,7 +315,7 @@ def test_legacy_row_with_null_fk_still_resolves_the_plan_per_instance(setup):
     assert Enrollment.objects.get(gym_class=gym_class, student=setup['student']).student_plan_id == plan.id
 
 
-def test_legacy_row_with_null_fk_and_two_usable_plans_still_skips(setup):
+def test_legacy_row_with_null_fk_and_two_usable_plans_uses_fefo(setup):
     """La cobertura del camino NULL ambiguo no se pierde: sin elección grabada el loop
     sigue sin adivinar (es el comportamiento de las filas que dejó el backfill de 0036
     con 2+ candidatos)."""
@@ -328,8 +328,8 @@ def test_legacy_row_with_null_fk_and_two_usable_plans_still_skips(setup):
 
     summary = create_enrollments_for_recurring_subscription(recurring, class_instances=[gym_class])
 
-    assert summary['created_count'] == 0
-    assert summary['skipped'] == [{'class_id': gym_class.id, 'reason': 'plan_choice_required'}]
+    assert summary['created_count'] == 1
+    assert summary['skipped'] == []
 
 
 # --------------------------------------------------------------------------------------

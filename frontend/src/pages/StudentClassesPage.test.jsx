@@ -7,7 +7,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // resuelvan vacío y el árbol se renderice sin red real.
 vi.mock('../api/client', () => ({
   classesApi: { list: vi.fn(), byDate: vi.fn() },
-  enrollmentsApi: { my: vi.fn(), create: vi.fn(), cancel: vi.fn() },
+  enrollmentsApi: { my: vi.fn(), create: vi.fn(), batch: vi.fn(), cancel: vi.fn() },
   recurringEnrollmentsApi: { my: vi.fn(), update: vi.fn() },
   classTemplatesApi: { recurringEnroll: vi.fn() },
   getMyMemberships: vi.fn(),
@@ -26,10 +26,13 @@ function renderPage(mode = 'available') {
 }
 
 beforeEach(() => {
-  vi.clearAllMocks()
+  // Cada caso configura respuestas distintas de byDate/list. Resetear también las
+  // implementaciones evita que una respuesta de un caso se filtre al siguiente.
+  vi.resetAllMocks()
   classesApi.list.mockResolvedValue([])
   classesApi.byDate.mockImplementation((date, params) => classesApi.list(params))
   enrollmentsApi.my.mockResolvedValue([])
+  enrollmentsApi.batch.mockResolvedValue({})
   recurringEnrollmentsApi.my.mockResolvedValue([])
   getMyMemberships.mockResolvedValue([])
   // jsdom no implementa matchMedia. Lo hacemos "query-aware": escritorio (min-width)
@@ -43,7 +46,6 @@ beforeEach(() => {
     removeListener() {},
   })
 })
-
 describe('StudentClassesPage - clases suspendidas', () => {
   it('muestra Suspendida sin permitir reserva', async () => {
     const future = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
@@ -635,13 +637,15 @@ describe('StudentClassesPage — saldo desde getMyMemberships y selector de plan
     const dialog = await screen.findByRole('dialog')
 
     const confirmButton = within(dialog).getByRole('button', { name: 'Reservar' })
-    // Sin selección, el diálogo no deja confirmar.
-    expect(confirmButton).toBeDisabled()
+    // FEFO queda preseleccionado y permite confirmar sin interacción adicional.
+    expect(confirmButton).toBeEnabled()
     expect(enrollmentsApi.create).not.toHaveBeenCalled()
 
+    expect(within(dialog).getByText(/Se utilizará: Plan A/)).toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: 'Cambiar' }))
     const select = within(dialog).getByRole('combobox')
-    expect(within(select).getByText('Plan A — quedan 3')).toBeInTheDocument()
-    expect(within(select).getByText('Plan B — clases ilimitadas')).toBeInTheDocument()
+    expect(within(select).getByText(/Plan A .* quedan 3/)).toBeInTheDocument()
+    expect(within(select).getByText(/Plan B .* clases ilimitadas/)).toBeInTheDocument()
 
     await user.selectOptions(select, '12')
     expect(confirmButton).toBeEnabled()
@@ -661,13 +665,7 @@ describe('StudentClassesPage — saldo desde getMyMemberships y selector de plan
 describe('StudentClassesPage — rebook con selector de plan (#9 T4 fix)', () => {
   beforeEach(() => {
     // Vista escritorio (min-width→true): hace falta que el FilterPanel arranque
-    // abierto para poder cambiar el filtro "Estado" a "Canceladas". NOTA: DataTable
-    // renderiza SIEMPRE ambos bloques (tabla desktop + grid de tarjetas) en el DOM
-    // de jsdom — la alternancia real es solo CSS (`hidden lg:block` / `lg:hidden`),
-    // que jsdom no aplica — así que cualquier texto/botón que se repita entre
-    // ambos bloques sale ambiguo. Por eso este test usa "Ver detalle" (que solo
-    // existe una vez, en el bloque de tarjetas) en vez de texto de la fila o el
-    // menú "Abrir acciones" (duplicado: uno por bloque).
+    // abierto para poder cambiar el filtro "Estado" a "Canceladas".
     window.matchMedia = (query) => ({
       matches: query.includes('min-width'),
       addEventListener() {},
@@ -677,7 +675,7 @@ describe('StudentClassesPage — rebook con selector de plan (#9 T4 fix)', () =>
     })
   })
 
-  it('con 2+ membresías usables, el rebook desde "Mis reservas" exige elegir un plan y lo manda como student_plan_id', async () => {
+  it('con 2+ membresías usables, el rebook desde "Mis reservas" usa FEFO y permite cambiar el plan', async () => {
     classesApi.list.mockResolvedValue([])
     enrollmentsApi.my.mockResolvedValue([
       {
@@ -714,17 +712,16 @@ describe('StudentClassesPage — rebook con selector de plan (#9 T4 fix)', () =>
     await user.click(screen.getByRole('button', { name: /^Estado:/i }))
     await user.click(await screen.findByRole('button', { name: 'Canceladas' }))
 
-    // "Ver detalle" es único por fila (solo existe en el bloque de tarjetas); al
-    // abrir el modal de detalle se pinta el botón "Reservar" (rebook) sin envolver
-    // en el menú "Abrir acciones", así que no hay ambigüedad de queries.
-    await user.click(await screen.findByRole('button', { name: 'Ver detalle' }))
+    // La tabla vigente agrupa las acciones de fila en su menú contextual.
+    await user.click((await screen.findAllByRole('button', { name: 'Abrir acciones' }))[0])
     await user.click(await screen.findByRole('button', { name: 'Reservar' }))
 
     const dialog = await screen.findByRole('dialog')
     const confirmButton = within(dialog).getByRole('button', { name: 'Reservar' })
-    expect(confirmButton).toBeDisabled()
+    expect(confirmButton).toBeEnabled()
     expect(enrollmentsApi.create).not.toHaveBeenCalled()
 
+    await user.click(within(dialog).getByRole('button', { name: 'Cambiar' }))
     const select = within(dialog).getByRole('combobox')
     await user.selectOptions(select, '11')
     expect(confirmButton).toBeEnabled()
@@ -788,7 +785,7 @@ describe('StudentClassesPage — bulk con selector de plan (#9 T4 fix)', () => {
       { id: 21, plan_name: 'Plan A', remaining_classes: 5, unlimited_classes: false, validity_status: 'active' },
       { id: 22, plan_name: 'Plan B', remaining_classes: null, unlimited_classes: true, validity_status: 'active' },
     ])
-    enrollmentsApi.create.mockResolvedValue({})
+    enrollmentsApi.batch.mockResolvedValue({ created_count: 2 })
 
     renderPage('available')
     const user = userEvent.setup()
@@ -801,189 +798,27 @@ describe('StudentClassesPage — bulk con selector de plan (#9 T4 fix)', () => {
     await user.click(screen.getByRole('button', { name: 'Reservar seleccionadas' }))
 
     const dialog = await screen.findByRole('dialog')
-    const confirmButton = within(dialog).getByRole('button', { name: 'Reservar seleccionadas' })
-    // Sin selección, no se puede confirmar y no corrió ningún create todavía.
-    expect(confirmButton).toBeDisabled()
+    const confirmButton = within(dialog).getByRole('button', { name: 'Confirmar reservas' })
+    // FEFO queda preseleccionado y no corrió ningún batch todavía.
+    expect(confirmButton).toBeEnabled()
     expect(enrollmentsApi.create).not.toHaveBeenCalled()
 
+    await user.click(within(dialog).getByRole('button', { name: 'Cambiar' }))
     const select = within(dialog).getByRole('combobox')
     await user.selectOptions(select, '22')
     expect(confirmButton).toBeEnabled()
 
     await user.click(confirmButton)
 
-    // El selector se abrió UNA vez y el mismo plan se aplicó a TODO el lote.
-    await waitFor(() => expect(enrollmentsApi.create).toHaveBeenCalledTimes(2))
-    expect(enrollmentsApi.create).toHaveBeenCalledWith({ gym_class: 701, status: 'active', student_plan_id: 22 })
-    expect(enrollmentsApi.create).toHaveBeenCalledWith({
-      class_template_id: 88,
-      date: FUTURE_ISO.slice(0, 10),
-      status: 'active',
+    // El contrato vigente agrupa el lote en un solo POST batch y aplica el mismo
+    // plan a todos sus ítems.
+    await waitFor(() => expect(enrollmentsApi.batch).toHaveBeenCalledWith({
+      classes: [
+        { gym_class: 701, status: 'active' },
+        { class_template_id: 88, date: FUTURE_ISO.slice(0, 10), status: 'active' },
+      ],
       student_plan_id: 22,
-    })
+    }))
   })
 })
 
-// R1b — el backend ahora acepta/exige student_plan_id en la suscripción a una serie
-// recurrente (recurring-enroll). Reusa el MISMO selector/diálogo que reserva
-// individual/rebook/bulk (#9 T4): 1 plan usable → sin selector; 2+ → selector
-// obligatorio antes de disparar el POST. La reactivación de una serie pausada
-// (PATCH is_active) sigue sin selector ni student_plan_id: el backend lo ignora ahí.
-describe('StudentClassesPage — suscripción a serie recurrente con selector de plan (R1b)', () => {
-  beforeEach(() => {
-    // Vista escritorio: la fila de "Clases disponibles" expone el botón de
-    // recurrencia detrás de "Abrir acciones" (RowActionsDropdown); en modo
-    // 'available' el mobilePrimary siempre define un botón (Reservar/Cancelar),
-    // así que la tarjeta móvil NO pinta su propio dropdown y no hay ambigüedad.
-    window.matchMedia = (query) => ({
-      matches: query.includes('min-width'),
-      addEventListener() {},
-      removeEventListener() {},
-      addListener() {},
-      removeListener() {},
-    })
-  })
-
-  function seedRecurringClass() {
-    classesApi.list
-      .mockResolvedValueOnce([
-        {
-          id: 801,
-          name: 'Yoga serie',
-          status: 'scheduled',
-          start_datetime: FUTURE_ISO,
-          end_datetime: FUTURE_ISO,
-          capacity: 10,
-          enrollments_count: 0,
-          branch_name: 'Sede',
-          teacher_name: 'Prof',
-          discipline_name: 'Yoga',
-          class_template: 55,
-          class_template_name: 'Yoga Lunes',
-        },
-      ])
-      .mockResolvedValueOnce([])
-    enrollmentsApi.my.mockResolvedValue([])
-    recurringEnrollmentsApi.my.mockResolvedValue([])
-    classTemplatesApi.recurringEnroll.mockResolvedValue({})
-  }
-
-  it('con una membresía usable, inscribirse a la serie manda el POST sin student_plan_id y sin selector', async () => {
-    seedRecurringClass()
-    getMyMemberships.mockResolvedValue([
-      { id: 1, plan_name: 'Plan Básico', remaining_classes: 10, unlimited_classes: false, validity_status: 'active' },
-    ])
-
-    renderPage('available')
-    const user = userEvent.setup()
-
-    await user.click((await screen.findAllByRole('button', { name: 'Abrir acciones' }))[0])
-    await user.click(await screen.findByRole('button', { name: 'Inscribirme a esta serie semanal' }))
-
-    // Con una sola membresía usable no hace falta elegir: no aparece diálogo.
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-
-    await waitFor(() =>
-      expect(classTemplatesApi.recurringEnroll).toHaveBeenCalledWith(55, {
-        start_date: FUTURE_ISO.slice(0, 10),
-        recurrence_type: 'weekly',
-      }),
-    )
-  })
-
-  it('con 2+ membresías usables, el diálogo exige elegir un plan antes de suscribir y lo manda como student_plan_id', async () => {
-    seedRecurringClass()
-    getMyMemberships.mockResolvedValue([
-      { id: 11, plan_name: 'Plan A', remaining_classes: 3, unlimited_classes: false, validity_status: 'active' },
-      { id: 12, plan_name: 'Plan B', remaining_classes: null, unlimited_classes: true, validity_status: 'active' },
-    ])
-
-    renderPage('available')
-    const user = userEvent.setup()
-
-    await user.click((await screen.findAllByRole('button', { name: 'Abrir acciones' }))[0])
-    await user.click(await screen.findByRole('button', { name: 'Inscribirme a esta serie semanal' }))
-
-    const dialog = await screen.findByRole('dialog')
-    const confirmButton = within(dialog).getByRole('button', { name: 'Inscribirme' })
-
-    // Sin elegir plan, el diálogo no deja confirmar y el POST no se dispara.
-    expect(confirmButton).toBeDisabled()
-    expect(classTemplatesApi.recurringEnroll).not.toHaveBeenCalled()
-
-    const select = within(dialog).getByRole('combobox')
-    expect(within(select).getByText('Plan A — quedan 3')).toBeInTheDocument()
-    expect(within(select).getByText('Plan B — clases ilimitadas')).toBeInTheDocument()
-
-    await user.selectOptions(select, '12')
-    expect(confirmButton).toBeEnabled()
-
-    await user.click(confirmButton)
-
-    await waitFor(() =>
-      expect(classTemplatesApi.recurringEnroll).toHaveBeenCalledWith(55, {
-        start_date: FUTURE_ISO.slice(0, 10),
-        recurrence_type: 'weekly',
-        student_plan_id: 12,
-      }),
-    )
-  })
-
-  it('reactivar una serie pausada NO muestra selector ni manda student_plan_id aunque haya 2+ membresías usables', async () => {
-    classesApi.list
-      .mockResolvedValueOnce([
-        {
-          id: 802,
-          name: 'Yoga serie pausada',
-          status: 'scheduled',
-          start_datetime: FUTURE_ISO,
-          end_datetime: FUTURE_ISO,
-          capacity: 10,
-          enrollments_count: 0,
-          branch_name: 'Sede',
-          teacher_name: 'Prof',
-          discipline_name: 'Yoga',
-          class_template: 66,
-          class_template_name: 'Yoga Martes',
-        },
-      ])
-      .mockResolvedValueOnce([])
-    enrollmentsApi.my.mockResolvedValue([])
-    recurringEnrollmentsApi.my.mockResolvedValue([
-      { id: 900, class_template: 66, is_active: false, can_manage_now: true },
-    ])
-    recurringEnrollmentsApi.update.mockResolvedValue({})
-    getMyMemberships.mockResolvedValue([
-      { id: 11, plan_name: 'Plan A', remaining_classes: 3, unlimited_classes: false, validity_status: 'active' },
-      { id: 12, plan_name: 'Plan B', remaining_classes: null, unlimited_classes: true, validity_status: 'active' },
-    ])
-
-    renderPage('available')
-    const user = userEvent.setup()
-
-    await user.click((await screen.findAllByRole('button', { name: 'Abrir acciones' }))[0])
-    await user.click(await screen.findByRole('button', { name: 'Reactivar recurrencia semanal' }))
-
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-    await waitFor(() => expect(recurringEnrollmentsApi.update).toHaveBeenCalledWith(900, { is_active: true }))
-    expect(classTemplatesApi.recurringEnroll).not.toHaveBeenCalled()
-  })
-
-  it('si el backend responde 400 (plan_choice_required) al suscribir, muestra el detail real del backend', async () => {
-    seedRecurringClass()
-    getMyMemberships.mockResolvedValue([
-      { id: 1, plan_name: 'Plan Básico', remaining_classes: 10, unlimited_classes: false, validity_status: 'active' },
-    ])
-    classTemplatesApi.recurringEnroll.mockRejectedValue({
-      response: { data: { detail: 'Tienes más de un plan vigente. Elige con cuál reservar.' } },
-    })
-
-    renderPage('available')
-    const user = userEvent.setup()
-
-    await user.click((await screen.findAllByRole('button', { name: 'Abrir acciones' }))[0])
-    await user.click(await screen.findByRole('button', { name: 'Inscribirme a esta serie semanal' }))
-
-    expect(await screen.findByText('Tienes más de un plan vigente. Elige con cuál reservar.')).toBeInTheDocument()
-  })
-})

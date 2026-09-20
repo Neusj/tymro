@@ -180,7 +180,7 @@ def _usable_student_plan_candidates(student, organization_id, target_date):
         .exclude(plan__plan_type=Plan.PlanType.PERSONALIZED)
         .valid_on(target_date)
         .prefetch_related('freezes')
-        .order_by('-start_date', '-id')
+        .order_by('end_date', 'start_date', 'id')
     )
     return [sp for sp in candidates_qs if describe_student_plan(sp, target_date).is_usable]
 
@@ -232,15 +232,13 @@ def resolve_student_plan_for_reservation(student, *, student_plan_id=None, on_da
             CHOSEN_PLAN_UNAVAILABLE_MESSAGE, code=REASON_CHOSEN_PLAN_UNAVAILABLE
         )
 
-    if len(candidates) == 1:
-        return candidates[0]
     if not candidates:
         raise ReservationRuleError(
             'No tienes clases disponibles o plan activo', code=REASON_PLAN_UNAVAILABLE
         )
-    raise ReservationRuleError(
-        PLAN_CHOICE_REQUIRED_MESSAGE, code=REASON_PLAN_CHOICE_REQUIRED
-    )
+    # FEFO: el queryset ya viene ordenado por vencimiento, inicio e id. Cuando el
+    # cliente no expresa una preferencia se consume siempre el primero.
+    return candidates[0]
 
 
 def resolve_student_plan_for_recurring_enrollment(
@@ -325,6 +323,15 @@ def resolve_student_plan_for_recurring_enrollment(
     )
 
 
+def usable_student_plan_candidates(student, *, organization_id, on_date=None, branch_id=None):
+    """Lista FEFO para UI/servicios, usando el mismo predicado que el consumo real."""
+    target_date = on_date or timezone.localdate()
+    candidates = _usable_student_plan_candidates(student, organization_id, target_date)
+    if branch_id is not None:
+        candidates = [item for item in candidates if plan_covers_branch(item, branch_id)]
+    return candidates
+
+
 def plan_covers_branch(student_plan, branch_id):
     """¿Este plan cubre lo que se dicta en `branch_id`? PREDICADO ÚNICO del alcance por
     sucursal, compartido por la reserva puntual (`validate_plan_branch_for_class`, que
@@ -383,12 +390,25 @@ def validate_student_plan_for_class(student_plan, gym_class):
 
 
 def resolve_student_plan_for_class(student, *, gym_class, student_plan_id=None):
-    student_plan = resolve_student_plan_for_reservation(
+    target_date = reservation_date_for_class(gym_class)
+    candidates = usable_student_plan_candidates(
         student,
-        student_plan_id=student_plan_id,
-        on_date=reservation_date_for_class(gym_class),
+        organization_id=student.organization_id,
+        on_date=target_date,
+        branch_id=gym_class.branch_id,
     )
-    return validate_student_plan_for_class(student_plan, gym_class)
+    if student_plan_id is not None:
+        student_plan = next((item for item in candidates if item.id == student_plan_id), None)
+        if student_plan is None:
+            raise ReservationRuleError(
+                CHOSEN_PLAN_UNAVAILABLE_MESSAGE, code=REASON_CHOSEN_PLAN_UNAVAILABLE
+            )
+        return validate_student_plan_for_class(student_plan, gym_class)
+    if not candidates:
+        raise ReservationRuleError(
+            'No tienes clases disponibles o plan activo', code=REASON_PLAN_UNAVAILABLE
+        )
+    return validate_student_plan_for_class(candidates[0], gym_class)
 
 
 def get_enrollment_student_plan(enrollment):

@@ -453,8 +453,8 @@ export const classTemplatesApi = {
   },
   // Picker de una serie PROYECTADA: a quien se podria inscribir sin que la clase exista
   // todavia. No escribe nada; la clase nace recien con la inscripcion.
-  enrollableStudents: async (id) => {
-    const { data } = await api.get(`/class-templates/${id}/enrollable-students/`)
+  enrollableStudents: async (id, params = {}) => {
+    const { data } = await api.get(`/class-templates/${id}/enrollable-students/`, { params })
     return data
   },
   generate: async (id, payload = {}) => {
