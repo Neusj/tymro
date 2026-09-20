@@ -744,12 +744,13 @@ class Plan(TimestampedModel):
         TRIAL = 'trial', 'Trial'
         GIFTCARD = 'giftcard', 'Giftcard'
         PERSONALIZED = 'personalized', 'Clases personalizadas'
+        CONSULTATION = 'consultation', 'Consulta individual'
 
     # Tipos que el gimnasio asigna a mano y NO se venden en línea. Fuente única de verdad:
     # la usan `create_checkout` (rechaza la compra) y el catálogo del alumno en
     # `MembershipPlanViewSet.get_queryset` (los saca de la vitrina). Estaban duplicados como
     # literales en el servicio de pagos y en el frontend, y por eso divergieron.
-    NOT_PURCHASABLE_ONLINE = frozenset({PlanType.TRIAL, PlanType.GIFTCARD})
+    NOT_PURCHASABLE_ONLINE = frozenset({PlanType.TRIAL, PlanType.GIFTCARD, PlanType.CONSULTATION})
 
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='legacy_plans')
     # Alcance del plan: NULL = GLOBAL (vale en toda la organización); con sucursal =
@@ -793,6 +794,9 @@ class Plan(TimestampedModel):
         related_name='allowed_personalized_plans',
         help_text='Vacío = cualquier profesor de la organización.',
     )
+    # Sólo aplica a productos de consulta. Mantenerlo en el producto evita una
+    # configuración paralela y deja un snapshot en la consulta al asignarla.
+    consultation_duration_minutes = models.PositiveIntegerField(default=60)
 
     class Meta:
         ordering = ['name']
@@ -1149,6 +1153,60 @@ class PersonalizedClassSession(TimestampedModel):
 
     def __str__(self):
         return f'Personalizada {self.id} - profesor {self.teacher_id}'
+
+
+class IndividualConsultation(TimestampedModel):
+    """Una unidad de servicio individual; no es una clase ni una membresía."""
+    class Status(models.TextChoices):
+        AVAILABLE = 'available', 'Disponible'
+        SCHEDULED = 'scheduled', 'Acordada'
+        STARTED = 'started', 'Iniciada'
+        FINISHED = 'finished', 'Finalizada'
+        EXPIRED = 'expired', 'Vencida'
+        CANCELLED = 'cancelled', 'Anulada'
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT, related_name='individual_consultations')
+    product = models.ForeignKey(Plan, on_delete=models.PROTECT, related_name='individual_consultations')
+    student = models.ForeignKey('accounts.CustomUser', on_delete=models.PROTECT, related_name='individual_consultations')
+    professional = models.ForeignKey('accounts.CustomUser', on_delete=models.PROTECT, related_name='assigned_individual_consultations')
+    assigned_by = models.ForeignKey('accounts.CustomUser', on_delete=models.SET_NULL, null=True, blank=True, related_name='created_individual_consultations')
+    assigned_at = models.DateTimeField(default=timezone.now)
+    expires_at = models.DateTimeField()
+    expected_duration_minutes = models.PositiveIntegerField(default=60)
+    agreed_at = models.DateTimeField(null=True, blank=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    started_by = models.ForeignKey('accounts.CustomUser', on_delete=models.SET_NULL, null=True, blank=True, related_name='started_individual_consultations')
+    finished_at = models.DateTimeField(null=True, blank=True)
+    finished_by = models.ForeignKey('accounts.CustomUser', on_delete=models.SET_NULL, null=True, blank=True, related_name='finished_individual_consultations')
+    actual_duration_seconds = models.PositiveIntegerField(null=True, blank=True)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.AVAILABLE)
+
+    class Meta:
+        ordering = ['-assigned_at', '-id']
+        indexes = [
+            models.Index(fields=['organization', 'professional', 'status']),
+            models.Index(fields=['organization', 'student', 'status']),
+            models.Index(fields=['organization', 'status', 'expires_at']),
+        ]
+
+    def clean(self):
+        super().clean()
+        if self.product_id and self.product.organization_id != self.organization_id:
+            raise ValidationError({'product': 'El producto debe pertenecer a la organización.'})
+        for field in ('student', 'professional'):
+            person = getattr(self, field, None)
+            if person and person.organization_id != self.organization_id:
+                raise ValidationError({field: 'El usuario debe pertenecer a la organización.'})
+
+
+class ConsultationDateChange(TimestampedModel):
+    consultation = models.ForeignKey(IndividualConsultation, on_delete=models.CASCADE, related_name='agreed_date_changes')
+    previous_agreed_at = models.DateTimeField(null=True, blank=True)
+    new_agreed_at = models.DateTimeField(null=True, blank=True)
+    changed_by = models.ForeignKey('accounts.CustomUser', on_delete=models.SET_NULL, null=True, blank=True, related_name='consultation_date_changes')
+
+    class Meta:
+        ordering = ['-created_at', '-id']
 
 
 class StudentPlanChangeLog(TimestampedModel):

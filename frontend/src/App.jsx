@@ -65,6 +65,7 @@ import SuperadminPlatformPage from './pages/SuperadminPlatformPage'
 import TeacherClassesPage from './pages/TeacherClassesPage'
 import TeacherDashboard from './pages/TeacherDashboard'
 import TeacherPersonalizedClassPage from './pages/TeacherPersonalizedClassPage'
+import IndividualConsultationsPage from './pages/IndividualConsultationsPage'
 import TeacherPaymentRulesPage from './pages/TeacherPaymentRulesPage'
 import TeacherPaymentsOverviewPage from './pages/TeacherPaymentsOverviewPage'
 import ProtectedRoute from './routes/ProtectedRoute'
@@ -709,6 +710,7 @@ export default function App() {
           </ProtectedRoute>
         }
       />
+      <Route path="/consultations" element={<ProtectedRoute allowedRoles={['gym_admin', 'teacher', 'student']}><ShellRoute><IndividualConsultationsPage /></ShellRoute></ProtectedRoute>} />
       <Route
         path="/teacher/classes/:id/attendance"
         element={

@@ -2217,6 +2217,7 @@ class PlanSerializer(serializers.ModelSerializer):
             'total_classes',
             'unlimited_classes',
             'duration_days',
+            'consultation_duration_minutes',
             'price',
             'discount_percentage',
             'effective_price',

@@ -16,7 +16,7 @@ from django.db import models, transaction
 from django.db.models import ProtectedError, RestrictedError
 from django.db.models.functions import Concat, Trim
 from django.utils import timezone
-from django.utils.dateparse import parse_date
+from django.utils.dateparse import parse_date, parse_datetime
 from django.utils.encoding import force_bytes, force_str
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from rest_framework import status
@@ -49,6 +49,7 @@ from .models import (
     PaymentTransaction,
     Plan,
     PersonalizedClassSession,
+    IndividualConsultation,
     Organization,
     OrganizationExpiryNotificationConfig,
     generate_attendance_screen_code,
@@ -199,6 +200,10 @@ from .services.personalized_classes import (
     finish_personalized_session,
     resolve_personalized_student_plan,
     validate_personalized_teacher,
+)
+from .services.individual_consultations import (
+    ConsultationError, assign_consultation, expire_due_consultations,
+    finish_consultation, set_agreed_date, start_consultation,
 )
 
 User = get_user_model()
@@ -2607,6 +2612,110 @@ class PersonalizedClassSessionCancelView(APIView):
                 raise PermissionDenied(exc.message)
             return Response({'detail': exc.message, 'code': exc.code, **exc.extra}, status=status.HTTP_400_BAD_REQUEST)
         return Response(_serialize_personalized_session(session, actor=request.user))
+
+
+def _serialize_individual_consultation(item, actor=None):
+    can_manage = bool(
+        actor and actor.organization_id == item.organization_id
+        and (actor.role == User.Role.GYM_ADMIN or (actor.role == User.Role.TEACHER and actor.id == item.professional_id))
+    )
+    return {
+        'id': item.id, 'organization_id': item.organization_id,
+        'product_id': item.product_id, 'product_name': item.product.name,
+        'student_id': item.student_id, 'student_name': _user_display_name(item.student),
+        'professional_id': item.professional_id, 'professional_name': _user_display_name(item.professional),
+        'assigned_at': item.assigned_at.isoformat(), 'expires_at': item.expires_at.isoformat(),
+        'expected_duration_minutes': item.expected_duration_minutes,
+        'agreed_at': item.agreed_at.isoformat() if item.agreed_at else None,
+        'started_at': item.started_at.isoformat() if item.started_at else None,
+        'finished_at': item.finished_at.isoformat() if item.finished_at else None,
+        'actual_duration_seconds': item.actual_duration_seconds, 'status': item.status,
+        'can_manage': can_manage,
+        'date_history': [
+            {'previous_agreed_at': log.previous_agreed_at.isoformat() if log.previous_agreed_at else None,
+             'new_agreed_at': log.new_agreed_at.isoformat() if log.new_agreed_at else None,
+             'changed_at': log.created_at.isoformat(), 'changed_by': _user_display_name(log.changed_by)}
+            for log in item.agreed_date_changes.all()
+        ],
+    }
+
+
+def _consultation_datetime(value):
+    if value in (None, ''):
+        return None
+    parsed = parse_datetime(str(value))
+    if parsed is None:
+        raise ValidationError({'agreed_at': 'Usa una fecha y hora ISO válida.'})
+    return timezone.make_aware(parsed, timezone.get_current_timezone()) if timezone.is_naive(parsed) else parsed
+
+
+class IndividualConsultationListCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        if not user.organization_id:
+            raise PermissionDenied('No tienes permisos para ver consultas.')
+        expire_due_consultations(user.organization_id)
+        qs = IndividualConsultation.objects.select_related('product', 'student', 'professional').prefetch_related('agreed_date_changes__changed_by').filter(organization_id=user.organization_id)
+        if user.role == User.Role.TEACHER:
+            qs = qs.filter(professional_id=user.id)
+        elif user.role == User.Role.STUDENT:
+            qs = qs.filter(student_id=user.id)
+        elif user.role != User.Role.GYM_ADMIN:
+            raise PermissionDenied('No tienes permisos para ver consultas.')
+        requested = request.query_params.get('status')
+        if requested:
+            qs = qs.filter(status__in=[v.strip() for v in requested.split(',') if v.strip()])
+        return Response([_serialize_individual_consultation(item, user) for item in qs])
+
+    def post(self, request):
+        try:
+            item = assign_consultation(actor=request.user, student_id=request.data.get('student_id'), professional_id=request.data.get('professional_id'), product_id=request.data.get('product_id'), agreed_at=_consultation_datetime(request.data.get('agreed_at')))
+        except ConsultationError as exc:
+            if exc.code == 'forbidden': raise PermissionDenied(exc.message)
+            raise ValidationError({'detail': exc.message})
+        item = IndividualConsultation.objects.select_related('product', 'student', 'professional').prefetch_related('agreed_date_changes__changed_by').get(pk=item.pk)
+        return Response(_serialize_individual_consultation(item, request.user), status=status.HTTP_201_CREATED)
+
+
+class IndividualConsultationDateView(APIView):
+    permission_classes = [IsAuthenticated]
+    def put(self, request, pk):
+        try:
+            item = set_agreed_date(consultation_id=pk, actor=request.user, agreed_at=_consultation_datetime(request.data.get('agreed_at')))
+        except IndividualConsultation.DoesNotExist: raise NotFound('Consulta no encontrada.')
+        except ConsultationError as exc:
+            if exc.code == 'forbidden': raise PermissionDenied(exc.message)
+            raise ValidationError({'detail': exc.message})
+        item = IndividualConsultation.objects.select_related('product', 'student', 'professional').prefetch_related('agreed_date_changes__changed_by').get(pk=item.pk)
+        return Response(_serialize_individual_consultation(item, request.user))
+
+
+class IndividualConsultationStartView(APIView):
+    permission_classes = [IsAuthenticated]
+    def post(self, request, pk):
+        try:
+            item = start_consultation(consultation_id=pk, actor=request.user, student_token=request.data.get('student_qr_token'))
+        except IndividualConsultation.DoesNotExist: raise NotFound('Consulta no encontrada.')
+        except ConsultationError as exc:
+            if exc.code == 'forbidden': raise PermissionDenied(exc.message)
+            return Response({'detail': exc.message, 'code': exc.code}, status=status.HTTP_400_BAD_REQUEST)
+        item = IndividualConsultation.objects.select_related('product', 'student', 'professional').prefetch_related('agreed_date_changes__changed_by').get(pk=item.pk)
+        return Response(_serialize_individual_consultation(item, request.user))
+
+
+class IndividualConsultationFinishView(APIView):
+    permission_classes = [IsAuthenticated]
+    def post(self, request, pk):
+        try:
+            item = finish_consultation(consultation_id=pk, actor=request.user)
+        except IndividualConsultation.DoesNotExist: raise NotFound('Consulta no encontrada.')
+        except ConsultationError as exc:
+            if exc.code == 'forbidden': raise PermissionDenied(exc.message)
+            return Response({'detail': exc.message, 'code': exc.code}, status=status.HTTP_400_BAD_REQUEST)
+        item = IndividualConsultation.objects.select_related('product', 'student', 'professional').prefetch_related('agreed_date_changes__changed_by').get(pk=item.pk)
+        return Response(_serialize_individual_consultation(item, request.user))
 
 
 class AttendanceQrCurrentView(APIView):

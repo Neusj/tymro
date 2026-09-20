@@ -844,6 +844,14 @@ export const personalizedClassesApi = {
   },
 }
 
+export const individualConsultationsApi = {
+  list: async (params = {}) => (await api.get('/individual-consultations/', { params })).data,
+  create: async (payload) => (await api.post('/individual-consultations/', payload)).data,
+  setAgreedDate: async (id, payload) => (await api.put(`/individual-consultations/${id}/agreed-date/`, payload)).data,
+  start: async (id, student_qr_token) => (await api.post(`/individual-consultations/${id}/start/`, { student_qr_token })).data,
+  finish: async (id) => (await api.post(`/individual-consultations/${id}/finish/`)).data,
+}
+
 const normalizeListResponse = (data) => {
   if (Array.isArray(data)) {
     return data
