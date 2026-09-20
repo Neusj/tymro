@@ -429,6 +429,16 @@ export const classesApi = {
     const { data } = await api.get('/classes/dashboard-summary/', { params })
     return data
   },
+  // Las listas por fecha pueden incluir una fila virtual. La materialización se
+  // centraliza aquí porque todas las operaciones de clase (asistencia, roster,
+  // QR e inscripción) necesitan después una PK real.
+  resolveProjection: async (id) => {
+    if (!String(id || '').startsWith('virtual:')) {
+      return { id }
+    }
+    const { data } = await api.post('/classes/resolve-projection/', { id })
+    return data.gym_class
+  },
 }
 
 export const classTemplatesApi = {
@@ -572,13 +582,6 @@ export const studentDiscountConfigApi = {
   get: async (orgId) => {
     const { data } = await api.get(`/organizations/${orgId}/student-discount-config/`)
     return data
-  },
-  resolveProjection: async (id) => {
-    if (!String(id || '').startsWith('virtual:')) {
-      return { id }
-    }
-    const { data } = await api.post('/classes/resolve-projection/', { id })
-    return data.gym_class
   },
   update: async (orgId, payload) => {
     const { data } = await api.put(`/organizations/${orgId}/student-discount-config/`, payload)
@@ -773,8 +776,8 @@ export const importsApi = {
 }
 
 export const attendanceQrApi = {
-  current: async () => {
-    const { data } = await api.get('/attendance-qr/current/')
+  current: async (params = {}) => {
+    const { data } = await api.get('/attendance-qr/current/', { params })
     return data
   },
   // Pantalla pública de recepción (sin sesión): usa `publicApi`, sin token.
@@ -807,6 +810,17 @@ export const attendanceQrApi = {
   // Confirma con el grant de un solo uso emitido por el preview (no el token del QR).
   checkIn: async (grant) => {
     const { data } = await api.post('/attendance-qr/check-in/', { grant })
+    return data
+  },
+}
+
+export const studentQrApi = {
+  mine: async () => {
+    const { data } = await api.get('/me/student-qr/')
+    return data
+  },
+  resolveForClass: async (classId, token) => {
+    const { data } = await api.post(`/classes/${classId}/student-qr/`, { token })
     return data
   },
 }

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { pushApi } from '../api/client'
+import QRCode from 'qrcode'
+import { pushApi, studentQrApi } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import { browserNotificationPermission, disablePushNotifications, enablePushNotifications, isPushSupported } from '../pwa/pushNotifications'
 
@@ -16,6 +17,8 @@ export default function ProfilePage() {
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [studentQrImage, setStudentQrImage] = useState('')
+  const [studentQrError, setStudentQrError] = useState('')
 
   const supported = isPushSupported()
 
@@ -34,6 +37,21 @@ export default function ProfilePage() {
       cancelled = true
     }
   }, [user])
+
+  useEffect(() => {
+    let cancelled = false
+    const loadStudentQr = async () => {
+      try {
+        const { token } = await studentQrApi.mine()
+        const image = await QRCode.toDataURL(token, { width: 360, margin: 2 })
+        if (!cancelled) setStudentQrImage(image)
+      } catch {
+        if (!cancelled) setStudentQrError('No se pudo cargar tu carnet QR.')
+      }
+    }
+    if (user?.role === 'student') loadStudentQr()
+    return () => { cancelled = true }
+  }, [user?.role])
 
   const activate = async () => {
     setLoading(true)
@@ -139,6 +157,15 @@ export default function ProfilePage() {
           </div>
         </div>
       </div>
+
+      {user?.role === 'student' ? (
+        <div className="mt-6 rounded-lg border border-brand-line bg-brand-soft p-5">
+          <h2 className="text-lg font-semibold text-brand-white">Mi carnet QR</h2>
+          <p className="mt-1 text-sm text-brand-muted">Muéstralo al profesor para registrar tu asistencia.</p>
+          {studentQrError ? <p className="mt-3 text-sm text-brand-red">{studentQrError}</p> : null}
+          {studentQrImage ? <img src={studentQrImage} alt="Mi carnet QR" className="mt-4 w-full max-w-xs rounded-xl bg-white p-3" /> : null}
+        </div>
+      ) : null}
     </section>
   )
 }

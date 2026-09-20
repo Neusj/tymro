@@ -82,6 +82,9 @@ class CustomUser(AbstractUser):
     email_verified = models.BooleanField(default=False)
     trial_eligible = models.BooleanField(default=False)
     has_used_trial = models.BooleanField(default=False)
+    # Identificador público opaco para el carnet QR del alumno. No sustituye el id
+    # interno ni contiene información personal; sólo se resuelve autenticadamente.
+    student_qr_token = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
 
     class Meta:
         constraints = [

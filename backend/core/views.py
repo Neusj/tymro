@@ -2,6 +2,7 @@
 import csv
 import logging
 from datetime import datetime, time, timedelta
+import uuid
 from uuid import uuid4
 
 from django.conf import settings
@@ -983,6 +984,16 @@ class MeView(APIView):
         return Response(CustomUserSerializer(request.user, context={'request': request}).data)
 
 
+class StudentQrIdentityView(APIView):
+    """Entrega el identificador QR sólo a su propio alumno autenticado."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if request.user.role != User.Role.STUDENT or not request.user.organization_id:
+            raise PermissionDenied('El carnet QR está disponible solo para alumnos.')
+        return Response({'token': str(request.user.student_qr_token)})
+
+
 class PushPreferenceView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -1779,7 +1790,7 @@ class PublicTrialBookView(APIView):
         )
 
 
-def _build_qr_token(organization_id):
+def _build_qr_token(organization_id, gym_class_id=None):
     now = timezone.now()
     expires_at = now + timedelta(seconds=QR_TOKEN_ACCEPTANCE_SECONDS)
     payload = {
@@ -1788,6 +1799,10 @@ def _build_qr_token(organization_id):
         'expires_at': expires_at.isoformat(),
         'nonce': uuid4().hex,
     }
+    # La ausencia preserva el QR general de recepción. Si existe, la firma une el
+    # QR a UNA instancia real de clase: el cliente no puede sustituirla.
+    if gym_class_id is not None:
+        payload['gym_class_id'] = int(gym_class_id)
     return signing.dumps(payload, salt=QR_ATTENDANCE_SALT), expires_at
 
 
@@ -1858,8 +1873,8 @@ def _start_attendance_screen_session(organization):
     return organization
 
 
-def _attendance_qr_payload(request, organization):
-    token, expires_at = _build_qr_token(organization.id)
+def _attendance_qr_payload(request, organization, gym_class=None):
+    token, expires_at = _build_qr_token(organization.id, getattr(gym_class, 'id', None))
     check_in_path = f'/attendance/check-in?token={token}'
     return {
         'organization_name': organization.name,
@@ -2012,7 +2027,12 @@ def _load_qr_token(raw_token):
     organization_id = payload.get('organization_id')
     if not organization_id:
         raise ValidationError({'token': 'Token QR inválido.'})
-    payload['organization_id'] = int(organization_id)
+    try:
+        payload['organization_id'] = int(organization_id)
+        if payload.get('gym_class_id') is not None:
+            payload['gym_class_id'] = int(payload['gym_class_id'])
+    except (TypeError, ValueError):
+        raise ValidationError({'token': 'Token QR inválido.'})
     payload['expires_at'] = expires_at
     return payload
 
@@ -2250,6 +2270,39 @@ def _qr_preview_payload(student, organization_id):
     }
 
 
+def _specific_qr_preview_payload(student, organization_id, gym_class_id):
+    """Preview para QR firmado de una clase: nunca busca otra clase cercana."""
+    if student.organization_id != organization_id:
+        return {'status': 'wrong_organization', 'detail': 'Este QR pertenece a otro gimnasio.', 'class': None, 'next_check_in_at': None}
+    gym_class = GymClass.objects.filter(id=gym_class_id, organization_id=organization_id).first()
+    if gym_class is None:
+        return {'status': 'no_available_class', 'detail': 'La clase de este QR ya no está disponible.', 'class': None, 'next_check_in_at': None}
+    gym_class.refresh_status_from_schedule(save=True)
+    if gym_class.status in {GymClass.Status.CANCELLED, GymClass.Status.SUSPENDED, GymClass.Status.COMPLETED_EARLY}:
+        return {'status': 'no_available_class', 'detail': 'Esta clase no está disponible para registrar asistencia.', 'class': None, 'next_check_in_at': None}
+    if not Enrollment.objects.filter(gym_class=gym_class, student=student, status='active').exists():
+        return {'status': 'no_available_class', 'detail': 'No estás inscrito en esta clase.', 'class': None, 'next_check_in_at': None}
+    window_start, window_end = _attendance_window(gym_class)
+    now = timezone.now()
+    if not window_start <= now <= window_end:
+        return {
+            'status': 'no_available_class',
+            'detail': 'La asistencia para esta clase no está disponible en este momento.',
+            'class': None,
+            'next_check_in_at': window_start if now < window_start else None,
+        }
+    attendance = Attendance.objects.filter(gym_class=gym_class, student=student).first()
+    already_registered = bool(attendance and attendance.status == Attendance.Status.PRESENT)
+    return {
+        'status': 'already_registered' if already_registered else 'ready',
+        'detail': 'Tu asistencia ya fue registrada para esta clase.' if already_registered else '',
+        'class': _serialize_qr_class(gym_class),
+        'attendance_status': attendance.status if attendance else None,
+        'attendance_source': attendance.source if attendance else None,
+        'next_check_in_at': None,
+    }
+
+
 def _personalized_preview_payload(student, payload):
     if student.organization_id != payload['organization_id']:
         return {
@@ -2374,6 +2427,17 @@ def _teacher_qr_class_or_403(teacher, class_id):
     gym_class = GymClass.objects.filter(id=class_id, organization_id=teacher.organization_id).first()
     if gym_class is None or not _is_own_class_teacher(teacher, gym_class):
         raise PermissionDenied('Solo puedes exponer el QR de una clase que dictas en tu gimnasio.')
+    return gym_class
+
+
+def _org_admin_qr_class_or_403(user, class_id):
+    try:
+        class_id = int(class_id)
+    except (TypeError, ValueError):
+        raise PermissionDenied('Indica una clase válida para exponer el QR de asistencia.')
+    gym_class = GymClass.objects.filter(id=class_id, organization_id=user.organization_id).first()
+    if gym_class is None:
+        raise PermissionDenied('Solo puedes exponer el QR de una clase de tu gimnasio.')
     return gym_class
 
 
@@ -2555,7 +2619,10 @@ class AttendanceQrCurrentView(APIView):
 
         # gym_admin: genera el QR de su org + gestiona la sesión de pantalla (como hoy).
         if _is_gym_admin(user):
-            payload = _attendance_qr_payload(request, user.organization)
+            gym_class = None
+            if request.query_params.get('class_id') not in (None, ''):
+                gym_class = _org_admin_qr_class_or_403(user, request.query_params.get('class_id'))
+            payload = _attendance_qr_payload(request, user.organization, gym_class)
             payload.update(_attendance_screen_session_payload(request, user.organization))
             return Response(payload)
 
@@ -2563,8 +2630,8 @@ class AttendanceQrCurrentView(APIView):
         # su propia org (scoped por org). No recibe la gestión de la pantalla de
         # recepción: solo el QR rotante para mostrarlo en su clase.
         if _is_teacher(user):
-            _teacher_qr_class_or_403(user, request.query_params.get('class_id'))
-            return Response(_attendance_qr_payload(request, user.organization))
+            gym_class = _teacher_qr_class_or_403(user, request.query_params.get('class_id'))
+            return Response(_attendance_qr_payload(request, user.organization, gym_class))
 
         raise PermissionDenied('No tienes permiso para generar el QR de asistencia.')
 
@@ -2643,7 +2710,12 @@ class AttendanceQrPreviewView(APIView):
         if payload.get('kind') == 'personalized':
             preview = _personalized_preview_payload(request.user, payload)
         else:
-            preview = _qr_preview_payload(request.user, payload['organization_id'])
+            gym_class_id = payload.get('gym_class_id')
+            preview = (
+                _specific_qr_preview_payload(request.user, payload['organization_id'], gym_class_id)
+                if gym_class_id is not None
+                else _qr_preview_payload(request.user, payload['organization_id'])
+            )
         # Si el alumno puede marcar, emitimos el permiso de un solo uso para confirmar.
         if preview.get('status') == 'ready' and preview.get('class'):
             preview['checkin_grant'] = _build_checkin_grant(
@@ -4450,6 +4522,53 @@ class GymClassViewSet(ModelViewSet):
             )
 
         return Response(results)
+
+    @action(detail=True, methods=['post'], url_path='student-qr')
+    def student_qr(self, request, pk=None):
+        """Resuelve el carnet QR dentro del contexto autorizado de UNA clase.
+
+        El QR sólo contiene un UUID opaco. Nunca se usa como endpoint público ni se
+        busca fuera del tenant de la clase, para que no sea un directorio de alumnos.
+        Las mutaciones posteriores siguen usando los endpoints existentes de reserva
+        y asistencia, que son la fuente única de sus reglas y consumo FEFO.
+        """
+        gym_class = self.get_object()
+        user = request.user
+        if not (
+            _is_superadmin(user)
+            or ((roles.is_org_admin(user) or _is_monitor(user)) and gym_class.organization_id == user.organization_id)
+            or _is_own_class_teacher(user, gym_class)
+        ):
+            raise PermissionDenied('No tienes permisos para escanear alumnos en esta clase.')
+
+        gym_class.refresh_status_from_schedule(save=True)
+        if gym_class.status in [GymClass.Status.CANCELLED, GymClass.Status.SUSPENDED]:
+            raise PermissionDenied('No puedes usar el QR de alumno en una clase cancelada o suspendida.')
+
+        raw_token = str(request.data.get('token') or '').strip()
+        try:
+            token = uuid.UUID(raw_token)
+        except (ValueError, AttributeError):
+            raise ValidationError({'token': 'QR de alumno inválido.'})
+
+        student = User.objects.filter(
+            student_qr_token=token,
+            organization_id=gym_class.organization_id,
+            role=User.Role.STUDENT,
+            is_active=True,
+        ).first()
+        if student is None:
+            # Misma respuesta para UUID inexistente y QR de otro tenant.
+            raise NotFound('Alumno no encontrado.')
+
+        enrollment = gym_class.enrollments.filter(student=student, status='active').first()
+        attendance = gym_class.attendances.filter(student=student).first() if enrollment else None
+        full_name = f'{student.first_name} {student.last_name}'.strip() or student.username
+        return Response({
+            'student': {'id': student.id, 'name': full_name},
+            'enrolled': bool(enrollment),
+            'attendance_status': attendance.status if attendance else None,
+        })
 
     @action(detail=True, methods=['get'], url_path='enrollable-students')
     def enrollable_students(self, request, pk=None):

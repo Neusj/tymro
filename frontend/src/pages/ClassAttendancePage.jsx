@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
+import QRCode from 'qrcode'
 import { useLocation, useParams } from 'react-router-dom'
-import { classesApi } from '../api/client'
+import { attendanceQrApi, classesApi, enrollmentsApi, studentQrApi } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import ClassEnrollmentModal from '../components/ClassEnrollmentModal'
 import DashboardHeader from '../components/DashboardHeader'
+import FormModal from '../components/FormModal'
+import QrCameraScanner from '../components/QrCameraScanner'
 import ValueBadge from '../components/ui/ValueBadge'
 import { firstApiError } from '../utils/format'
 import { canManageOperational } from '../utils/roles'
@@ -58,6 +61,11 @@ export default function ClassAttendancePage() {
   const [error, setError] = useState('')
   const [enrollmentModalOpen, setEnrollmentModalOpen] = useState(false)
   const [classId, setClassId] = useState(id)
+  const [classQrOpen, setClassQrOpen] = useState(false)
+  const [classQrImage, setClassQrImage] = useState('')
+  const [scannerOpen, setScannerOpen] = useState(false)
+  const [scanResult, setScanResult] = useState(null)
+  const [scanError, setScanError] = useState('')
 
   const isTeacherRoute = location.pathname.startsWith('/teacher/')
   const backTo = location.state?.classListBackTo
@@ -138,6 +146,54 @@ export default function ClassAttendancePage() {
     }
   }
 
+  const openClassQr = async () => {
+    setError('')
+    try {
+      const data = await attendanceQrApi.current({ class_id: classId })
+      setClassQrImage(await QRCode.toDataURL(data.check_in_url, { width: 420, margin: 2 }))
+      setClassQrOpen(true)
+    } catch (apiError) {
+      setError(firstApiError(apiError?.response?.data, 'No se pudo generar el QR de asistencia.'))
+    }
+  }
+
+  const decodeStudentQr = async (token) => {
+    setScanError('')
+    try {
+      const result = await studentQrApi.resolveForClass(classId, token.trim())
+      setScanResult(result)
+    } catch (apiError) {
+      setScanError(firstApiError(apiError?.response?.data, 'No se pudo identificar el alumno.'))
+    }
+  }
+
+  const markScannedStudent = async () => {
+    if (!scanResult) return
+    const nextStatus = scanResult.attendance_status === 'present' ? 'absent' : 'present'
+    try {
+      await classesApi.toggleAttendance(classId, { student_id: scanResult.student.id, status: nextStatus })
+      setScanResult((prev) => ({ ...prev, attendance_status: nextStatus }))
+      loadData()
+    } catch (apiError) {
+      setScanError(firstApiError(apiError?.response?.data, 'No se pudo guardar la asistencia.'))
+    }
+  }
+
+  const enrollScannedStudent = async () => {
+    if (!scanResult) return
+    try {
+      // El endpoint existente centraliza cupo, estado, sede, vigencia y FEFO.
+      await enrollmentsApi.create({ gym_class: classId, student: scanResult.student.id })
+      const next = { ...scanResult, enrolled: true, attendance_status: null }
+      setScanResult(next)
+      await classesApi.toggleAttendance(classId, { student_id: next.student.id, status: 'present' })
+      setScanResult({ ...next, attendance_status: 'present' })
+      loadData()
+    } catch (apiError) {
+      setScanError(firstApiError(apiError?.response?.data, 'No se pudo inscribir al alumno.'))
+    }
+  }
+
   return (
     <div className="space-y-6">
       <DashboardHeader
@@ -149,15 +205,11 @@ export default function ClassAttendancePage() {
         }
         back={back}
         extra={
-          canManageEnrollments ? (
-            <button
-              type="button"
-              onClick={() => setEnrollmentModalOpen(true)}
-              className="btn-primary"
-            >
-              Inscribir alumno
-            </button>
-          ) : null
+          <div className="flex gap-2">
+            {['teacher', 'gym_admin'].includes(user?.role) ? <button type="button" onClick={openClassQr} className="btn-ghost">Mostrar QR</button> : null}
+            {canManageEnrollments ? <button type="button" onClick={() => setEnrollmentModalOpen(true)} className="btn-primary">Inscribir alumno</button> : null}
+            {canToggle ? <button type="button" onClick={() => { setScannerOpen(true); setScanResult(null); setScanError('') }} className="btn-primary">Escanear alumno</button> : null}
+          </div>
         }
       />
 
@@ -243,6 +295,30 @@ export default function ClassAttendancePage() {
         onClose={() => setEnrollmentModalOpen(false)}
         onChanged={loadData}
       />
+
+      <FormModal open={classQrOpen} title="QR de asistencia" onClose={() => setClassQrOpen(false)}>
+        <p className="text-sm text-brand-muted">Los alumnos inscritos pueden escanearlo para marcar asistencia.</p>
+        {classQrImage ? <img src={classQrImage} alt="QR de asistencia de la clase" className="mx-auto mt-4 w-full max-w-sm rounded-xl bg-white p-3" /> : null}
+      </FormModal>
+
+      <FormModal open={scannerOpen} title="Escanear carnet QR" onClose={() => setScannerOpen(false)} size="lg">
+        {!scanResult ? <QrCameraScanner onDecode={decodeStudentQr} paused={Boolean(scanError)} /> : null}
+        {scanError ? <p className="mt-3 text-sm text-brand-red">{scanError}</p> : null}
+        {!scanResult && scanError ? <button type="button" className="btn-ghost mt-3" onClick={() => setScanError('')}>Reintentar</button> : null}
+        {scanResult ? (
+          <div className="space-y-4">
+            <p className="text-lg font-semibold text-brand-white">{scanResult.student.name}</p>
+            {scanResult.enrolled ? (
+              <button type="button" className="btn-primary" onClick={markScannedStudent}>
+                {scanResult.attendance_status === 'present' ? 'Quitar asistencia' : 'Marcar asistencia'}
+              </button>
+            ) : (
+              <button type="button" className="btn-primary" onClick={enrollScannedStudent}>Inscribir y marcar asistencia</button>
+            )}
+            <button type="button" className="btn-ghost" onClick={() => { setScanResult(null); setScanError('') }}>Escanear otro</button>
+          </div>
+        ) : null}
+      </FormModal>
     </div>
   )
 }

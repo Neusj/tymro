@@ -669,23 +669,13 @@ export default function TeacherClassesPage({ mode = 'upcoming' }) {
             )
           return (
             <>
-              {isVirtual ? (
-                <button
-                  type="button"
-                  disabled
-                  className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white opacity-60"
-                >
-                  {mode === 'history' ? 'Ver asistencia' : 'Tomar asistencia'}
-                </button>
-              ) : (
-                <Link
-                  to={`/teacher/classes/${row.id}/attendance`}
-                  state={classListRouteState}
-                  className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue"
-                >
-                  {mode === 'history' ? 'Ver asistencia' : 'Tomar asistencia'}
-                </Link>
-              )}
+              <Link
+                to={`/teacher/classes/${row.id}/attendance`}
+                state={classListRouteState}
+                className="w-full rounded-lg border border-brand-line px-2.5 py-1.5 text-left text-xs text-brand-white transition hover:border-brand-blue"
+              >
+                {mode === 'history' ? 'Ver asistencia' : 'Tomar asistencia'}
+              </Link>
               {mode === 'upcoming' && canReleaseSubstitution ? (
                 <button
                   type="button"

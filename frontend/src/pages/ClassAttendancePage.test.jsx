@@ -11,6 +11,12 @@ vi.mock('../api/client', () => ({
     enrollableStudents: vi.fn(),
     toggleAttendance: vi.fn(),
   },
+  attendanceQrApi: {
+    current: vi.fn(),
+  },
+  studentQrApi: {
+    resolveForClass: vi.fn(),
+  },
   classTemplatesApi: {
     enrollableStudents: vi.fn(),
   },
@@ -144,5 +150,14 @@ describe('ClassAttendancePage - boton de asistencia', () => {
     renderPage()
 
     expect(await screen.findByRole('button', { name: 'Inscribir alumno' })).toBeInTheDocument()
+  })
+
+  it('permite QR y scanner al profesor aunque la clase no tenga inscritos', async () => {
+    classesApi.enrolledStudents.mockResolvedValue([])
+    renderPage()
+
+    expect(await screen.findByRole('button', { name: 'Mostrar QR' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Escanear alumno' })).toBeInTheDocument()
+    expect(screen.getByText('No hay alumnos inscritos activos en esta clase.')).toBeInTheDocument()
   })
 })
