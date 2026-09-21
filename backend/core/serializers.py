@@ -2203,6 +2203,8 @@ class PlanSerializer(serializers.ModelSerializer):
     effective_discount_source = serializers.SerializerMethodField()
     student_discount_applicable = serializers.SerializerMethodField()
     student_discount_percentage = serializers.SerializerMethodField()
+    total_classes = serializers.IntegerField(required=False)
+    unlimited_classes = serializers.BooleanField(required=False)
 
     class Meta:
         model = Plan
@@ -2279,12 +2281,18 @@ class PlanSerializer(serializers.ModelSerializer):
         plan_type = attrs.get('plan_type', getattr(instance, 'plan_type', None))
         professional = attrs.get('consultation_professional', getattr(instance, 'consultation_professional', None))
         if plan_type == Plan.PlanType.CONSULTATION:
+            attrs['total_classes'] = 0
+            attrs['unlimited_classes'] = False
             if professional is None:
                 raise serializers.ValidationError({'consultation_professional': 'Una consulta debe tener un profesional asignado antes de publicarse.'})
             if professional.organization_id != organization.id or professional.role not in TEACHER_ELIGIBLE_ROLES or not professional.is_active:
                 raise serializers.ValidationError({'consultation_professional': 'El profesional debe estar activo y pertenecer a la organización.'})
         elif 'consultation_professional' in attrs and professional is not None:
             raise serializers.ValidationError({'consultation_professional': 'Este campo solo corresponde a productos de consulta.'})
+        elif instance is None:
+            missing = [field for field in ('total_classes', 'unlimited_classes') if field not in attrs]
+            if missing:
+                raise serializers.ValidationError({field: 'Este campo es obligatorio para este tipo de plan.' for field in missing})
 
         return attrs
 

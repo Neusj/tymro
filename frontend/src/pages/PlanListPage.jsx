@@ -158,12 +158,11 @@ export default function PlanListPage({
       setError('El nombre del plan es obligatorio.')
       return
     }
+    const isConsultation = form.plan_type === 'consultation'
     const unlimitedClasses = toBool(form.unlimited_classes, false)
     const payload = {
       name: normalizedName,
       plan_type: form.plan_type || 'monthly',
-      total_classes: unlimitedClasses ? 0 : Number(form.total_classes),
-      unlimited_classes: unlimitedClasses,
       duration_days: Number(form.duration_days),
       price: Number(form.price),
       discount_percentage: Number(form.discount_percentage),
@@ -171,6 +170,10 @@ export default function PlanListPage({
       consultation_professional: form.plan_type === 'consultation' ? Number(form.consultation_professional) : null,
       is_public: toBool(form.is_public, true),
       is_active: toBool(form.is_active, true),
+    }
+    if (!isConsultation) {
+      payload.total_classes = unlimitedClasses ? 0 : Number(form.total_classes)
+      payload.unlimited_classes = unlimitedClasses
     }
     if (user?.role === 'superadmin') {
       payload.organization = form.organization
@@ -390,7 +393,7 @@ export default function PlanListPage({
           ) : null}
           <label className="space-y-1 text-sm">
             <span>Tipo</span>
-            <select value={form.plan_type} onChange={(event) => setForm((prev) => ({ ...prev, plan_type: event.target.value }))} className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2">
+            <select value={form.plan_type} onChange={(event) => setForm((prev) => ({ ...prev, plan_type: event.target.value, total_classes: event.target.value === 'consultation' ? 0 : prev.total_classes, unlimited_classes: event.target.value === 'consultation' ? false : prev.unlimited_classes }))} className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2">
               <option value="monthly">Mensual</option>
               <option value="pack">Pack</option>
               <option value="single_class">Clase suelta</option>
@@ -413,7 +416,7 @@ export default function PlanListPage({
               <input required type="number" min="1" value={form.consultation_duration_minutes} onChange={(event) => setForm((prev) => ({ ...prev, consultation_duration_minutes: event.target.value }))} className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2" />
             </label>
           </> : null}
-          <label className="space-y-1 text-sm">
+          {form.plan_type !== 'consultation' ? <><label className="space-y-1 text-sm">
             <span>Clases totales</span>
             <input
               required={!form.unlimited_classes}
@@ -434,8 +437,9 @@ export default function PlanListPage({
             />
             Clases ilimitadas
           </label>
+          </> : null}
           <label className="space-y-1 text-sm">
-            <span>Duración (días)</span>
+            <span>{form.plan_type === 'consultation' ? 'Vigencia (días)' : 'Duración (días)'}</span>
             <input
               required
               type="number"

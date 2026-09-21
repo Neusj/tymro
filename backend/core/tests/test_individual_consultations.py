@@ -5,6 +5,7 @@ from django.utils import timezone
 
 from core.models import ConsultationDateChange, IndividualConsultation, PaymentTransaction, Plan
 from core.services.individual_consultations import create_consultation_from_payment
+from core.serializers import PlanSerializer
 
 pytestmark = pytest.mark.django_db
 
@@ -84,3 +85,16 @@ def test_approved_purchase_materializes_one_consultation_with_product_profession
     assert first.student_id == setup['student'].id
     assert first.status == IndividualConsultation.Status.AVAILABLE
     assert first.expected_duration_minutes == 60
+
+
+def test_consultation_product_omits_class_fields_and_normalizes_them(setup):
+    serializer = PlanSerializer(data={
+        'organization': setup['org'].id, 'name': 'Consulta sin saldo',
+        'plan_type': Plan.PlanType.CONSULTATION, 'duration_days': 90, 'price': 20000,
+        'consultation_duration_minutes': 45,
+        'consultation_professional': setup['professional'].id,
+    })
+    assert serializer.is_valid(), serializer.errors
+    product = serializer.save()
+    assert product.total_classes == 0
+    assert product.unlimited_classes is False
