@@ -307,12 +307,11 @@ def _period_contains(period, value):
     return period['date_from'] <= value_date <= period['date_to']
 
 
-def _period_paid_teacher_ids(organization_id, date_from):
+def _period_paid_teacher_ids(organization_id, date_from, date_to):
     return set(
-        TeacherPayout.objects.filter(
-            organization_id=organization_id,
-            period_year=date_from.year,
-            period_month=date_from.month,
+        TeacherPayout.objects.filter(organization_id=organization_id).filter(
+            Q(period_start=date_from, period_end=date_to)
+            | Q(period_start__isnull=True, period_year=date_from.year, period_month=date_from.month)
         ).values_list('teacher_id', flat=True)
     )
 
@@ -336,7 +335,7 @@ def _calculation_candidates(organization_id, date_from, date_to, mode, teacher_i
     }:
         raise ValueError('Modo de calculo invalido.')
 
-    paid_teacher_ids = _period_paid_teacher_ids(organization_id, date_from)
+    paid_teacher_ids = _period_paid_teacher_ids(organization_id, date_from, date_to)
     teacher_periods = _teacher_periods_for_request(organization_id, date_from, date_to, teacher_id=teacher_id)
     query_from, query_to = _query_bounds_for_periods(teacher_periods, date_from, date_to)
     active_records = _active_records_by_class(organization_id, query_from, query_to, teacher_id=teacher_id)
@@ -461,9 +460,14 @@ def void_teacher_payment_batch(batch, actor, reason=''):
     teacher_ids = {item.get('teacher_id') for item in items if item.get('teacher_id')}
     if teacher_ids and TeacherPayout.objects.filter(
         organization_id=batch.organization_id,
-        period_year=batch.period_start.year,
-        period_month=batch.period_start.month,
         teacher_id__in=teacher_ids,
+    ).filter(
+        Q(period_start__lte=batch.period_end, period_end__gte=batch.period_start)
+        | Q(
+            period_start__isnull=True,
+            period_year=batch.period_start.year,
+            period_month=batch.period_start.month,
+        )
     ).exists():
         raise ValueError('No puedes anular este lote porque ya hay profesores pagados en el periodo.')
 

@@ -7585,15 +7585,14 @@ class TeacherPaymentRecordViewSet(ModelViewSet):
         return organization_id, date_from, date_to, teacher_id, class_kind
 
     @staticmethod
-    def _attach_payouts(data, organization_id, date_from):
-        """Anexa a cada fila el estado de pago del periodo (mes de date_from).
+    def _attach_payouts(data, organization_id, date_from, date_to):
+        """Anexa a cada fila el estado de pago del rango exacto solicitado.
         Solo lectura; no toca el motor de calculo."""
         payouts = {
             p.teacher_id: p
-            for p in TeacherPayout.objects.filter(
-                organization_id=organization_id,
-                period_year=date_from.year,
-                period_month=date_from.month,
+            for p in TeacherPayout.objects.filter(organization_id=organization_id).filter(
+                models.Q(period_start=date_from, period_end=date_to)
+                | models.Q(period_start__isnull=True, period_year=date_from.year, period_month=date_from.month)
             )
         }
         for row in data['rows']:
@@ -7655,7 +7654,7 @@ class TeacherPaymentRecordViewSet(ModelViewSet):
         data = build_teacher_payment_summary(
             organization_id, date_from, date_to, teacher_id=teacher_id, class_kind=class_kind
         )
-        self._attach_payouts(data, organization_id, date_from)
+        self._attach_payouts(data, organization_id, date_from, date_to)
         if _is_superadmin(request.user) or (_is_gym_admin(request.user) and request.user.organization_id):
             data['calculation_batches'] = self._recent_calculation_batches(organization_id, date_from, date_to)
         return Response(data)
@@ -7748,13 +7747,24 @@ class TeacherPaymentRecordViewSet(ModelViewSet):
         teacher_id = request.data.get('teacher_id')
         if not teacher_id:
             raise ValidationError({'teacher_id': 'Debes indicar el profesor.'})
-        try:
-            year = int(request.data.get('year'))
-            month = int(request.data.get('month'))
-            if not 1 <= month <= 12:
-                raise ValueError
-        except (TypeError, ValueError):
-            raise ValidationError({'period': 'year/month invalidos.'})
+        def parse_range_value(key):
+            value = parse_date(str(request.data.get(key) or ''))
+            if value is None:
+                raise ValidationError({key: 'Usa una fecha válida YYYY-MM-DD.'})
+            return value
+        if request.data.get('date_from') or request.data.get('date_to'):
+            date_from = parse_range_value('date_from')
+            date_to = parse_range_value('date_to')
+        else:
+            # Compatibilidad para clientes mensuales anteriores a los rangos.
+            try:
+                year, month = int(request.data.get('year')), int(request.data.get('month'))
+                date_from = datetime(year, month, 1).date()
+                date_to = (datetime(year + (month == 12), (month % 12) + 1, 1).date() - timedelta(days=1))
+            except (TypeError, ValueError):
+                raise ValidationError({'date_from': 'Indica date_from y date_to.'})
+        if date_to < date_from:
+            raise ValidationError({'date_to': 'date_to no puede ser anterior a date_from.'})
 
         # El profesor debe pertenecer a la organizacion (evita marcar profes de otra org).
         # P4: un `gym_admin` que dicta clases genera `TeacherPaymentRecord` igual que
@@ -7767,13 +7777,6 @@ class TeacherPaymentRecordViewSet(ModelViewSet):
         if teacher is None:
             raise ValidationError({'teacher_id': 'Profesor no encontrado en la organizacion.'})
 
-        date_from = datetime(year, month, 1).date()
-        if month == 12:
-            next_month = datetime(year + 1, 1, 1).date()
-        else:
-            next_month = datetime(year, month + 1, 1).date()
-        date_to = next_month - timedelta(days=1)
-
         summary = build_teacher_payment_summary(organization_id, date_from, date_to, teacher_id=teacher_id)
         row = next((r for r in summary['rows'] if r['teacher_id'] == teacher.id), None)
         amount = round(float(row['total']), 2) if row else 0.0
@@ -7781,15 +7784,21 @@ class TeacherPaymentRecordViewSet(ModelViewSet):
         payout, _created = TeacherPayout.objects.update_or_create(
             teacher_id=teacher.id,
             organization_id=organization_id,
-            period_year=year,
-            period_month=month,
-            defaults={'amount': amount, 'paid_at': timezone.now(), 'marked_by': user},
+            period_start=date_from,
+            period_end=date_to,
+            defaults={
+                'period_year': date_from.year,
+                'period_month': date_from.month,
+                'amount': amount,
+                'paid_at': timezone.now(),
+                'marked_by': user,
+            },
         )
         return Response(
             {
                 'teacher_id': teacher.id,
-                'period_year': year,
-                'period_month': month,
+                'date_from': date_from.isoformat(),
+                'date_to': date_to.isoformat(),
                 'amount': round(float(payout.amount), 2),
                 'paid_at': payout.paid_at.isoformat(),
             },
@@ -7802,7 +7811,7 @@ class TeacherPaymentRecordViewSet(ModelViewSet):
         data = build_teacher_payment_summary(
             organization_id, date_from, date_to, teacher_id=teacher_id, class_kind=class_kind
         )
-        self._attach_payouts(data, organization_id, date_from)
+        self._attach_payouts(data, organization_id, date_from, date_to)
         # OJO: no usar el param 'format' (lo reserva DRF para negociacion de contenido).
         export_format = (request.query_params.get('fmt') or 'csv').lower()
         filename = f"pagos_profesores_{data['period']['date_from']}_{data['period']['date_to']}"

@@ -88,6 +88,8 @@ export default function TeacherPaymentsOverviewPage() {
   const canMarkPaid = canManageAdmin(user?.role)
 
   const [month, setMonth] = useState(currentMonthValue())
+  const [dateFrom, setDateFrom] = useState(() => monthToRange(currentMonthValue()).date_from)
+  const [dateTo, setDateTo] = useState(() => monthToRange(currentMonthValue()).date_to)
   const [classKind, setClassKind] = useState('all')
   const [summary, setSummary] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -106,7 +108,7 @@ export default function TeacherPaymentsOverviewPage() {
   const [selectedOrganizationId, setSelectedOrganizationId] = useState(user?.organization ? String(user.organization) : '')
 
   const buildParams = () => {
-    const params = { ...monthToRange(month) }
+    const params = { date_from: dateFrom, date_to: dateTo }
     if (isSuperadmin && selectedOrganizationId) {
       params.organization_id = selectedOrganizationId
     }
@@ -115,6 +117,8 @@ export default function TeacherPaymentsOverviewPage() {
     }
     return params
   }
+
+  const validRange = Boolean(dateFrom && dateTo && dateFrom <= dateTo)
 
   const loadOrganizations = async () => {
     if (!isSuperadmin) return
@@ -157,7 +161,7 @@ export default function TeacherPaymentsOverviewPage() {
     loadSummary()
     setExpanded(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [month, classKind, selectedOrganizationId, isSuperadmin])
+  }, [dateFrom, dateTo, classKind, selectedOrganizationId, isSuperadmin])
 
   const rows = summary?.rows || []
   const grandTotal = summary?.grand_total || 0
@@ -202,6 +206,12 @@ export default function TeacherPaymentsOverviewPage() {
     if (isSuperadmin && !selectedOrganizationId) return
     if (classKind === 'personalized') {
       setError('El calculo manual aplica solo a clases normales.')
+      return
+    }
+    if (!validRange) {
+      setError('Indica ambas fechas y asegúrate de que la fecha desde no sea posterior a la fecha hasta.')
+      setSummary(null)
+      setLoading(false)
       return
     }
     setCalculationLoading(mode)
@@ -265,8 +275,7 @@ export default function TeacherPaymentsOverviewPage() {
     setMarking(teacherId)
     setError('')
     try {
-      const [year, mon] = month.split('-').map(Number)
-      const payload = { teacher_id: teacherId, year, month: mon }
+      const payload = { teacher_id: teacherId, date_from: dateFrom, date_to: dateTo }
       if (isSuperadmin && selectedOrganizationId) {
         payload.organization_id = selectedOrganizationId
       }
@@ -314,15 +323,23 @@ export default function TeacherPaymentsOverviewPage() {
         ) : null}
 
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <label className="space-y-1 text-sm">
               <span className="text-brand-muted">Período</span>
               <input
                 type="month"
                 value={month}
-                onChange={(event) => setMonth(event.target.value || currentMonthValue())}
+                onChange={(event) => { const next = event.target.value || currentMonthValue(); setMonth(next); const range = monthToRange(next); setDateFrom(range.date_from); setDateTo(range.date_to) }}
                 className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2 sm:w-52"
               />
+            </label>
+            <label className="space-y-1 text-sm">
+              <span className="text-brand-muted">Fecha desde</span>
+              <input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2" />
+            </label>
+            <label className="space-y-1 text-sm">
+              <span className="text-brand-muted">Fecha hasta</span>
+              <input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2" />
             </label>
             <label className="space-y-1 text-sm">
               <span className="text-brand-muted">Tipo de clase</span>
@@ -409,7 +426,7 @@ export default function TeacherPaymentsOverviewPage() {
       <section className="relative overflow-hidden rounded-2xl border border-brand-hairline bg-gradient-to-br from-brand-orange/15 via-brand-panel to-brand-blue/10 p-5 shadow-soft">
         <div className="pointer-events-none absolute -right-12 -top-12 h-40 w-40 rounded-full bg-brand-orange/15 blur-3xl" />
         <div className="relative">
-          <p className="text-[11px] uppercase tracking-[0.18em] text-brand-dim">Total a pagar · {periodLabel(month)}</p>
+          <p className="text-[11px] uppercase tracking-[0.18em] text-brand-dim">Total a pagar · {formatDateOnly(dateFrom)} a {formatDateOnly(dateTo)}</p>
           <p className="mt-1 font-display text-4xl font-bold leading-none text-brand-white sm:text-5xl">
             {clp(grandTotal)}
           </p>

@@ -729,3 +729,19 @@ def _date(year, month, day):
 
 def _at(year, month, day, hour=12):
     return timezone.make_aware(datetime(year, month, day, hour, 0, 0))
+
+
+def test_cross_month_range_marks_one_exact_payout(api_client, org_setup):
+    org, branch, teacher = org_setup['org'], org_setup['branch'], org_setup['teacher']
+    _make_rule(org, teacher, TeacherPaymentRule.PaymentType.FIXED_PER_CLASS, 1000)
+    for start in (_at(2026, 9, 30, 18), _at(2026, 10, 1, 18), _at(2026, 10, 2, 18)):
+        gym_class = _make_completed_class(org, branch, teacher, start)
+        calculate_teacher_payment(gym_class)
+    _login(api_client, 'admin')
+    payload = {'teacher_id': teacher.id, 'date_from': '2026-09-30', 'date_to': '2026-10-01'}
+    assert api_client.post(MARK_PAID_URL, payload, format='json').status_code == 200
+    assert api_client.post(MARK_PAID_URL, payload, format='json').status_code == 200
+    payout = TeacherPayout.objects.get(teacher=teacher, period_start='2026-09-30', period_end='2026-10-01')
+    assert payout.amount == 2000
+    assert payout.period_year == 2026 and payout.period_month == 9
+    assert TeacherPayout.objects.filter(teacher=teacher, period_start='2026-09-30', period_end='2026-10-01').count() == 1

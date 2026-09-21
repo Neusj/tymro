@@ -1708,6 +1708,10 @@ class TeacherPayout(TimestampedModel):
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='teacher_payouts')
     period_year = models.PositiveIntegerField()
     period_month = models.PositiveSmallIntegerField()
+    # Rango explícito. Las columnas mes/año sobreviven para no reinterpretar
+    # liquidaciones históricas ni romper lectores antiguos.
+    period_start = models.DateField(null=True, blank=True)
+    period_end = models.DateField(null=True, blank=True)
     amount = models.FloatField(default=0)
     paid_at = models.DateTimeField(default=timezone.now)
     marked_by = models.ForeignKey(
@@ -1716,7 +1720,12 @@ class TeacherPayout(TimestampedModel):
 
     class Meta:
         ordering = ['-period_year', '-period_month', '-id']
-        unique_together = ('teacher', 'organization', 'period_year', 'period_month')
+        constraints = [
+            models.UniqueConstraint(
+                fields=['teacher', 'organization', 'period_start', 'period_end'],
+                name='uniq_teacher_payout_exact_range',
+            ),
+        ]
 
     def __str__(self):
         return f'{self.teacher} - {self.period_year}-{self.period_month:02d} ({self.amount})'
