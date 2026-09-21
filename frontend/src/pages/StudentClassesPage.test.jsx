@@ -161,16 +161,15 @@ describe('StudentClassesPage — banner de vencimiento de membresía (R5)', () =
   })
 })
 
-describe('StudentClassesPage — rango por defecto (#18)', () => {
-  it('al montar, la lista de clases disponibles arranca en el rango de la semana actual', async () => {
+describe('StudentClassesPage — sin rango por defecto', () => {
+  it('al montar, la lista de clases disponibles no activa filtros temporales', async () => {
     renderPage('available')
     // Deja que el fetch inicial se resuelva (evita warnings de act).
     await waitFor(() => expect(classesApi.list).toHaveBeenCalled())
 
     const semana = screen.getByRole('button', { name: 'Semana' })
     const hoy = screen.getByRole('button', { name: 'Hoy' })
-    // "Semana" activo por defecto (no arranca mostrando todo/2 años).
-    expect(semana).toHaveClass('bg-brand-blue/20')
+    expect(semana).not.toHaveClass('bg-brand-blue/20')
     expect(hoy).not.toHaveClass('bg-brand-blue/20')
   })
 })
@@ -512,7 +511,7 @@ describe('StudentClassesPage — selector de dia por fecha', () => {
   })
 })
 
-describe('StudentClassesPage — "Limpiar" quita TODOS los filtros incluido el rango (#18 fix)', () => {
+describe('StudentClassesPage — filtros temporales opcionales', () => {
   beforeEach(() => {
     // Vista escritorio: FilterPanel abierto (min-width→true) + tabla (max-width→false).
     window.matchMedia = (query) => ({
@@ -524,8 +523,8 @@ describe('StudentClassesPage — "Limpiar" quita TODOS los filtros incluido el r
     })
   })
 
-  it('una clase FUERA de la semana aparece tras "Limpiar" y el chip Semana se desactiva', async () => {
-    // Clase a 30 días: fuera de la ventana "semana" (default), así que arranca oculta.
+  it('una clase fuera de la semana solo se oculta cuando el alumno elige Semana', async () => {
+    // Clase a 30 días: sin filtro temporal debe mostrarse desde el inicio.
     classesApi.list
       .mockResolvedValueOnce([
         {
@@ -548,11 +547,10 @@ describe('StudentClassesPage — "Limpiar" quita TODOS los filtros incluido el r
     const user = userEvent.setup()
     await waitFor(() => expect(classesApi.list).toHaveBeenCalled())
 
-    // Por defecto (semana) la clase a 30 días NO se muestra.
-    expect(screen.queryAllByText('ClaseLejana')).toHaveLength(0)
+    expect((await screen.findAllByText('ClaseLejana')).length).toBeGreaterThan(0)
 
-    // "Limpiar" debe estar disponible (hay un filtro activo: la semana) y quitar
-    // TODOS los filtros, incluido el rango → la clase aparece.
+    await user.click(screen.getByRole('button', { name: 'Semana' }))
+    expect(screen.queryAllByText('ClaseLejana')).toHaveLength(0)
     await user.click(screen.getByRole('button', { name: /limpiar/i }))
     expect((await screen.findAllByText('ClaseLejana')).length).toBeGreaterThan(0)
 

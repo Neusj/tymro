@@ -32,12 +32,10 @@ const initialClassFilters = {
   dateRange: '',
 }
 
-// Clases disponibles: por defecto se acota a la semana actual (no un rango abierto
-// que traería clases a meses/años vista). El historial NO usa este default: sus
-// clases son pasadas y 'week' (hoy→+7) las ocultaría.
+// Las clases disponibles no tienen rango temporal por defecto: el alumno debe
+// poder ver todas las clases publicadas y acotar a Hoy o Semana solo si lo elige.
 const initialAvailableClassFilters = {
   ...initialClassFilters,
-  dateRange: 'week',
 }
 
 const initialReservationFilters = {
