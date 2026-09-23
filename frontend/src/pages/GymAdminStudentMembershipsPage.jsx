@@ -145,6 +145,11 @@ export default function GymAdminStudentMembershipsPage() {
     [memberships],
   )
 
+  const historicalMemberships = useMemo(
+    () => memberships.filter((membership) => !isVisibleAsActive(membership)),
+    [memberships],
+  )
+
   const loadData = async () => {
     setLoading(true)
     setError('')
@@ -380,6 +385,14 @@ export default function GymAdminStudentMembershipsPage() {
     [working],
   )
 
+  // El historial es solo de consulta: una membresía vencida se puede revisar completa,
+  // pero las acciones que alteran vigencia, saldo o congelamiento se mantienen reservadas
+  // para las membresías vigentes de la sección superior.
+  const historicalColumns = useMemo(
+    () => columns.filter((column) => column.key !== 'actions'),
+    [columns],
+  )
+
   const freezeDays = daysBetween(freezeForm.start_date, freezeForm.planned_end_date)
   const freezeProjectedEnd = freezing ? addDaysToDate(freezing.end_date, freezeDays) : ''
 
@@ -387,7 +400,7 @@ export default function GymAdminStudentMembershipsPage() {
     <div className="space-y-6">
       <DashboardHeader
         title={`Membresias - ${studentName(student)}`}
-        subtitle="Membresias activas del alumno, con edicion auditada de vigencia, saldo y cobros."
+        subtitle="Historial completo de membresias del alumno, con vigencia, saldo y cobros."
         back={{ to: '/gym-admin/users', label: 'Usuarios' }}
       />
 
@@ -405,8 +418,12 @@ export default function GymAdminStudentMembershipsPage() {
             <p className="text-xl font-semibold text-brand-white">{activeMemberships.length}</p>
           </div>
           <div className="rounded-xl border border-brand-line bg-black/20 p-3">
-            <p className="text-xs text-brand-muted">Trazabilidad</p>
-            <p className="text-sm font-semibold text-brand-white">Edicion auditada</p>
+            <p className="text-xs text-brand-muted">Vencidas o inactivas</p>
+            <p className="text-xl font-semibold text-brand-white">{historicalMemberships.length}</p>
+          </div>
+          <div className="rounded-xl border border-brand-line bg-black/20 p-3">
+            <p className="text-xs text-brand-muted">Total compradas</p>
+            <p className="text-xl font-semibold text-brand-white">{memberships.length}</p>
           </div>
         </div>
       </section>
@@ -421,6 +438,23 @@ export default function GymAdminStudentMembershipsPage() {
           <DataTable columns={columns} data={activeMemberships} />
         ) : (
           <EmptyState title="Sin membresias activas" description="Este alumno no tiene planes vigentes para modificar." />
+        )}
+      </section>
+
+      <section className="card-surface space-y-4 p-5">
+        <div>
+          <h2 className="text-base font-semibold text-brand-white">Historial de membresias</h2>
+          <p className="mt-1 text-sm text-brand-muted">Membresias vencidas, agotadas o dadas de baja. Solo consulta.</p>
+        </div>
+        {loading ? (
+          <div className="space-y-3">
+            <div className="h-16 animate-pulse rounded-xl bg-brand-line/40" />
+            <div className="h-16 animate-pulse rounded-xl bg-brand-line/30" />
+          </div>
+        ) : historicalMemberships.length ? (
+          <DataTable columns={historicalColumns} data={historicalMemberships} />
+        ) : (
+          <EmptyState title="Sin membresias historicas" description="Este alumno aun no tiene membresias vencidas o inactivas." />
         )}
       </section>
 
