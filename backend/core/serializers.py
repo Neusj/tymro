@@ -2717,6 +2717,39 @@ class StudentPlanChangeLogSerializer(serializers.ModelSerializer):
         return _user_display_name(getattr(obj, 'changed_by', None))
 
 
+class StudentPlanFreezeHistorySerializer(serializers.ModelSerializer):
+    created_by_name = serializers.SerializerMethodField()
+    ended_by_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = StudentPlanFreeze
+        fields = [
+            'id',
+            'reference',
+            'student_plan',
+            'status',
+            'start_date',
+            'planned_end_date',
+            'actual_end_date',
+            'extension_days',
+            'reason',
+            'cancelled_future_enrollments',
+            'created_by',
+            'created_by_name',
+            'created_at',
+            'ended_by',
+            'ended_by_name',
+            'ended_at',
+        ]
+        read_only_fields = fields
+
+    def get_created_by_name(self, obj):
+        return _user_display_name(getattr(obj, 'created_by', None))
+
+    def get_ended_by_name(self, obj):
+        return _user_display_name(getattr(obj, 'ended_by', None))
+
+
 class StudentPlanFreezeCreateSerializer(serializers.Serializer):
     start_date = serializers.DateField()
     planned_end_date = serializers.DateField()

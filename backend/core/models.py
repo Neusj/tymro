@@ -964,6 +964,9 @@ class StudentPlanFreeze(TimestampedModel):
         on_delete=models.CASCADE,
         related_name='freezes',
     )
+    # Referencia estable para soporte y auditoría. El id numérico sigue siendo la clave
+    # interna, pero este UUID se puede compartir sin depender de la secuencia de la base.
+    reference = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     organization = models.ForeignKey(
         Organization,
         on_delete=models.PROTECT,
@@ -1007,7 +1010,7 @@ class StudentPlanFreeze(TimestampedModel):
         ]
 
     def __str__(self):
-        return f'Congelamiento {self.student_plan_id} · {self.start_date} → {self.planned_end_date}'
+        return f'Congelamiento {self.reference} · {self.start_date} → {self.planned_end_date}'
 
     def clean(self):
         super().clean()

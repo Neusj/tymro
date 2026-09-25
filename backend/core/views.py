@@ -117,6 +117,7 @@ from .serializers import (
     StudentPlanAssignSerializer,
     StudentPlanChangeLogSerializer,
     StudentPlanFreezeCreateSerializer,
+    StudentPlanFreezeHistorySerializer,
     StudentPlanSerializer,
     StudentPlanUnfreezeSerializer,
     TeacherPaymentRuleAssignmentsUpdateSerializer,
@@ -7180,6 +7181,24 @@ class MembershipPlanViewSet(ModelViewSet):
             .all()
         )
         return Response(StudentPlanChangeLogSerializer(logs, many=True).data)
+
+    @action(detail=True, methods=['get'], url_path=r'memberships/(?P<membership_id>[^/.]+)/freeze-history')
+    def membership_freeze_history(self, request, pk=None, membership_id=None):
+        user = request.user
+        plan = self.get_object()
+        membership = (
+            self._membership_queryset_for_actor(plan, user)
+            .filter(id=membership_id)
+            .first()
+        )
+        if not membership:
+            return Response({'detail': 'Membresia no encontrada para este plan.'}, status=status.HTTP_404_NOT_FOUND)
+        freezes = (
+            membership.freezes
+            .select_related('created_by', 'ended_by')
+            .order_by('-created_at', '-id')
+        )
+        return Response(StudentPlanFreezeHistorySerializer(freezes, many=True).data)
 
     @action(detail=True, methods=['delete'], url_path=r'memberships/(?P<membership_id>[^/.]+)')
     def remove_membership(self, request, pk=None, membership_id=None):

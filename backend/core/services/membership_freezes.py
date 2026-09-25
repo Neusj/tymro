@@ -5,6 +5,7 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from core.models import Enrollment, StudentPlan, StudentPlanChangeLog, StudentPlanFreeze
+from core.services.plans import PlanStatus, describe_student_plan
 from core.services.reservations import cancel_enrollment_with_refund
 
 
@@ -67,6 +68,16 @@ def _validate_freezable_membership(membership, start_date):
     if not membership.is_active:
         raise MembershipFreezeError(
             'Solo se puede congelar una membresía activa.',
+            code='membership_not_freezable',
+        )
+    # `is_active` es una marca materializada por el job nocturno; no sirve por sí
+    # sola para decidir si una membresía sigue vigente. Sin este corte, una membresía
+    # que ya venció por fecha pero cuyo job aún no corrió podía congelarse y luego
+    # recibir solo días sobre una fecha de término ya pasada.
+    state = describe_student_plan(membership, start_date)
+    if state.status in (PlanStatus.EXPIRED, PlanStatus.UPCOMING, PlanStatus.INACTIVE):
+        raise MembershipFreezeError(
+            'No se puede congelar una membresía fuera de su período de vigencia.',
             code='membership_not_freezable',
         )
 

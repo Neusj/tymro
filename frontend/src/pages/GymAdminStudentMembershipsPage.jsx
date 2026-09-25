@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom'
 import {
   freezePlanMembership,
   getPlanMembershipChangeLog,
+  getPlanMembershipFreezeHistory,
   getStudentOverview,
   unfreezePlanMembership,
   updatePlanMembership,
@@ -133,12 +134,15 @@ export default function GymAdminStudentMembershipsPage() {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [editing, setEditing] = useState(null)
+  const [auditOnly, setAuditOnly] = useState(false)
   const [editForm, setEditForm] = useState(editInitialForm)
   const [freezing, setFreezing] = useState(null)
   const [freezeForm, setFreezeForm] = useState(freezeInitialForm)
   const [unfreezing, setUnfreezing] = useState(null)
   const [changeLog, setChangeLog] = useState([])
   const [changeLogLoading, setChangeLogLoading] = useState(false)
+  const [freezeHistory, setFreezeHistory] = useState([])
+  const [freezeHistoryLoading, setFreezeHistoryLoading] = useState(false)
 
   const activeMemberships = useMemo(
     () => memberships.filter(isVisibleAsActive),
@@ -170,8 +174,9 @@ export default function GymAdminStudentMembershipsPage() {
     loadData()
   }, [studentId])
 
-  const openEdit = async (membership) => {
+  const openEdit = async (membership, historyOnly = false) => {
     setEditing(membership)
+    setAuditOnly(historyOnly)
     setEditForm({
       start_date: asDateInput(membership.start_date),
       end_date: asDateInput(membership.end_date),
@@ -188,21 +193,28 @@ export default function GymAdminStudentMembershipsPage() {
       reason: '',
     })
     setChangeLog([])
+    setFreezeHistory([])
     setChangeLogLoading(true)
+    setFreezeHistoryLoading(true)
     setError('')
     try {
-      const logs = await getPlanMembershipChangeLog(membership.plan, membership.id)
+      const [logs, freezes] = await Promise.all([
+        getPlanMembershipChangeLog(membership.plan, membership.id),
+        getPlanMembershipFreezeHistory(membership.plan, membership.id),
+      ])
       setChangeLog(Array.isArray(logs) ? logs : [])
+      setFreezeHistory(Array.isArray(freezes) ? freezes : [])
     } catch (apiError) {
-      setError(firstApiError(apiError, 'No se pudo cargar la auditoria de la membresia.'))
+      setError(firstApiError(apiError, 'No se pudo cargar el historial de la membresia.'))
     } finally {
       setChangeLogLoading(false)
+      setFreezeHistoryLoading(false)
     }
   }
 
   const saveMembership = async (event) => {
     event.preventDefault()
-    if (!editing) {
+    if (!editing || auditOnly) {
       return
     }
     if (!editForm.reason.trim()) {
@@ -234,6 +246,7 @@ export default function GymAdminStudentMembershipsPage() {
       setNotice(`Membresia actualizada para ${studentName(student)}.`)
       setEditing(null)
       setChangeLog([])
+      setFreezeHistory([])
       await loadData()
     } catch (apiError) {
       setError(firstApiError(apiError, 'No se pudo actualizar la membresia.'))
@@ -389,7 +402,23 @@ export default function GymAdminStudentMembershipsPage() {
   // pero las acciones que alteran vigencia, saldo o congelamiento se mantienen reservadas
   // para las membresías vigentes de la sección superior.
   const historicalColumns = useMemo(
-    () => columns.filter((column) => column.key !== 'actions'),
+    () => [
+      ...columns.filter((column) => column.key !== 'actions'),
+      {
+        key: 'history',
+        label: 'Registro',
+        sortable: false,
+        render: (row) => (
+          <button
+            type="button"
+            onClick={() => openEdit(row, true)}
+            className="rounded border border-brand-line px-2 py-1 text-xs text-brand-white"
+          >
+            Ver historial
+          </button>
+        ),
+      },
+    ],
     [columns],
   )
 
@@ -460,7 +489,7 @@ export default function GymAdminStudentMembershipsPage() {
 
       <FormModal
         open={Boolean(editing)}
-        title={`Editar membresia${editing ? ` - ${editing.plan_name || 'Plan'}` : ''}`}
+        title={`${auditOnly ? 'Historial de membresia' : 'Editar membresia'}${editing ? ` - ${editing.plan_name || 'Plan'}` : ''}`}
         size="lg"
         closeDisabled={working}
         onClose={() => {
@@ -470,7 +499,12 @@ export default function GymAdminStudentMembershipsPage() {
         }}
       >
         <form onSubmit={saveMembership} className="space-y-5">
-          <div className="grid gap-3 md:grid-cols-2">
+          {auditOnly ? (
+            <p className="rounded-lg border border-brand-line bg-black/20 px-3 py-2 text-sm text-brand-muted">
+              Esta membresía es histórica. Sus datos se muestran solo para consulta y auditoría.
+            </p>
+          ) : null}
+          <div className={`grid gap-3 md:grid-cols-2 ${auditOnly ? 'pointer-events-none opacity-60' : ''}`}>
             <label className="min-w-0 space-y-1 text-sm">
               <span>Fecha inicio</span>
               <input
@@ -634,6 +668,56 @@ export default function GymAdminStudentMembershipsPage() {
           </div>
 
           <section className="rounded-xl border border-brand-line bg-black/20 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-brand-white">Historial de congelamientos</p>
+                <p className="text-xs text-brand-muted">Registro inalterable de cada congelamiento de esta membresía.</p>
+              </div>
+              <p className="text-xs text-brand-muted">{freezeHistory.length} registro(s)</p>
+            </div>
+            {freezeHistoryLoading ? (
+              <p className="mt-3 text-sm text-brand-muted">Cargando congelamientos...</p>
+            ) : freezeHistory.length === 0 ? (
+              <p className="mt-3 text-sm text-brand-muted">Esta membresía no tiene congelamientos registrados.</p>
+            ) : (
+              <div className="mt-3 max-h-64 space-y-2 overflow-y-auto pr-1">
+                {freezeHistory.map((freeze) => (
+                  <article key={freeze.id} className="rounded-lg border border-brand-line bg-brand-panel/60 p-3 text-sm">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="font-semibold text-brand-white">
+                        {freeze.status === 'active' ? 'Congelamiento abierto' : 'Congelamiento cerrado'}
+                      </p>
+                      <p className="break-all text-xs text-brand-muted">UUID: {freeze.reference}</p>
+                    </div>
+                    <p className="mt-1 text-xs text-brand-muted">
+                      Programado: {formatDate(freeze.start_date)} → {formatDate(freeze.planned_end_date)}
+                    </p>
+                    {freeze.actual_end_date ? (
+                      <p className="mt-1 text-xs text-brand-muted">
+                        Fin real: {formatDate(freeze.actual_end_date)} · extensión aplicada: {freeze.extension_days} día(s)
+                      </p>
+                    ) : null}
+                    <p className="mt-1 text-xs text-brand-muted">
+                      Creado por {freeze.created_by_name || 'Sistema'} el {formatAuditDate(freeze.created_at)}
+                    </p>
+                    {freeze.ended_at ? (
+                      <p className="mt-1 text-xs text-brand-muted">
+                        Cerrado por {freeze.ended_by_name || 'Sistema'} el {formatAuditDate(freeze.ended_at)}
+                      </p>
+                    ) : null}
+                    {freeze.cancelled_future_enrollments ? (
+                      <p className="mt-1 text-xs text-brand-muted">
+                        Reservas futuras canceladas: {freeze.cancelled_future_enrollments}
+                      </p>
+                    ) : null}
+                    <p className="mt-2 break-words text-xs text-brand-white">Motivo: {freeze.reason}</p>
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
+
+          <section className="rounded-xl border border-brand-line bg-black/20 p-3">
             <div className="flex items-center justify-between gap-3">
               <p className="text-sm font-semibold text-brand-white">Auditoria</p>
               <p className="text-xs text-brand-muted">{changeLog.length} cambios</p>
@@ -667,16 +751,20 @@ export default function GymAdminStudentMembershipsPage() {
               disabled={working}
               onClick={() => {
                 setEditing(null)
+                setAuditOnly(false)
                 setChangeLog([])
+                setFreezeHistory([])
                 setError('')
               }}
               className="rounded-lg border border-brand-line px-3 py-2 text-sm font-semibold text-brand-white disabled:opacity-60"
             >
               Cancelar
             </button>
-            <button type="submit" disabled={working} className="rounded-lg bg-brand-blue px-3 py-2 text-sm font-semibold text-white disabled:opacity-60">
-              {working ? 'Guardando...' : 'Guardar cambios'}
-            </button>
+            {!auditOnly ? (
+              <button type="submit" disabled={working} className="rounded-lg bg-brand-blue px-3 py-2 text-sm font-semibold text-white disabled:opacity-60">
+                {working ? 'Guardando...' : 'Guardar cambios'}
+              </button>
+            ) : null}
           </div>
         </form>
       </FormModal>

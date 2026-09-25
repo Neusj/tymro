@@ -258,7 +258,7 @@ def test_serializer_exposes_open_freeze_before_start_date(setup):
     assert data['active_freeze']['start_date'] == (TODAY + timedelta(days=3)).isoformat()
 
 
-def test_freeze_rejects_inactive_memberships_and_second_active_freeze(setup):
+def test_freeze_rejects_expired_or_inactive_memberships_and_second_active_freeze(setup):
     membership = setup['membership']
     _freeze(membership, setup['admin'], days=5)
 
@@ -276,8 +276,9 @@ def test_freeze_rejects_inactive_memberships_and_second_active_freeze(setup):
         final_price=30000,
         is_active=True,
     )
-    expired_freeze = _freeze(expired, setup['admin'], days=5)
-    assert expired_freeze.status == StudentPlanFreeze.Status.ACTIVE
+    with pytest.raises(MembershipFreezeError) as expired_error:
+        _freeze(expired, setup['admin'], days=5)
+    assert expired_error.value.code == 'membership_not_freezable'
 
     inactive = StudentPlan.objects.create(
         user=setup['student'],

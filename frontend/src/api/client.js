@@ -928,6 +928,11 @@ export const getPlanMembershipChangeLog = async (planId, membershipId) => {
   return data
 }
 
+export const getPlanMembershipFreezeHistory = async (planId, membershipId) => {
+  const { data } = await api.get(`/plans/${planId}/memberships/${membershipId}/freeze-history/`)
+  return data
+}
+
 export const getMyPlan = async () => {
   const { data } = await api.get('/plans/my-plan/')
   return data
