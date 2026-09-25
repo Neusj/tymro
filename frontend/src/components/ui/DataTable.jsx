@@ -319,11 +319,11 @@ export default function DataTable({
     return cellContent
   }
 
-  const renderPlainCell = (column, row) => {
+  const renderPlainCell = (column, row, context = {}) => {
     if (column.mobileRender) {
-      return column.mobileRender(row)
+      return column.mobileRender(row, context)
     }
-    return column.render ? column.render(row) : formatCellValue(row[column.key])
+    return column.render ? column.render(row, context) : formatCellValue(row[column.key])
   }
 
   const renderSortIndicator = (column) => {
@@ -567,7 +567,11 @@ export default function DataTable({
                   {detailColumns.map((column) => (
                     <div key={`${column.key}-${selectedDetailRowId || 'detail'}`} className="flex items-start justify-between gap-4 py-2.5">
                       <p className="shrink-0 text-xs font-semibold uppercase tracking-wide text-brand-dim">{column.label}</p>
-                      <div className="min-w-0 text-right text-sm text-brand-white">{renderPlainCell(column, selectedDetailRow)}</div>
+                      <div className="min-w-0 text-right text-sm text-brand-white">
+                        {renderPlainCell(column, selectedDetailRow, {
+                          closeMobileDetail: () => setSelectedDetailRow(null),
+                        })}
+                      </div>
                     </div>
                   ))}
                 </div>

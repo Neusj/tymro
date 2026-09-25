@@ -479,10 +479,13 @@ export default function GymAdminStudentMembershipsPage() {
         key: 'history',
         label: 'Registro',
         sortable: false,
-        render: (row) => (
+        render: (row, { closeMobileDetail } = {}) => (
           <button
             type="button"
-            onClick={() => openEdit(row, true)}
+            onClick={() => {
+              closeMobileDetail?.()
+              openEdit(row, true)
+            }}
             className="rounded border border-brand-line px-2 py-1 text-xs text-brand-white"
           >
             Ver historial
