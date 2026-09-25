@@ -2775,6 +2775,16 @@ class StudentPlanUnfreezeSerializer(serializers.Serializer):
         return value.strip()
 
 
+class StudentPlanFreezeCompensationSerializer(serializers.Serializer):
+    days = serializers.IntegerField(min_value=1, max_value=366)
+    reason = serializers.CharField(max_length=500, trim_whitespace=True)
+
+    def validate_reason(self, value):
+        if not value.strip():
+            raise serializers.ValidationError('Indica el motivo de la compensación.')
+        return value.strip()
+
+
 class StudentPlanAdminUpdateSerializer(serializers.Serializer):
     start_date = serializers.DateField(required=False)
     end_date = serializers.DateField(required=False)

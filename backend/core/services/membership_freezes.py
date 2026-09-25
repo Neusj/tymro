@@ -236,6 +236,39 @@ def complete_membership_freeze(*, freeze, actual_end_date, actor=None, reason=''
     return FreezeCompletionResult(freeze=freeze, extension_days=extension_days)
 
 
+@transaction.atomic
+def compensate_membership_freeze_days(*, membership, days, reason, actor):
+    """Repara una vigencia afectada por un congelamiento sin reescribir su historia."""
+    membership = StudentPlan.objects.select_for_update().get(pk=membership.pk)
+    if not membership.freezes.exists():
+        raise MembershipFreezeError(
+            'Esta membresía no tiene congelamientos registrados para compensar.',
+            code='freeze_history_not_found',
+        )
+
+    old_end_date = membership.end_date
+    was_active = membership.is_active
+    membership.end_date = old_end_date + timedelta(days=days)
+    # La compensación existe precisamente para que un plan vencido por este problema
+    # vuelva a poder usarse. No modifica saldo, plan ni historial del congelamiento.
+    membership.is_active = True
+    membership.save(update_fields=['end_date', 'is_active', 'updated_at'])
+
+    reactivation_note = ' La membresía fue reactivada.' if not was_active else ''
+    _record_change(
+        membership=membership,
+        actor=actor,
+        field='membership_freeze_days_compensated',
+        old_value=old_end_date,
+        new_value=membership.end_date,
+        reason=(
+            f'Compensación por congelamiento: +{days} día(s). {reason}'
+            f'{reactivation_note}'
+        ),
+    )
+    return membership
+
+
 def complete_due_membership_freezes(*, today=None, org_id=None, dry_run=False):
     today = today or timezone.localdate()
     queryset = (

@@ -17,6 +17,7 @@ from core.models import (
 )
 from core.services.membership_freezes import (
     MembershipFreezeError,
+    compensate_membership_freeze_days,
     complete_due_membership_freezes,
     complete_membership_freeze,
     create_membership_freeze,
@@ -188,6 +189,29 @@ def test_early_unfreeze_extends_only_real_frozen_days(setup):
     assert result.extension_days == 12
     assert freeze.extension_days == 12
     assert freeze.actual_end_date == TODAY
+
+
+def test_freeze_day_compensation_reactivates_and_audits_membership(setup):
+    membership = setup['membership']
+    _freeze(membership, setup['admin'], days=1)
+    membership.end_date = TODAY - timedelta(days=2)
+    membership.is_active = False
+    membership.save(update_fields=['end_date', 'is_active', 'updated_at'])
+
+    corrected = compensate_membership_freeze_days(
+        membership=membership,
+        days=10,
+        reason='El congelamiento se ingresó con duración incorrecta.',
+        actor=setup['admin'],
+    )
+
+    assert corrected.end_date == TODAY + timedelta(days=8)
+    assert corrected.is_active is True
+    log = StudentPlanChangeLog.objects.get(student_plan=membership, field='membership_freeze_days_compensated')
+    assert log.old_value == (TODAY - timedelta(days=2)).isoformat()
+    assert log.new_value == (TODAY + timedelta(days=8)).isoformat()
+    assert '+10 día(s)' in log.reason
+    assert log.changed_by == setup['admin']
     assert membership.end_date == TODAY + timedelta(days=72)
 
 

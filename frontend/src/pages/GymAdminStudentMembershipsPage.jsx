@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import {
+  compensatePlanMembershipFreezeDays,
   freezePlanMembership,
   getPlanMembershipChangeLog,
   getPlanMembershipFreezeHistory,
@@ -36,6 +37,11 @@ const editInitialForm = {
 const freezeInitialForm = {
   start_date: '',
   planned_end_date: '',
+  reason: '',
+}
+
+const compensationInitialForm = {
+  days: 1,
   reason: '',
 }
 
@@ -108,12 +114,16 @@ function pluralDays(value) {
 function auditTitle(log) {
   if (log.field === 'membership_freeze_started') return 'Congelamiento creado'
   if (log.field === 'membership_freeze_completed') return 'Vencimiento ajustado por congelamiento'
+  if (log.field === 'membership_freeze_days_compensated') return 'Días compensados por congelamiento'
   return log.field
 }
 
 function auditDetail(log) {
   if (log.field === 'membership_freeze_completed') {
     return `Vencimiento de la membresía: ${formatDate(log.old_value)} → ${formatDate(log.new_value)}`
+  }
+  if (log.field === 'membership_freeze_days_compensated') {
+    return `Vencimiento corregido: ${formatDate(log.old_value)} → ${formatDate(log.new_value)}`
   }
   return log.old_value || log.new_value || '-'
 }
@@ -160,6 +170,8 @@ export default function GymAdminStudentMembershipsPage() {
   const [changeLogLoading, setChangeLogLoading] = useState(false)
   const [freezeHistory, setFreezeHistory] = useState([])
   const [freezeHistoryLoading, setFreezeHistoryLoading] = useState(false)
+  const [compensating, setCompensating] = useState(null)
+  const [compensationForm, setCompensationForm] = useState(compensationInitialForm)
 
   const activeMemberships = useMemo(
     () => memberships.filter(isVisibleAsActive),
@@ -326,6 +338,40 @@ export default function GymAdminStudentMembershipsPage() {
       await loadData()
     } catch (apiError) {
       setError(firstApiError(apiError, 'No se pudo liberar la membresia.'))
+    } finally {
+      setWorking(false)
+    }
+  }
+
+  const openCompensation = () => {
+    if (!editing) return
+    setCompensating(editing)
+    setCompensationForm(compensationInitialForm)
+    setError('')
+  }
+
+  const saveCompensation = async (event) => {
+    event.preventDefault()
+    if (!compensating || !compensationForm.reason.trim()) {
+      setError('Indica por qué se compensan estos días.')
+      return
+    }
+    setWorking(true)
+    setError('')
+    setNotice('')
+    try {
+      await compensatePlanMembershipFreezeDays(compensating.plan, compensating.id, {
+        days: Number(compensationForm.days),
+        reason: compensationForm.reason.trim(),
+      })
+      setNotice(`${pluralDays(Number(compensationForm.days))} compensado(s) para ${studentName(student)}.`)
+      setCompensating(null)
+      setEditing(null)
+      setFreezeHistory([])
+      setChangeLog([])
+      await loadData()
+    } catch (apiError) {
+      setError(firstApiError(apiError, 'No se pudieron compensar los días por congelamiento.'))
     } finally {
       setWorking(false)
     }
@@ -734,6 +780,23 @@ export default function GymAdminStudentMembershipsPage() {
             )}
           </section>
 
+          {auditOnly && freezeHistory.length > 0 ? (
+            <section className="rounded-xl border border-amber-400/30 bg-amber-400/5 p-3">
+              <p className="text-sm font-semibold text-brand-white">¿El congelamiento dejó días pendientes?</p>
+              <p className="mt-1 text-xs text-brand-muted">
+                Compensa solo los días que correspondan. Se reactivará la membresía y quedará registrado quién hizo la corrección y por qué.
+              </p>
+              <button
+                type="button"
+                disabled={working}
+                onClick={openCompensation}
+                className="mt-3 min-h-11 w-full rounded-lg border border-amber-400/50 bg-amber-400/10 px-4 py-2 text-sm font-semibold text-amber-100 disabled:opacity-60 sm:w-auto"
+              >
+                Compensar días por congelamiento
+              </button>
+            </section>
+          ) : null}
+
           <section className="rounded-xl border border-brand-line bg-black/20 p-3">
             <div className="flex items-center justify-between gap-3">
               <p className="text-sm font-semibold text-brand-white">Auditoria</p>
@@ -875,6 +938,63 @@ export default function GymAdminStudentMembershipsPage() {
         onCancel={() => setUnfreezing(null)}
         onConfirm={unfreezeMembership}
       />
+
+      <FormModal
+        open={Boolean(compensating)}
+        title="Compensar días por congelamiento"
+        size="sm"
+        closeDisabled={working}
+        onClose={() => {
+          setCompensating(null)
+          setError('')
+        }}
+      >
+        <form onSubmit={saveCompensation} className="space-y-5">
+          <div className="rounded-xl border border-brand-line bg-black/20 p-3 text-sm">
+            <p className="text-xs text-brand-muted">Vencimiento actual</p>
+            <p className="mt-1 font-semibold text-brand-white">{formatDate(compensating?.end_date)}</p>
+          </div>
+          <label className="block space-y-1 text-sm">
+            <span className="font-semibold">Días a compensar</span>
+            <input
+              required
+              type="number"
+              min="1"
+              max="366"
+              inputMode="numeric"
+              disabled={working}
+              value={compensationForm.days}
+              onChange={(event) => setCompensationForm((prev) => ({ ...prev, days: event.target.value }))}
+              className="min-h-12 w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2 text-base"
+            />
+          </label>
+          <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3 text-sm">
+            <p className="text-xs text-brand-muted">Nuevo vencimiento</p>
+            <p className="mt-1 font-semibold text-brand-white">
+              {formatDate(addDaysToDate(compensating?.end_date, Number(compensationForm.days) || 0))}
+            </p>
+            <p className="mt-1 text-xs text-brand-muted">La membresía quedará activa para que el alumno pueda reservar normalmente.</p>
+          </div>
+          <label className="block space-y-1 text-sm">
+            <span className="font-semibold">Motivo de la corrección</span>
+            <textarea
+              required
+              rows={3}
+              disabled={working}
+              value={compensationForm.reason}
+              onChange={(event) => setCompensationForm((prev) => ({ ...prev, reason: event.target.value }))}
+              placeholder="Ej.: congelamiento registrado con una duración incorrecta"
+              className="w-full rounded-lg border border-brand-line bg-black/30 px-3 py-2"
+            />
+          </label>
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <button type="button" disabled={working} onClick={() => setCompensating(null)} className="min-h-11 rounded-lg border border-brand-line px-4 py-2 text-sm font-semibold text-brand-white disabled:opacity-60">Cancelar</button>
+            <button type="submit" disabled={working || Number(compensationForm.days) < 1} className="min-h-11 rounded-lg bg-brand-blue px-4 py-2 text-sm font-semibold text-white disabled:opacity-60">
+              {working ? 'Guardando...' : 'Confirmar compensación'}
+            </button>
+          </div>
+        </form>
+      </FormModal>
     </div>
   )
 }

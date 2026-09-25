@@ -933,6 +933,11 @@ export const getPlanMembershipFreezeHistory = async (planId, membershipId) => {
   return data
 }
 
+export const compensatePlanMembershipFreezeDays = async (planId, membershipId, payload) => {
+  const { data } = await api.post(`/plans/${planId}/memberships/${membershipId}/compensate-freeze-days/`, payload)
+  return data
+}
+
 export const getMyPlan = async () => {
   const { data } = await api.get('/plans/my-plan/')
   return data

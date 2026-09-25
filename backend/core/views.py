@@ -117,6 +117,7 @@ from .serializers import (
     StudentPlanAssignSerializer,
     StudentPlanChangeLogSerializer,
     StudentPlanFreezeCreateSerializer,
+    StudentPlanFreezeCompensationSerializer,
     StudentPlanFreezeHistorySerializer,
     StudentPlanSerializer,
     StudentPlanUnfreezeSerializer,
@@ -154,6 +155,7 @@ from .services.plans import current_valid_enrollment_fee_membership, effective_e
 from .services.membership_freezes import (
     MembershipFreezeError,
     complete_membership_freeze,
+    compensate_membership_freeze_days,
     create_membership_freeze,
 )
 from .services.public_urls import organization_public_base_url, platform_public_base_url
@@ -7153,6 +7155,37 @@ class MembershipPlanViewSet(ModelViewSet):
                 actual_end_date=timezone.localdate(),
                 actor=user,
                 reason=serializer.validated_data.get('reason') or 'Descongelamiento anticipado.',
+            )
+        except MembershipFreezeError as exc:
+            return self._freeze_error_response(exc)
+
+        membership = (
+            StudentPlan.objects.select_related('user', 'plan')
+            .prefetch_related('origin_transactions', 'manual_payments', 'charge_line_items', 'freezes__created_by')
+            .get(id=membership.id)
+        )
+        return Response(StudentPlanSerializer(membership).data)
+
+    @action(detail=True, methods=['post'], url_path=r'memberships/(?P<membership_id>[^/.]+)/compensate-freeze-days')
+    def compensate_freeze_days(self, request, pk=None, membership_id=None):
+        user = request.user
+        plan = self.get_object()
+        membership = (
+            self._membership_queryset_for_actor(plan, user)
+            .filter(id=membership_id)
+            .first()
+        )
+        if not membership:
+            return Response({'detail': 'Membresía no encontrada para este plan.'}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = StudentPlanFreezeCompensationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            membership = compensate_membership_freeze_days(
+                membership=membership,
+                days=serializer.validated_data['days'],
+                reason=serializer.validated_data['reason'],
+                actor=user,
             )
         except MembershipFreezeError as exc:
             return self._freeze_error_response(exc)
