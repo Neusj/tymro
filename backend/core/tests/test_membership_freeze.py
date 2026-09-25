@@ -189,6 +189,7 @@ def test_early_unfreeze_extends_only_real_frozen_days(setup):
     assert result.extension_days == 12
     assert freeze.extension_days == 12
     assert freeze.actual_end_date == TODAY
+    assert membership.end_date == TODAY + timedelta(days=72)
 
 
 def test_freeze_day_compensation_reactivates_and_audits_membership(setup):
@@ -205,14 +206,13 @@ def test_freeze_day_compensation_reactivates_and_audits_membership(setup):
         actor=setup['admin'],
     )
 
-    assert corrected.end_date == TODAY + timedelta(days=8)
+    assert corrected.end_date == TODAY + timedelta(days=9)
     assert corrected.is_active is True
     log = StudentPlanChangeLog.objects.get(student_plan=membership, field='membership_freeze_days_compensated')
     assert log.old_value == (TODAY - timedelta(days=2)).isoformat()
-    assert log.new_value == (TODAY + timedelta(days=8)).isoformat()
-    assert '+10 día(s)' in log.reason
+    assert log.new_value == (TODAY + timedelta(days=9)).isoformat()
+    assert '10 día(s) desde hoy' in log.reason
     assert log.changed_by == setup['admin']
-    assert membership.end_date == TODAY + timedelta(days=72)
 
 
 def test_unfreeze_future_freeze_closes_without_extension(setup):

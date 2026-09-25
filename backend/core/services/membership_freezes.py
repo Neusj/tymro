@@ -248,7 +248,15 @@ def compensate_membership_freeze_days(*, membership, days, reason, actor):
 
     old_end_date = membership.end_date
     was_active = membership.is_active
-    membership.end_date = old_end_date + timedelta(days=days)
+    today = timezone.localdate()
+    # Si ya venció, “28 días” deben ser 28 días utilizables desde hoy, no una
+    # suma sobre la fecha vieja de vencimiento. Hoy cuenta como el primer día.
+    if old_end_date < today:
+        membership.end_date = today + timedelta(days=days - 1)
+        compensation_basis = 'desde hoy'
+    else:
+        membership.end_date = old_end_date + timedelta(days=days)
+        compensation_basis = 'después del vencimiento vigente'
     # La compensación existe precisamente para que un plan vencido por este problema
     # vuelva a poder usarse. No modifica saldo, plan ni historial del congelamiento.
     membership.is_active = True
@@ -262,7 +270,7 @@ def compensate_membership_freeze_days(*, membership, days, reason, actor):
         old_value=old_end_date,
         new_value=membership.end_date,
         reason=(
-            f'Compensación por congelamiento: +{days} día(s). {reason}'
+            f'Compensación por congelamiento: {days} día(s) {compensation_basis}. {reason}'
             f'{reactivation_note}'
         ),
     )

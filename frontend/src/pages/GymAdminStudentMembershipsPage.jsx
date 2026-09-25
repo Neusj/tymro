@@ -78,6 +78,14 @@ function addDaysToDate(value, days) {
   return date.toISOString().slice(0, 10)
 }
 
+function compensationEndDate(currentEndDate, days) {
+  const today = todayInput()
+  if (!currentEndDate || currentEndDate < today) {
+    return addDaysToDate(today, Math.max(days - 1, 0))
+  }
+  return addDaysToDate(currentEndDate, days)
+}
+
 function asDateTimeInput(value) {
   return value ? String(value).slice(0, 16) : ''
 }
@@ -971,9 +979,9 @@ export default function GymAdminStudentMembershipsPage() {
           <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3 text-sm">
             <p className="text-xs text-brand-muted">Nuevo vencimiento</p>
             <p className="mt-1 font-semibold text-brand-white">
-              {formatDate(addDaysToDate(compensating?.end_date, Number(compensationForm.days) || 0))}
+              {formatDate(compensationEndDate(compensating?.end_date, Number(compensationForm.days) || 0))}
             </p>
-            <p className="mt-1 text-xs text-brand-muted">La membresía quedará activa para que el alumno pueda reservar normalmente.</p>
+            <p className="mt-1 text-xs text-brand-muted">Si ya venció, los días se cuentan desde hoy, incluyendo hoy como el primer día.</p>
           </div>
           <label className="block space-y-1 text-sm">
             <span className="font-semibold">Motivo de la corrección</span>
