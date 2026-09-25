@@ -101,6 +101,23 @@ function formatAuditDate(value) {
   }
 }
 
+function pluralDays(value) {
+  return `${value} ${value === 1 ? 'día' : 'días'}`
+}
+
+function auditTitle(log) {
+  if (log.field === 'membership_freeze_started') return 'Congelamiento creado'
+  if (log.field === 'membership_freeze_completed') return 'Vencimiento ajustado por congelamiento'
+  return log.field
+}
+
+function auditDetail(log) {
+  if (log.field === 'membership_freeze_completed') {
+    return `Vencimiento de la membresía: ${formatDate(log.old_value)} → ${formatDate(log.new_value)}`
+  }
+  return log.old_value || log.new_value || '-'
+}
+
 function firstApiError(apiError, fallback) {
   return extractApiErrorMessage(apiError, fallback)
 }
@@ -303,8 +320,8 @@ export default function GymAdminStudentMembershipsPage() {
     setError('')
     setNotice('')
     try {
-      await unfreezePlanMembership(unfreezing.plan, unfreezing.id, { reason: 'Liberacion anticipada.' })
-      setNotice(`Membresia liberada para ${studentName(student)}.`)
+      await unfreezePlanMembership(unfreezing.plan, unfreezing.id, { reason: 'Descongelamiento manual.' })
+      setNotice(`Congelamiento finalizado para ${studentName(student)}.`)
       setUnfreezing(null)
       await loadData()
     } catch (apiError) {
@@ -368,7 +385,7 @@ export default function GymAdminStudentMembershipsPage() {
                 onClick={() => setUnfreezing(row)}
                 className="rounded border border-amber-400/50 px-2 py-1 text-xs text-amber-100 disabled:opacity-50"
               >
-                Liberar
+                Finalizar congelamiento
               </button>
             ) : (
               <button
@@ -690,11 +707,11 @@ export default function GymAdminStudentMembershipsPage() {
                       <p className="break-all text-xs text-brand-muted">UUID: {freeze.reference}</p>
                     </div>
                     <p className="mt-1 text-xs text-brand-muted">
-                      Programado: {formatDate(freeze.start_date)} → {formatDate(freeze.planned_end_date)}
+                      Período congelado: {formatDate(freeze.start_date)} → {formatDate(freeze.planned_end_date)} ({pluralDays(daysBetween(freeze.start_date, freeze.planned_end_date))})
                     </p>
                     {freeze.actual_end_date ? (
                       <p className="mt-1 text-xs text-brand-muted">
-                        Fin real: {formatDate(freeze.actual_end_date)} · extensión aplicada: {freeze.extension_days} día(s)
+                        La membresía volvió a estar activa el {formatDate(freeze.actual_end_date)}. Se sumó {pluralDays(freeze.extension_days)} al vencimiento.
                       </p>
                     ) : null}
                     <p className="mt-1 text-xs text-brand-muted">
@@ -702,7 +719,7 @@ export default function GymAdminStudentMembershipsPage() {
                     </p>
                     {freeze.ended_at ? (
                       <p className="mt-1 text-xs text-brand-muted">
-                        Cerrado por {freeze.ended_by_name || 'Sistema'} el {formatAuditDate(freeze.ended_at)}
+                        Registro cerrado por {freeze.ended_by_name || 'Sistema'} el {formatAuditDate(freeze.ended_at)}.
                       </p>
                     ) : null}
                     {freeze.cancelled_future_enrollments ? (
@@ -731,11 +748,11 @@ export default function GymAdminStudentMembershipsPage() {
                 {changeLog.map((log) => (
                   <article key={log.id} className="rounded-lg border border-brand-line bg-brand-panel/60 p-3 text-sm">
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <p className="font-semibold text-brand-white">{log.field}</p>
+                      <p className="font-semibold text-brand-white">{auditTitle(log)}</p>
                       <p className="text-xs text-brand-muted">{formatAuditDate(log.created_at)}</p>
                     </div>
                     <p className="mt-1 break-words text-xs text-brand-muted">
-                      {log.old_value || '-'} -&gt; {log.new_value || '-'}
+                      {auditDetail(log)}
                     </p>
                     <p className="mt-1 text-xs text-brand-muted">{log.changed_by_name || 'Sistema'}</p>
                     {log.reason ? <p className="mt-2 break-words text-xs text-brand-white">{log.reason}</p> : null}
@@ -851,9 +868,9 @@ export default function GymAdminStudentMembershipsPage() {
 
       <ConfirmDialog
         open={Boolean(unfreezing)}
-        title="Liberar membresia"
-        description={`Se cerrara el congelamiento de ${studentName(student)} y se extendera el vencimiento solo por los dias realmente congelados.`}
-        confirmLabel="Liberar"
+        title="Finalizar congelamiento"
+        description={`Se cerrará el congelamiento de ${studentName(student)}. El vencimiento solo aumentará por el período que la membresía estuvo congelada.`}
+        confirmLabel="Finalizar congelamiento"
         loading={working}
         onCancel={() => setUnfreezing(null)}
         onConfirm={unfreezeMembership}
